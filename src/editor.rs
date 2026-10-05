@@ -249,8 +249,11 @@ impl Editor {
         let pdf = job.output().to_path_buf();
         self.export = None;
         if report.ok {
+            let name = pdf.strip_prefix(&self.root).unwrap_or(&pdf);
+            self.message = format!("Exported {}", name.display());
             self.exported = Some(pdf);
         } else {
+            self.message = "The PDF export failed. The pane shows the errors.".into();
             self.report = Some(report);
         }
         true
@@ -727,6 +730,24 @@ mod tests {
         let text = screen_text(&mut editor);
         assert!(text.contains("OK"), "{text}");
         assert!(text.contains("Exported") && text.contains("doc.pdf"), "{text}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_status_line_reports_the_end_of_the_export() {
+        let path = temp_file("exportstatus", "= Title\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('e'));
+        assert!(editor.message.contains("Exporting"));
+        wait_for_export(&mut editor);
+        assert!(!editor.message.contains("Exporting"), "{}", editor.message);
+        assert!(editor.message.contains("doc.pdf"), "{}", editor.message);
+
+        fs::write(&path, "#nope()\n").unwrap();
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('e'));
+        wait_for_export(&mut editor);
+        assert!(editor.message.contains("failed"), "{}", editor.message);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
