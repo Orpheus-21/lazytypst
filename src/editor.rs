@@ -50,7 +50,7 @@ impl Editor {
             dirty: false,
             discard_armed: false,
             message: String::new(),
-            out_dir: compile::out_dir(),
+            out_dir: compile::new_out_dir(),
             pending: None,
             report: None,
         })

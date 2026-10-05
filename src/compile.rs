@@ -2,7 +2,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc::{self, Receiver},
+    },
     thread,
 };
 
@@ -25,6 +28,14 @@ impl Report {
 /// The folder that holds the PNG pages of this run.
 pub fn out_dir() -> PathBuf {
     std::env::temp_dir().join(format!("lazytypst-{}", std::process::id()))
+}
+
+static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
+
+/// A new folder inside `out_dir` for the pages of one editor.
+/// A compile that outlives its editor then cannot write into the pages of the next editor.
+pub fn new_out_dir() -> PathBuf {
+    out_dir().join(NEXT_DIR.fetch_add(1, Ordering::Relaxed).to_string())
 }
 
 /// Deletes the page folder. The program calls this when it exits.
@@ -104,6 +115,13 @@ mod tests {
             report.lines
         );
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn each_new_out_dir_is_different_and_inside_out_dir() {
+        let (first, second) = (new_out_dir(), new_out_dir());
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(out_dir().as_path()));
     }
 
     #[test]
