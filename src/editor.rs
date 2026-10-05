@@ -168,8 +168,10 @@ impl Editor {
                 self.exported = None;
                 self.message = "Exporting the PDF...".into();
             }
-        } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char('n' | 'p')) {
-            if let Err(err) = self.preview.turn(key.code == KeyCode::Char('n')) {
+        } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Down | KeyCode::Up) {
+            // Alt with an arrow key arrives as one escape sequence. Alt with a letter arrives as Esc and
+            // the letter, so a fast Esc and n looked like Alt-n.
+            if let Err(err) = self.preview.turn(key.code == KeyCode::Down) {
                 self.message = err;
             }
         } else if key.code == KeyCode::Esc {
@@ -295,7 +297,7 @@ impl Editor {
         frame.render_widget(self.compile_pane(), pane);
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
-            "Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Alt-n/Alt-p page  Esc back"
+            "Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Alt-Down/Alt-Up page  Esc back"
         } else {
             &self.message
         };
@@ -652,24 +654,24 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
-    fn alt(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
+    fn alt(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::ALT)
     }
 
     #[test]
-    fn alt_n_and_alt_p_turn_the_preview_page() {
+    fn alt_down_and_alt_up_turn_the_preview_page() {
         let path = temp_file("pages", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
         let mut editor = open(&path);
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 1/3"));
 
-        editor.handle_key(alt('n'));
+        editor.handle_key(alt(KeyCode::Down));
         assert!(screen_text(&mut editor).contains("Preview 2/3"));
-        editor.handle_key(alt('n'));
-        editor.handle_key(alt('n'));
+        editor.handle_key(alt(KeyCode::Down));
+        editor.handle_key(alt(KeyCode::Down));
         assert!(screen_text(&mut editor).contains("Preview 3/3"));
-        editor.handle_key(alt('p'));
+        editor.handle_key(alt(KeyCode::Up));
         assert!(screen_text(&mut editor).contains("Preview 2/3"));
         assert!(!editor.dirty, "the page keys must not change the text");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
