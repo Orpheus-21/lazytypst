@@ -49,6 +49,8 @@ pub struct Editor {
     out_dir: PathBuf,
     /// The running compile. `None` when no compile runs.
     job: Option<Job>,
+    /// The running PDF export. `None` when no export runs.
+    export: Option<Job>,
     /// The report of the last finished compile.
     report: Option<Report>,
     preview: Preview,
@@ -68,6 +70,7 @@ impl Editor {
             message: String::new(),
             out_dir: compile::out_dir(),
             job: None,
+            export: None,
             report: None,
             preview: Preview::new(picker),
         })
@@ -103,6 +106,12 @@ impl Editor {
             self.save();
         } else if ctrl && key.code == KeyCode::Char('b') {
             self.save_and_compile();
+        } else if ctrl && key.code == KeyCode::Char('e') {
+            if self.save() {
+                // The new export replaces the old export. Dropping the old export kills its process.
+                self.export = Some(Job::start_pdf(&self.path, self.path.with_extension("pdf")));
+                self.message = "Exporting the PDF...".into();
+            }
         } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char('n' | 'p')) {
             if let Err(err) = self.preview.turn(key.code == KeyCode::Char('n')) {
                 self.message = err;
@@ -130,7 +139,7 @@ impl Editor {
     /// Kills the running compile and deletes its page folder.
     fn stop_compile(&mut self) {
         if let Some(job) = self.job.take() {
-            let dir = job.dir().to_path_buf();
+            let dir = job.output().to_path_buf();
             drop(job);
             let _ = fs::remove_dir_all(dir);
         }
@@ -147,6 +156,7 @@ impl Editor {
             changed = true;
         }
         changed |= self.poll_compile();
+        changed |= self.poll_export();
         changed
     }
 
@@ -158,12 +168,29 @@ impl Editor {
         let Some(mut report) = job.try_report() else {
             return false;
         };
-        let dir = job.dir().to_path_buf();
+        let dir = job.output().to_path_buf();
         self.job = None;
         if !report.ok {
             let _ = fs::remove_dir_all(dir);
         } else if let Err(err) = self.preview.load(dir) {
             report = Report::failed(err);
+        }
+        self.report = Some(report);
+        true
+    }
+
+    /// Takes the report of a finished export. The pane shows the path of the PDF, or the errors.
+    fn poll_export(&mut self) -> bool {
+        let Some(job) = &self.export else {
+            return false;
+        };
+        let Some(mut report) = job.try_report() else {
+            return false;
+        };
+        let pdf = job.output().to_path_buf();
+        self.export = None;
+        if report.ok {
+            report.lines.insert(0, format!("Exported {}", pdf.display()));
         }
         self.report = Some(report);
         true
@@ -207,7 +234,7 @@ impl Editor {
         frame.render_widget(self.compile_pane(), pane);
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
-            "Ctrl-S save  Ctrl-B compile  Alt-n/Alt-p page  Esc back"
+            "Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Alt-n/Alt-p page  Esc back"
         } else {
             &self.message
         };
@@ -460,6 +487,49 @@ mod tests {
         editor.handle_key(alt('p'));
         assert!(screen_text(&mut editor).contains("Preview 2/3"));
         assert!(!editor.dirty, "the page keys must not change the text");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// Waits up to 20 seconds for the running PDF export to finish.
+    fn wait_for_export(editor: &mut Editor) {
+        let start = Instant::now();
+        while editor.export.is_some() {
+            editor.tick(Instant::now());
+            assert!(start.elapsed() < Duration::from_secs(20), "export did not finish");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn ctrl_e_saves_then_exports_a_pdf_next_to_the_file() {
+        let path = temp_file("export", "= Title\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(ctrl('e'));
+        assert!(!editor.dirty, "Ctrl-E must save first");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "X= Title\n");
+        assert!(editor.export.is_some());
+
+        wait_for_export(&mut editor);
+        let pdf = path.with_extension("pdf");
+        assert_eq!(&fs::read(&pdf).unwrap()[..4], b"%PDF");
+        let report = editor.report.as_ref().unwrap();
+        assert!(report.ok, "{:?}", report.lines);
+        assert!(report.lines[0].starts_with("Exported ") && report.lines[0].ends_with("doc.pdf"), "{:?}", report.lines);
+        assert!(screen_text(&mut editor).contains("doc.pdf"));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_failed_export_shows_the_errors_and_writes_no_file() {
+        let path = temp_file("exporterr", "#nope()\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('e'));
+        wait_for_export(&mut editor);
+        let report = editor.report.as_ref().unwrap();
+        assert!(!report.ok);
+        assert!(report.lines.iter().any(|l| l.contains(":1:")), "{:?}", report.lines);
+        assert!(!path.with_extension("pdf").exists());
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

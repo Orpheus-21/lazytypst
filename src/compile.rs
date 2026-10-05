@@ -50,8 +50,8 @@ pub struct Job {
     /// `None` when the command did not start. Then the report is already waiting.
     child: Option<Arc<Mutex<Child>>>,
     receiver: Receiver<Report>,
-    /// The folder that receives the PNG pages.
-    dir: PathBuf,
+    /// What the command writes: a folder of PNG pages, or one PDF file.
+    output: PathBuf,
 }
 
 impl Job {
@@ -68,25 +68,35 @@ impl Job {
         Job::spawn(command, dir)
     }
 
-    /// The folder that receives the PNG pages.
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    /// Runs `typst compile` on `file`. The PDF goes to `pdf`. An old file at `pdf` is replaced.
+    pub fn start_pdf(file: &Path, pdf: PathBuf) -> Job {
+        let mut command = Command::new("typst");
+        command
+            .args(["compile", "--format", "pdf", "--diagnostic-format", "short"])
+            .arg(file)
+            .arg(&pdf);
+        Job::spawn(command, pdf)
     }
 
-    fn failed(message: String, dir: PathBuf) -> Job {
+    /// What the command writes: the page folder of `start`, or the PDF file of `start_pdf`.
+    pub fn output(&self) -> &Path {
+        &self.output
+    }
+
+    fn failed(message: String, output: PathBuf) -> Job {
         let (tx, receiver) = mpsc::channel();
         let _ = tx.send(Report::failed(message));
-        Job { child: None, receiver, dir }
+        Job { child: None, receiver, output }
     }
 
     /// Starts the command. The lines it prints on stderr become the report.
-    fn spawn(mut command: Command, dir: PathBuf) -> Job {
+    fn spawn(mut command: Command, output: PathBuf) -> Job {
         command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {
                 let program = command.get_program().to_string_lossy().into_owned();
-                return Job::failed(format!("Cannot run {program}: {err}"), dir);
+                return Job::failed(format!("Cannot run {program}: {err}"), output);
             }
         };
         let mut stderr = child.stderr.take().expect("stderr is piped");
@@ -101,7 +111,7 @@ impl Job {
             // The receiver is gone when the job was dropped. Then nobody needs the report.
             let _ = tx.send(report(status, &bytes));
         });
-        Job { child: Some(child), receiver, dir }
+        Job { child: Some(child), receiver, output }
     }
 
     /// Returns the report if the command has ended. Never waits.
@@ -172,6 +182,29 @@ mod tests {
         assert!(report.lines.is_empty());
         let png = fs::read(pages.join("page-1.png")).unwrap();
         assert_eq!(&png[1..4], b"PNG");
+        fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_pdf_job_writes_a_pdf_file() {
+        let (file, pages) = project("pdf", "= Title\nSome text.\n");
+        let pdf = pages.with_file_name("out.pdf");
+        let job = Job::start_pdf(&file, pdf.clone());
+        assert_eq!(job.output(), pdf);
+        let report = wait(&job);
+        assert!(report.ok, "{:?}", report.lines);
+        assert_eq!(&fs::read(&pdf).unwrap()[..4], b"%PDF");
+        fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_pdf_job_with_an_error_writes_no_file() {
+        let (file, pages) = project("pdf-bad", "#nope()\n");
+        let pdf = pages.with_file_name("out.pdf");
+        let report = wait(&Job::start_pdf(&file, pdf.clone()));
+        assert!(!report.ok);
+        assert!(report.lines.iter().any(|l| l.contains(":1:")), "{:?}", report.lines);
+        assert!(!pdf.exists());
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
 
