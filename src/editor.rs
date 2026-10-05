@@ -153,18 +153,26 @@ impl Editor {
     }
 
     fn compile_pane(&self) -> Paragraph<'static> {
-        let (color, lines) = if self.job.is_some() {
-            (Color::Yellow, vec!["Compiling...".to_string()])
-        } else if let Some(report) = &self.report {
-            let color = if report.ok { Color::Green } else { Color::Red };
-            let head = report.ok.then(|| "OK".to_string());
-            (color, head.into_iter().chain(report.lines.iter().cloned()).collect())
-        } else {
-            (Color::Reset, vec!["Press Ctrl-B to compile.".to_string()])
+        let (mut color, mut lines) = match &self.report {
+            Some(report) => {
+                let color = if report.ok { Color::Green } else { Color::Red };
+                let head = report.ok.then(|| "OK".to_string());
+                (color, head.into_iter().chain(report.lines.iter().cloned()).collect())
+            }
+            None => (Color::Reset, vec!["Press Ctrl-B to compile.".to_string()]),
         };
+        let mut title = "Compile";
+        if self.job.is_some() {
+            // The last report stays on screen until the new report replaces it.
+            color = Color::Yellow;
+            title = "Compile (running)";
+            if self.report.is_none() {
+                lines = vec!["Compiling...".to_string()];
+            }
+        }
         Paragraph::new(lines.join("\n"))
             .wrap(Wrap { trim: false })
-            .block(Block::bordered().title("Compile").border_style(Style::new().fg(color)))
+            .block(Block::bordered().title(title).border_style(Style::new().fg(color)))
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
@@ -193,6 +201,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
 
     fn open(path: &std::path::Path) -> Editor {
         Editor::open(path.to_path_buf(), Picker::halfblocks()).unwrap()
@@ -345,6 +354,41 @@ mod tests {
         editor.handle_key(ctrl('s'));
         assert!(!editor.tick(Instant::now() + Duration::from_millis(400)));
         assert!(editor.job.is_none());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// Draws the editor on a 100 by 24 screen and returns all the text on it.
+    fn screen_text(editor: &mut Editor) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn the_pane_says_compiling_before_the_first_report() {
+        let path = temp_file("pane-first", "= Title\n");
+        let mut editor = open(&path);
+        editor.out_dir = path.parent().unwrap().join("pages");
+        assert!(screen_text(&mut editor).contains("Press Ctrl-B to compile."));
+
+        editor.handle_key(ctrl('b'));
+        let text = screen_text(&mut editor);
+        assert!(text.contains("Compile (running)") && text.contains("Compiling..."), "{text}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_pane_keeps_the_last_report_while_a_compile_runs() {
+        let path = temp_file("pane-keep", "= Title\n");
+        let mut editor = open(&path);
+        editor.out_dir = path.parent().unwrap().join("pages");
+        editor.report = Some(Report::failed("old error text"));
+
+        editor.handle_key(ctrl('b'));
+        let text = screen_text(&mut editor);
+        assert!(text.contains("Compile (running)"), "{text}");
+        assert!(text.contains("old error text"), "{text}");
+        assert!(!text.contains("Compiling..."), "{text}");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
