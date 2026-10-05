@@ -1,7 +1,7 @@
 use std::{
     fs, io,
-    path::PathBuf,
-    time::{Duration, Instant},
+    path::{Path, PathBuf},
+    time::{Duration, Instant, SystemTime},
 };
 
 use ratatui::{
@@ -25,6 +25,13 @@ const PANE_HEIGHT: u16 = 6;
 /// The time without a key after which the editor saves and compiles.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
+const CONFLICT: &str = "The file changed on disk. Ctrl-S overwrites it with this text.";
+
+/// The modification time of the file, or `None` if the file cannot be read.
+fn disk_time(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).and_then(|meta| meta.modified()).ok()
+}
+
 /// True when the user edited the text and then typed nothing for `DEBOUNCE`.
 fn debounce_done(last_edit: Option<Instant>, now: Instant) -> bool {
     last_edit.is_some_and(|edit| now.saturating_duration_since(edit) >= DEBOUNCE)
@@ -40,6 +47,10 @@ pub struct Editor {
     textarea: TextArea<'static>,
     /// True when the buffer has text that is not on disk.
     dirty: bool,
+    /// The modification time of the file when the editor last read it or wrote it.
+    disk_time: Option<SystemTime>,
+    /// True when the file changed on disk after that time. Then only Ctrl-S writes the file.
+    conflict: bool,
     /// The time of the last edit that no save has covered yet.
     last_edit: Option<Instant>,
     /// True after the first Esc on a dirty buffer. A second Esc discards the text.
@@ -62,6 +73,8 @@ impl Editor {
         let mut textarea = TextArea::new(text.lines().map(String::from).collect());
         textarea.set_cursor_line_style(Style::default());
         Ok(Self {
+            disk_time: disk_time(&path),
+            conflict: false,
             path,
             textarea,
             dirty: false,
@@ -76,8 +89,17 @@ impl Editor {
         })
     }
 
-    /// Writes the buffer to the file. Returns false when the write failed.
-    fn save(&mut self) -> bool {
+    /// Writes the buffer to the file if it has edits. Returns false if the file was not written:
+    /// the write failed, or another program changed the file and `overwrite` is false.
+    fn save(&mut self, overwrite: bool) -> bool {
+        if !self.dirty {
+            return true;
+        }
+        if !overwrite && (self.conflict || disk_time(&self.path) != self.disk_time) {
+            self.conflict = true;
+            self.message = CONFLICT.into();
+            return false;
+        }
         let mut text = self.textarea.lines().join("\n");
         if !text.is_empty() {
             text.push('\n');
@@ -87,6 +109,8 @@ impl Editor {
         match fs::write(&self.path, text) {
             Ok(()) => {
                 self.dirty = false;
+                self.conflict = false;
+                self.disk_time = disk_time(&self.path);
                 self.last_edit = None;
                 self.message = "Saved".into();
                 true
@@ -103,11 +127,14 @@ impl Editor {
         self.message.clear();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('s') {
-            self.save();
+            if !self.dirty {
+                self.message = "No changes to save".into();
+            }
+            self.save(true);
         } else if ctrl && key.code == KeyCode::Char('b') {
             self.save_and_compile();
         } else if ctrl && key.code == KeyCode::Char('e') {
-            if self.save() {
+            if self.save(false) {
                 // The new export replaces the old export. Dropping the old export kills its process.
                 self.export = Some(Job::start_pdf(&self.path, self.path.with_extension("pdf")));
                 self.message = "Exporting the PDF...".into();
@@ -130,7 +157,7 @@ impl Editor {
     }
 
     fn save_and_compile(&mut self) {
-        if self.save() {
+        if self.save(false) {
             self.stop_compile();
             self.job = Some(Job::start(&self.path, compile::next_dir(&self.out_dir)));
         }
@@ -339,6 +366,64 @@ mod tests {
         editor.handle_key(key(KeyCode::Esc));
         editor.handle_key(key(KeyCode::Char('Y')));
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_b_on_an_unchanged_buffer_does_not_write_the_file() {
+        let path = temp_file("nowrite", "");
+        fs::write(&path, "= A\r\nb\r\n").unwrap();
+        let mut editor = open(&path);
+        editor.out_dir = path.parent().unwrap().join("pages");
+        editor.handle_key(ctrl('b'));
+        assert!(editor.job.is_some(), "Ctrl-B must still compile");
+        assert_eq!(fs::read(&path).unwrap(), b"= A\r\nb\r\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_b_does_not_overwrite_a_change_made_by_another_program() {
+        let path = temp_file("outside", "= Mine\n");
+        let mut editor = open(&path);
+        editor.out_dir = path.parent().unwrap().join("pages");
+        editor.handle_key(key(KeyCode::Char('X')));
+        fs::write(&path, "= Changed outside\n").unwrap();
+
+        editor.handle_key(ctrl('b'));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "= Changed outside\n");
+        assert!(editor.message.contains("changed on disk"), "{}", editor.message);
+        assert!(editor.job.is_none(), "no compile of a file that was not saved");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_autosave_does_not_overwrite_a_change_made_by_another_program() {
+        let path = temp_file("outside-auto", "= Mine\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        fs::write(&path, "= Changed outside\n").unwrap();
+
+        editor.tick(Instant::now() + Duration::from_millis(400));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "= Changed outside\n");
+        assert!(editor.dirty);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_s_overwrites_a_change_made_by_another_program() {
+        let path = temp_file("overwrite", "= Mine\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        fs::write(&path, "= Changed outside\n").unwrap();
+        editor.handle_key(ctrl('b')); // finds the change and refuses
+
+        editor.handle_key(ctrl('s'));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "X= Mine\n");
+        assert!(!editor.dirty);
+        // After the overwrite, the next save works without a warning.
+        editor.handle_key(key(KeyCode::Char('Y')));
+        editor.handle_key(ctrl('b'));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "XY= Mine\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
