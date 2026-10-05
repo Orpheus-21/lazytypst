@@ -32,6 +32,29 @@ fn disk_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
 
+/// Writes `text` to the file at `path` so that a crash leaves the old file or the new file, never a cut file.
+/// The text goes to a hidden temp file next to the real file. Then a rename replaces the real file.
+/// A symlink stays a symlink, and the permissions stay. A hard link to the old file keeps the old text.
+fn write_file(path: &Path, text: &str) -> io::Result<()> {
+    let target = match fs::canonicalize(path) {
+        Ok(target) => target,
+        // The file is gone. Then no old text can be cut, and a plain write creates the file again.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return fs::write(path, text),
+        Err(err) => return Err(err),
+    };
+    // A rename can replace a file that the user cannot write. This open makes the same check as a direct write.
+    fs::OpenOptions::new().write(true).open(&target)?;
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    let temp = target.with_file_name(format!(".{name}.lazytypst-tmp"));
+    let result = fs::write(&temp, text)
+        .and_then(|()| fs::set_permissions(&temp, fs::metadata(&target)?.permissions()))
+        .and_then(|()| fs::rename(&temp, &target));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
 /// True when the user edited the text and then typed nothing for `DEBOUNCE`.
 fn debounce_done(last_edit: Option<Instant>, now: Instant) -> bool {
     last_edit.is_some_and(|edit| now.saturating_duration_since(edit) >= DEBOUNCE)
@@ -107,9 +130,8 @@ impl Editor {
         if !text.is_empty() {
             text.push('\n');
         }
-        // ponytail: writes in place, so a crash during the write can cut the file.
-        // CRLF line ends become LF. Upgrade: write a temp file, then rename it.
-        match fs::write(&self.path, text) {
+        // CRLF line ends become LF.
+        match write_file(&self.path, &text) {
             Ok(()) => {
                 self.dirty = false;
                 self.conflict = false;
@@ -325,6 +347,47 @@ mod tests {
         editor.handle_key(ctrl('s'));
         assert!(!editor.dirty);
         assert_eq!(fs::read_to_string(&path).unwrap(), "Xhello\nworld\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_save_writes_through_a_symlink_and_keeps_it() {
+        let real = temp_file("symlink", "text\n");
+        let link = real.with_file_name("link.typ");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut editor = open(&link);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(ctrl('s'));
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "Xtext\n");
+        fs::remove_dir_all(real.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_save_keeps_the_permissions_and_leaves_no_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_file("perms", "text\n");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(ctrl('s'));
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+        let names: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["doc.typ"], "a temp file is left behind");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_s_recreates_a_file_that_another_program_deleted() {
+        let path = temp_file("deleted", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        fs::remove_file(&path).unwrap();
+        editor.handle_key(ctrl('s'));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "Xtext\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
