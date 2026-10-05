@@ -87,6 +87,8 @@ pub struct Editor {
     job: Option<Job>,
     /// The running PDF export. `None` when no export runs.
     export: Option<Job>,
+    /// The PDF of the last good export. The pane shows it until the next export.
+    exported: Option<PathBuf>,
     /// The report of the last finished compile.
     report: Option<Report>,
     preview: Preview,
@@ -110,6 +112,7 @@ impl Editor {
             out_dir: compile::out_dir(),
             job: None,
             export: None,
+            exported: None,
             report: None,
             preview: Preview::new(picker),
         })
@@ -162,6 +165,7 @@ impl Editor {
             if self.save(false) {
                 // The new export replaces the old export. Dropping the old export kills its process.
                 self.export = Some(Job::start_pdf(&self.path, &self.root, self.path.with_extension("pdf")));
+                self.exported = None;
                 self.message = "Exporting the PDF...".into();
             }
         } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char('n' | 'p')) {
@@ -237,15 +241,16 @@ impl Editor {
         let Some(job) = &mut self.export else {
             return false;
         };
-        let Some(mut report) = job.try_report() else {
+        let Some(report) = job.try_report() else {
             return false;
         };
         let pdf = job.output().to_path_buf();
         self.export = None;
         if report.ok {
-            report.lines.insert(0, format!("Exported {}", pdf.display()));
+            self.exported = Some(pdf);
+        } else {
+            self.report = Some(report);
         }
-        self.report = Some(report);
         true
     }
 
@@ -266,6 +271,9 @@ impl Editor {
             if self.report.is_none() {
                 lines = vec!["Compiling...".to_string()];
             }
+        }
+        if let Some(pdf) = &self.exported {
+            lines.push(format!("Exported {}", pdf.display()));
         }
         Paragraph::new(lines.join("\n"))
             .wrap(Wrap { trim: false })
@@ -690,10 +698,22 @@ mod tests {
         wait_for_export(&mut editor);
         let pdf = path.with_extension("pdf");
         assert_eq!(&fs::read(&pdf).unwrap()[..4], b"%PDF");
-        let report = editor.report.as_ref().unwrap();
-        assert!(report.ok, "{:?}", report.lines);
-        assert!(report.lines[0].starts_with("Exported ") && report.lines[0].ends_with("doc.pdf"), "{:?}", report.lines);
+        assert_eq!(editor.exported.as_deref(), Some(pdf.as_path()));
         assert!(screen_text(&mut editor).contains("doc.pdf"));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_export_path_stays_on_screen_after_a_later_compile() {
+        let path = temp_file("exportstays", "= Title\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('e'));
+        wait_for_export(&mut editor);
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        let text = screen_text(&mut editor);
+        assert!(text.contains("OK"), "{text}");
+        assert!(text.contains("Exported") && text.contains("doc.pdf"), "{text}");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
