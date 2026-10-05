@@ -4,6 +4,7 @@ mod editor;
 mod preview;
 
 use std::{
+    ffi::OsString,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -30,8 +31,14 @@ struct App {
     editor: Option<Editor>,
 }
 
+/// The folder to browse: the first argument, or the current folder.
+/// `args_os` keeps a folder name that is not UTF-8. `args` would panic on it.
+fn root_from_args(mut args: impl Iterator<Item = OsString>) -> PathBuf {
+    args.nth(1).map_or_else(|| PathBuf::from("."), PathBuf::from)
+}
+
 fn main() -> std::io::Result<()> {
-    let root = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
+    let root = root_from_args(std::env::args_os());
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
     let first = (!files.is_empty()).then_some(0);
     // ratatui::init also installs a panic hook that restores the terminal.
@@ -111,4 +118,22 @@ fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_stateful_widget(list, body, &mut app.list);
     }
     frame.render_widget(Paragraph::new(app.status.as_str()), status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn the_root_comes_from_the_first_argument_even_if_it_is_not_utf8() {
+        let name = OsString::from_vec(b"dir-\xff".to_vec());
+        let args = [OsString::from("lazytypst"), name.clone()];
+        assert_eq!(root_from_args(args.into_iter()), PathBuf::from(name));
+    }
+
+    #[test]
+    fn the_root_is_the_current_folder_without_an_argument() {
+        assert_eq!(root_from_args([OsString::from("lazytypst")].into_iter()), PathBuf::from("."));
+    }
 }
