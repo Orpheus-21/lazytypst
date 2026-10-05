@@ -1,4 +1,5 @@
 mod browser;
+mod editor;
 
 use std::path::PathBuf;
 
@@ -10,10 +11,15 @@ use ratatui::{
     widgets::{Block, List, ListState, Paragraph},
 };
 
+use editor::{Action, Editor};
+
 struct App {
+    root: PathBuf,
     files: Vec<PathBuf>,
     list: ListState,
     status: String,
+    /// The open file. The browser shows while this is `None`.
+    editor: Option<Editor>,
 }
 
 fn main() -> std::io::Result<()> {
@@ -21,9 +27,11 @@ fn main() -> std::io::Result<()> {
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
     let first = (!files.is_empty()).then_some(0);
     let mut app = App {
+        root,
         files,
         list: ListState::default().with_selected(first),
         status: String::new(),
+        editor: None,
     };
     // ratatui::init also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
@@ -36,14 +44,25 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
     loop {
         terminal.draw(|frame| draw(frame, app))?;
         let Event::Key(key) = event::read()? else { continue };
+        if let Some(editor) = &mut app.editor {
+            if matches!(editor.handle_key(key), Action::Close) {
+                app.editor = None;
+            }
+            continue;
+        }
         match key.code {
             KeyCode::Char('q') => return Ok(()),
             KeyCode::Char('j') | KeyCode::Down => app.list.select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.list.select_previous(),
             KeyCode::Enter => {
                 if let Some(path) = app.list.selected().and_then(|i| app.files.get(i)) {
-                    // ponytail: Task 3 replaces this line with "open the editor".
-                    app.status = format!("Selected: {}", path.display());
+                    app.status = match Editor::open(app.root.join(path)) {
+                        Ok(editor) => {
+                            app.editor = Some(editor);
+                            String::new()
+                        }
+                        Err(err) => format!("Cannot open {}: {err}", path.display()),
+                    };
                 }
             }
             _ => {}
@@ -52,6 +71,10 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
 }
 
 fn draw(frame: &mut Frame, app: &mut App) {
+    if let Some(editor) = &app.editor {
+        editor.draw(frame);
+        return;
+    }
     let [body, status] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     let block = Block::bordered().title("lazytypst");
