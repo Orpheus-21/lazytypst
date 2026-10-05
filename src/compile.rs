@@ -1,10 +1,12 @@
 use std::{
-    fs,
+    fs, io,
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
-        mpsc::{self, Receiver},
+        mpsc::{self, Receiver, TryRecvError},
     },
     thread,
 };
@@ -43,45 +45,107 @@ pub fn cleanup() {
     let _ = fs::remove_dir_all(out_dir());
 }
 
-/// Runs `typst compile` in a thread. The report arrives on the returned channel.
-pub fn start(file: PathBuf, out_dir: PathBuf) -> Receiver<Report> {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        // The receiver is gone when the user closed the editor. Then nobody needs the report.
-        let _ = tx.send(run(&file, &out_dir));
-    });
-    rx
+/// A running command. Dropping the job kills the process, so a new job can replace an old one.
+pub struct Job {
+    /// `None` when the command did not start. Then the report is already waiting.
+    child: Option<Arc<Mutex<Child>>>,
+    receiver: Receiver<Report>,
 }
 
-/// Compiles `file` to `out_dir/page-{p}.png` and waits for the result.
-pub fn run(file: &Path, out_dir: &Path) -> Report {
-    if let Err(err) = fs::create_dir_all(out_dir) {
-        return Report::failed(format!("Cannot make {}: {err}", out_dir.display()));
+impl Job {
+    /// Runs `typst compile` on `file`. The pages go to `out_dir/page-{p}.png`.
+    pub fn start(file: &Path, out_dir: &Path) -> Job {
+        if let Err(err) = fs::create_dir_all(out_dir) {
+            return Job::failed(format!("Cannot make {}: {err}", out_dir.display()));
+        }
+        let mut command = Command::new("typst");
+        command
+            .args(["compile", "--format", "png", "--diagnostic-format", "short"])
+            .arg(file)
+            .arg(out_dir.join("page-{p}.png"));
+        Job::spawn(command)
     }
-    let result = Command::new("typst")
-        .args(["compile", "--format", "png", "--diagnostic-format", "short"])
-        .arg(file)
-        .arg(out_dir.join("page-{p}.png"))
-        .output();
-    match result {
-        Ok(output) => {
-            let ok = output.status.success();
-            let mut lines: Vec<String> = String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .map(String::from)
-                .collect();
+
+    fn failed(message: String) -> Job {
+        let (tx, receiver) = mpsc::channel();
+        let _ = tx.send(Report::failed(message));
+        Job { child: None, receiver }
+    }
+
+    /// Starts the command. The lines it prints on stderr become the report.
+    fn spawn(mut command: Command) -> Job {
+        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                let program = command.get_program().to_string_lossy().into_owned();
+                return Job::failed(format!("Cannot run {program}: {err}"));
+            }
+        };
+        let mut stderr = child.stderr.take().expect("stderr is piped");
+        let child = Arc::new(Mutex::new(child));
+        let waiter = Arc::clone(&child);
+        let (tx, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            // The read ends when the process ends, or when `Drop` kills it.
+            let _ = stderr.read_to_end(&mut bytes);
+            let status = waiter.lock().unwrap().wait();
+            // The receiver is gone when the job was dropped. Then nobody needs the report.
+            let _ = tx.send(report(status, &bytes));
+        });
+        Job { child: Some(child), receiver }
+    }
+
+    /// Returns the report if the command has ended. Never waits.
+    pub fn try_report(&self) -> Option<Report> {
+        match self.receiver.try_recv() {
+            Ok(report) => Some(report),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Report::failed("The compile thread stopped.")),
+        }
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        if let Some(child) = &self.child {
+            // The process may have ended already. Then `kill` returns an error that does not matter.
+            let _ = child.lock().unwrap().kill();
+        }
+    }
+}
+
+fn report(status: io::Result<ExitStatus>, stderr: &[u8]) -> Report {
+    let mut lines: Vec<String> = String::from_utf8_lossy(stderr).lines().map(String::from).collect();
+    match status {
+        Ok(status) => {
+            let ok = status.success();
             if !ok && lines.is_empty() {
-                lines.push(format!("typst failed: {}", output.status));
+                lines.push(format!("typst failed: {status}"));
             }
             Report { ok, lines }
         }
-        Err(err) => Report::failed(format!("Cannot run typst: {err}")),
+        Err(err) => Report::failed(format!("Cannot wait for typst: {err}")),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Waits up to 10 seconds for the report of the job.
+    fn wait(job: &Job) -> Report {
+        let start = Instant::now();
+        loop {
+            if let Some(report) = job.try_report() {
+                return report;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "the job did not end");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     /// Makes a `doc.typ` with `content` in a new temporary folder. Returns the file and a page folder.
     fn project(name: &str, content: &str) -> (PathBuf, PathBuf) {
@@ -96,7 +160,7 @@ mod tests {
     #[test]
     fn a_valid_file_makes_a_png_page() {
         let (file, pages) = project("ok", "= Title\nSome text.\n");
-        let report = run(&file, &pages);
+        let report = wait(&Job::start(&file, &pages));
         assert!(report.ok, "{:?}", report.lines);
         assert!(report.lines.is_empty());
         let png = fs::read(pages.join("page-1.png")).unwrap();
@@ -107,7 +171,7 @@ mod tests {
     #[test]
     fn an_error_report_names_the_line() {
         let (file, pages) = project("bad", "= Title\n#nope()\n");
-        let report = run(&file, &pages);
+        let report = wait(&Job::start(&file, &pages));
         assert!(!report.ok);
         assert!(
             report.lines.iter().any(|l| l.contains(":2:") && l.contains("error")),
@@ -128,9 +192,45 @@ mod tests {
     fn a_missing_input_file_is_a_failure() {
         let (file, pages) = project("missing", "");
         fs::remove_file(&file).unwrap();
-        let report = run(&file, &pages);
+        let report = wait(&Job::start(&file, &pages));
         assert!(!report.ok);
         assert!(!report.lines.is_empty());
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_failed_command_reports_its_stderr() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "echo oops >&2; exit 3"]);
+        let report = wait(&Job::spawn(command));
+        assert!(!report.ok);
+        assert_eq!(report.lines, ["oops"]);
+    }
+
+    #[test]
+    fn a_missing_program_is_a_failure() {
+        let report = wait(&Job::spawn(Command::new("no-such-program-xyz")));
+        assert!(!report.ok);
+        assert!(report.lines[0].contains("Cannot run no-such-program-xyz"), "{:?}", report.lines);
+    }
+
+    #[test]
+    fn dropping_the_job_kills_the_process() {
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let job = Job::spawn(command);
+        let child = Arc::clone(job.child.as_ref().unwrap());
+        assert!(child.lock().unwrap().try_wait().unwrap().is_none(), "the process ended too early");
+
+        drop(job);
+        let start = Instant::now();
+        loop {
+            if let Some(status) = child.lock().unwrap().try_wait().unwrap() {
+                assert!(!status.success());
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "the process is still running");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }

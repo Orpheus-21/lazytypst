@@ -1,8 +1,4 @@
-use std::{
-    fs, io,
-    path::PathBuf,
-    sync::mpsc::{Receiver, TryRecvError},
-};
+use std::{fs, io, path::PathBuf};
 
 use ratatui::{
     Frame,
@@ -15,7 +11,7 @@ use ratatui_image::picker::Picker;
 use ratatui_textarea::TextArea;
 
 use crate::{
-    compile::{self, Report},
+    compile::{self, Job, Report},
     preview::Preview,
 };
 
@@ -37,8 +33,8 @@ pub struct Editor {
     message: String,
     /// The folder for the PNG pages of the compile.
     out_dir: PathBuf,
-    /// The report of the running compile arrives here. `None` when no compile runs.
-    pending: Option<Receiver<Report>>,
+    /// The running compile. `None` when no compile runs.
+    job: Option<Job>,
     /// The report of the last finished compile.
     report: Option<Report>,
     preview: Preview,
@@ -56,7 +52,7 @@ impl Editor {
             discard_armed: false,
             message: String::new(),
             out_dir: compile::new_out_dir(),
-            pending: None,
+            job: None,
             report: None,
             preview: Preview::new(picker),
         })
@@ -90,9 +86,9 @@ impl Editor {
         if ctrl && key.code == KeyCode::Char('s') {
             self.save();
         } else if ctrl && key.code == KeyCode::Char('b') {
-            // A compile that already runs is not started twice.
-            if self.save() && self.pending.is_none() {
-                self.pending = Some(compile::start(self.path.clone(), self.out_dir.clone()));
+            if self.save() {
+                // The new job replaces the old job. Dropping the old job kills its process.
+                self.job = Some(Job::start(&self.path, &self.out_dir));
             }
         } else if key.code == KeyCode::Esc {
             if !self.dirty || armed {
@@ -108,29 +104,21 @@ impl Editor {
 
     /// Takes the report of a finished compile. Returns true when the screen must redraw.
     pub fn poll_compile(&mut self) -> bool {
-        let Some(receiver) = &self.pending else {
+        let Some(mut report) = self.job.as_ref().and_then(Job::try_report) else {
             return false;
         };
-        match receiver.try_recv() {
-            Ok(mut report) => {
-                if report.ok
-                    && let Err(err) = self.preview.load(&self.out_dir.join("page-1.png"))
-                {
-                    report = Report::failed(err);
-                }
-                self.report = Some(report);
-            }
-            Err(TryRecvError::Empty) => return false,
-            Err(TryRecvError::Disconnected) => {
-                self.report = Some(Report::failed("The compile thread stopped."));
-            }
+        if report.ok
+            && let Err(err) = self.preview.load(&self.out_dir.join("page-1.png"))
+        {
+            report = Report::failed(err);
         }
-        self.pending = None;
+        self.report = Some(report);
+        self.job = None;
         true
     }
 
     fn compile_pane(&self) -> Paragraph<'static> {
-        let (color, lines) = if self.pending.is_some() {
+        let (color, lines) = if self.job.is_some() {
             (Color::Yellow, vec!["Compiling...".to_string()])
         } else if let Some(report) = &self.report {
             let color = if report.ok { Color::Green } else { Color::Red };
@@ -276,10 +264,10 @@ mod tests {
         editor.handle_key(ctrl('b'));
         assert!(!editor.dirty, "Ctrl-B must save first");
         assert_eq!(fs::read_to_string(&path).unwrap(), "X= Title\n");
-        assert!(editor.pending.is_some());
+        assert!(editor.job.is_some());
 
         wait_for_report(&mut editor);
-        assert!(editor.pending.is_none());
+        assert!(editor.job.is_none());
         let report = editor.report.as_ref().unwrap();
         assert!(report.ok, "{:?}", report.lines);
         assert!(editor.preview.has_page(), "the page did not load");
