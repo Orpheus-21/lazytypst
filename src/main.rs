@@ -41,6 +41,10 @@ fn main() -> std::io::Result<()> {
     let root = root_from_args(std::env::args_os());
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
     let first = (!files.is_empty()).then_some(0);
+    compile::make_out_dir().map_err(|err| {
+        let message = format!("Cannot make the folder {}: {err}", compile::out_dir().display());
+        std::io::Error::new(err.kind(), message)
+    })?;
     // ratatui::init also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
     // The query needs the raw terminal, and it must run before the first key is read.

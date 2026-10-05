@@ -40,6 +40,18 @@ pub fn next_dir(root: &Path) -> PathBuf {
     root.join(NEXT_DIR.fetch_add(1, Ordering::Relaxed).to_string())
 }
 
+/// Makes the page folder of this run. Only the user can open it.
+/// The call fails if the path exists already, also as a symlink. So the program never writes
+/// into a folder that another user prepared, and the cleanup never deletes files of another user.
+pub fn make_out_dir() -> io::Result<()> {
+    make_private_dir(&out_dir())
+}
+
+fn make_private_dir(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().mode(0o700).create(path)
+}
+
 /// Deletes the page folder. The program calls this when it exits.
 pub fn cleanup() {
     let _ = fs::remove_dir_all(out_dir());
@@ -238,6 +250,27 @@ mod tests {
             report.lines
         );
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_private_dir_is_new_and_only_the_user_can_open_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("lazytypst-private-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        make_private_dir(&path).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(make_private_dir(&path).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        fs::remove_dir(&path).unwrap();
+    }
+
+    #[test]
+    fn a_private_dir_is_not_made_through_a_symlink() {
+        let base = std::env::temp_dir().join(format!("lazytypst-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("target")).unwrap();
+        std::os::unix::fs::symlink(base.join("target"), base.join("link")).unwrap();
+        assert!(make_private_dir(&base.join("link")).is_err());
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
