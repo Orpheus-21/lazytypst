@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 use ratatui_image::picker::Picker;
-use ratatui_textarea::TextArea;
+use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::{
     compile::{self, Job, Report},
@@ -99,6 +99,8 @@ impl Editor {
         let text = fs::read_to_string(&path)?;
         let mut textarea = TextArea::new(text.lines().map(String::from).collect());
         textarea.set_cursor_line_style(Style::default());
+        // A long line wraps on screen, at a word if possible. The file keeps the line as one line.
+        textarea.set_wrap_mode(WrapMode::WordOrGlyph);
         Ok(Self {
             disk_time: disk_time(&path),
             conflict: false,
@@ -611,6 +613,20 @@ mod tests {
         let text = screen_text(&mut editor);
         assert!(text.contains("doc.typ"), "{text}");
         assert!(!text.contains(&path.parent().unwrap().display().to_string()), "{text}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_long_line_wraps_on_screen_but_stays_one_line_in_the_file() {
+        let long = format!("{}END", "word ".repeat(30));
+        let path = temp_file("wrap", &format!("{long}\n"));
+        let mut editor = open(&path);
+        // The editor pane is 48 cells wide inside its border, so the line needs 4 screen rows.
+        assert!(screen_text(&mut editor).contains("END"), "the end of the line is not on screen");
+
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(ctrl('s'));
+        assert_eq!(fs::read_to_string(&path).unwrap(), format!("X{long}\n"));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
