@@ -11,9 +11,13 @@ use ratatui::{
     style::{Color, Style},
     widgets::{Block, Paragraph, Wrap},
 };
+use ratatui_image::picker::Picker;
 use ratatui_textarea::TextArea;
 
-use crate::compile::{self, Report};
+use crate::{
+    compile::{self, Report},
+    preview::Preview,
+};
 
 /// The height of the compile pane, with its border.
 const PANE_HEIGHT: u16 = 6;
@@ -37,10 +41,11 @@ pub struct Editor {
     pending: Option<Receiver<Report>>,
     /// The report of the last finished compile.
     report: Option<Report>,
+    preview: Preview,
 }
 
 impl Editor {
-    pub fn open(path: PathBuf) -> io::Result<Self> {
+    pub fn open(path: PathBuf, picker: Picker) -> io::Result<Self> {
         let text = fs::read_to_string(&path)?;
         let mut textarea = TextArea::new(text.lines().map(String::from).collect());
         textarea.set_cursor_line_style(Style::default());
@@ -53,6 +58,7 @@ impl Editor {
             out_dir: compile::new_out_dir(),
             pending: None,
             report: None,
+            preview: Preview::new(picker),
         })
     }
 
@@ -106,7 +112,14 @@ impl Editor {
             return false;
         };
         match receiver.try_recv() {
-            Ok(report) => self.report = Some(report),
+            Ok(mut report) => {
+                if report.ok
+                    && let Err(err) = self.preview.load(&self.out_dir.join("page-1.png"))
+                {
+                    report = Report::failed(err);
+                }
+                self.report = Some(report);
+            }
             Err(TryRecvError::Empty) => return false,
             Err(TryRecvError::Disconnected) => {
                 self.report = Some(Report::failed("The compile thread stopped."));
@@ -131,19 +144,20 @@ impl Editor {
             .block(Block::bordered().title("Compile").border_style(Style::new().fg(color)))
     }
 
-    pub fn draw(&self, frame: &mut Frame) {
-        let [body, pane, status] = Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(PANE_HEIGHT),
-            Constraint::Length(1),
-        ])
-        .areas(frame.area());
+    pub fn draw(&mut self, frame: &mut Frame) {
+        let [main, status] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(main);
+        let [body, pane] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(PANE_HEIGHT)]).areas(left);
         let marker = if self.dirty { " [+]" } else { "" };
         let block = Block::bordered().title(format!("{}{marker}", self.path.display()));
         let inner = block.inner(body);
         frame.render_widget(block, body);
         frame.render_widget(&self.textarea, inner);
         frame.render_widget(self.compile_pane(), pane);
+        self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
             "Ctrl-S save  Ctrl-B compile  Esc back"
         } else {
@@ -157,6 +171,10 @@ impl Editor {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    fn open(path: &std::path::Path) -> Editor {
+        Editor::open(path.to_path_buf(), Picker::halfblocks()).unwrap()
+    }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -188,7 +206,7 @@ mod tests {
     #[test]
     fn ctrl_s_writes_the_buffer_to_disk() {
         let path = temp_file("save", "hello\nworld\n");
-        let mut editor = Editor::open(path.clone()).unwrap();
+        let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Char('X')));
         assert!(editor.dirty);
         assert_eq!(fs::read_to_string(&path).unwrap(), "hello\nworld\n");
@@ -202,7 +220,7 @@ mod tests {
     #[test]
     fn an_unchanged_file_keeps_its_bytes() {
         let path = temp_file("same", "a\n\nb\n");
-        let mut editor = Editor::open(path.clone()).unwrap();
+        let mut editor = open(&path);
         editor.handle_key(ctrl('s'));
         assert_eq!(fs::read_to_string(&path).unwrap(), "a\n\nb\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -211,7 +229,7 @@ mod tests {
     #[test]
     fn an_empty_file_stays_empty() {
         let path = temp_file("empty", "");
-        let mut editor = Editor::open(path.clone()).unwrap();
+        let mut editor = open(&path);
         editor.handle_key(ctrl('s'));
         assert_eq!(fs::read_to_string(&path).unwrap(), "");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -220,7 +238,7 @@ mod tests {
     #[test]
     fn esc_closes_a_clean_buffer_at_once() {
         let path = temp_file("clean", "text\n");
-        let mut editor = Editor::open(path.clone()).unwrap();
+        let mut editor = open(&path);
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Close));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -228,7 +246,7 @@ mod tests {
     #[test]
     fn esc_on_a_dirty_buffer_warns_then_discards() {
         let path = temp_file("dirty", "text\n");
-        let mut editor = Editor::open(path.clone()).unwrap();
+        let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Char('X')));
 
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
@@ -241,7 +259,7 @@ mod tests {
     #[test]
     fn another_key_cancels_the_discard_warning() {
         let path = temp_file("cancel", "text\n");
-        let mut editor = Editor::open(path.clone()).unwrap();
+        let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(key(KeyCode::Esc));
         editor.handle_key(key(KeyCode::Char('Y')));
@@ -252,7 +270,7 @@ mod tests {
     #[test]
     fn ctrl_b_saves_then_compiles() {
         let path = temp_file("build", "= Title\n");
-        let mut editor = Editor::open(path.clone()).unwrap();
+        let mut editor = open(&path);
         editor.out_dir = path.parent().unwrap().join("pages");
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(ctrl('b'));
@@ -264,13 +282,14 @@ mod tests {
         assert!(editor.pending.is_none());
         let report = editor.report.as_ref().unwrap();
         assert!(report.ok, "{:?}", report.lines);
+        assert!(editor.preview.has_page(), "the page did not load");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn a_compile_error_reaches_the_report() {
         let path = temp_file("builderr", "#nope()\n");
-        let mut editor = Editor::open(path.clone()).unwrap();
+        let mut editor = open(&path);
         editor.out_dir = path.parent().unwrap().join("pages");
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);

@@ -1,6 +1,7 @@
 mod browser;
 mod compile;
 mod editor;
+mod preview;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -12,10 +13,13 @@ use ratatui::{
     widgets::{Block, List, ListState, Paragraph},
 };
 
+use ratatui_image::picker::Picker;
+
 use editor::{Action, Editor};
 
 struct App {
     root: PathBuf,
+    picker: Picker,
     files: Vec<PathBuf>,
     list: ListState,
     status: String,
@@ -27,15 +31,19 @@ fn main() -> std::io::Result<()> {
     let root = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
     let first = (!files.is_empty()).then_some(0);
+    // ratatui::init also installs a panic hook that restores the terminal.
+    let mut terminal = ratatui::init();
+    // The query needs the raw terminal, and it must run before the first key is read.
+    // It finds the image protocol and the font size. If it fails, the preview uses half blocks.
+    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     let mut app = App {
         root,
+        picker,
         files,
         list: ListState::default().with_selected(first),
         status: String::new(),
         editor: None,
     };
-    // ratatui::init also installs a panic hook that restores the terminal.
-    let mut terminal = ratatui::init();
     let result = run(&mut terminal, &mut app);
     ratatui::restore();
     compile::cleanup();
@@ -67,7 +75,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
             KeyCode::Char('k') | KeyCode::Up => app.list.select_previous(),
             KeyCode::Enter => {
                 if let Some(path) = app.list.selected().and_then(|i| app.files.get(i)) {
-                    app.status = match Editor::open(app.root.join(path)) {
+                    app.status = match Editor::open(app.root.join(path), app.picker.clone()) {
                         Ok(editor) => {
                             app.editor = Some(editor);
                             String::new()
@@ -82,7 +90,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
 }
 
 fn draw(frame: &mut Frame, app: &mut App) {
-    if let Some(editor) = &app.editor {
+    if let Some(editor) = &mut app.editor {
         editor.draw(frame);
         return;
     }
