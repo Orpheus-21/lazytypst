@@ -66,7 +66,7 @@ Keys in the editor:
 - `Alt-Down`: show the next page. `Alt-Up`: show the previous page. Both stop at the first page and at the last page. The title of the preview shows the page number and the page count.
 - `Esc`: save the text and go back to the file list. If the save is not possible, the program shows the reason. A second `Esc` then closes the editor without a save. Closing the editor kills a compile that still runs.
 
-All other keys edit the text. The text area uses the Emacs-style keys of the `ratatui-textarea` crate. `Ctrl-B` and `Ctrl-E` do the jobs above and not the Emacs jobs. Use `Left` and `End` instead.
+All other keys edit the text. A long line wraps on screen, at a word if possible. The file keeps it as one line. The text area uses the Emacs-style keys of the `ratatui-textarea` crate. `Ctrl-B` and `Ctrl-E` do the jobs above and not the Emacs jobs. Use `Left` and `End` instead.
 
 Save rules:
 
