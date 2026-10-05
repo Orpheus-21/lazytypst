@@ -1,7 +1,8 @@
 mod browser;
+mod compile;
 mod editor;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use ratatui::{
     DefaultTerminal, Frame,
@@ -37,12 +38,22 @@ fn main() -> std::io::Result<()> {
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, &mut app);
     ratatui::restore();
+    compile::cleanup();
     result
 }
 
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
+    let mut redraw = true;
     loop {
-        terminal.draw(|frame| draw(frame, app))?;
+        if redraw {
+            terminal.draw(|frame| draw(frame, app))?;
+        }
+        // While no key arrives, check every 50 ms if a compile has finished.
+        if !event::poll(Duration::from_millis(50))? {
+            redraw = app.editor.as_mut().is_some_and(|editor| editor.poll_compile());
+            continue;
+        }
+        redraw = true;
         let Event::Key(key) = event::read()? else { continue };
         if let Some(editor) = &mut app.editor {
             if matches!(editor.handle_key(key), Action::Close) {
