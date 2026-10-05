@@ -53,8 +53,8 @@ pub struct Editor {
     conflict: bool,
     /// The time of the last edit that no save has covered yet.
     last_edit: Option<Instant>,
-    /// True after the first Esc on a dirty buffer. A second Esc discards the text.
-    discard_armed: bool,
+    /// True after an Esc that could not save the text. A second Esc closes without a save.
+    close_armed: bool,
     message: String,
     /// The folder that holds one new subfolder with the PNG pages for each compile.
     out_dir: PathBuf,
@@ -79,7 +79,7 @@ impl Editor {
             textarea,
             dirty: false,
             last_edit: None,
-            discard_armed: false,
+            close_armed: false,
             message: String::new(),
             out_dir: compile::out_dir(),
             job: None,
@@ -123,7 +123,7 @@ impl Editor {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
-        let armed = std::mem::take(&mut self.discard_armed);
+        let armed = std::mem::take(&mut self.close_armed);
         self.message.clear();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('s') {
@@ -144,11 +144,12 @@ impl Editor {
                 self.message = err;
             }
         } else if key.code == KeyCode::Esc {
-            if !self.dirty || armed {
+            if armed || self.save(false) {
                 return Action::Close;
             }
-            self.discard_armed = true;
-            self.message = "Unsaved changes. Press Esc again to discard them, or Ctrl-S to save.".into();
+            // `save` put the reason in the message.
+            self.close_armed = true;
+            self.message.push_str(" Esc again closes without a save.");
         } else if self.textarea.input(key) {
             self.dirty = true;
             self.last_edit = Some(Instant::now());
@@ -346,23 +347,51 @@ mod tests {
     }
 
     #[test]
-    fn esc_on_a_dirty_buffer_warns_then_discards() {
-        let path = temp_file("dirty", "text\n");
+    fn esc_saves_the_text_then_closes() {
+        let path = temp_file("escsave", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Close));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "Xtext\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
+        let path = temp_file("escconflict", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        fs::write(&path, "outside\n").unwrap();
+
+        assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
+        assert!(editor.message.contains("changed on disk"), "{}", editor.message);
+        assert!(editor.message.contains("Esc again"), "{}", editor.message);
+        assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Close));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "outside\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn esc_after_a_failed_write_warns_then_closes() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_file("escreadonly", "text\n");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
         let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Char('X')));
 
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
-        assert!(editor.message.contains("Unsaved"));
+        assert!(editor.message.contains("Save failed"), "{}", editor.message);
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Close));
         assert_eq!(fs::read_to_string(&path).unwrap(), "text\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
-    fn another_key_cancels_the_discard_warning() {
+    fn another_key_cancels_the_close_warning() {
         let path = temp_file("cancel", "text\n");
         let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Char('X')));
+        fs::write(&path, "outside\n").unwrap();
         editor.handle_key(key(KeyCode::Esc));
         editor.handle_key(key(KeyCode::Char('Y')));
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
