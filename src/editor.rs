@@ -103,6 +103,10 @@ impl Editor {
             self.save();
         } else if ctrl && key.code == KeyCode::Char('b') {
             self.save_and_compile();
+        } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char('n' | 'p')) {
+            if let Err(err) = self.preview.turn(key.code == KeyCode::Char('n')) {
+                self.message = err;
+            }
         } else if key.code == KeyCode::Esc {
             if !self.dirty || armed {
                 return Action::Close;
@@ -203,7 +207,7 @@ impl Editor {
         frame.render_widget(self.compile_pane(), pane);
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
-            "Ctrl-S save  Ctrl-B compile  Esc back"
+            "Ctrl-S save  Ctrl-B compile  Alt-n/Alt-p page  Esc back"
         } else {
             &self.message
         };
@@ -432,6 +436,40 @@ mod tests {
         wait_for_report(&mut editor);
         assert!(!editor.report.as_ref().unwrap().ok);
         assert_eq!(fs::read_dir(&pages).unwrap().count(), 0);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    fn alt(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
+    }
+
+    #[test]
+    fn alt_n_and_alt_p_turn_the_preview_page() {
+        let path = temp_file("pages", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let mut editor = open(&path);
+        editor.out_dir = path.parent().unwrap().join("pages");
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 1/3"));
+
+        editor.handle_key(alt('n'));
+        assert!(screen_text(&mut editor).contains("Preview 2/3"));
+        editor.handle_key(alt('n'));
+        editor.handle_key(alt('n'));
+        assert!(screen_text(&mut editor).contains("Preview 3/3"));
+        editor.handle_key(alt('p'));
+        assert!(screen_text(&mut editor).contains("Preview 2/3"));
+        assert!(!editor.dirty, "the page keys must not change the text");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn plain_n_and_p_type_letters() {
+        let path = temp_file("letters", "");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('n')));
+        editor.handle_key(key(KeyCode::Char('p')));
+        assert_eq!(editor.textarea.lines(), ["np"]);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
