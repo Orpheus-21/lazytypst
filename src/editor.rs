@@ -45,7 +45,7 @@ pub struct Editor {
     /// True after the first Esc on a dirty buffer. A second Esc discards the text.
     discard_armed: bool,
     message: String,
-    /// The folder for the PNG pages of the compile.
+    /// The folder that holds one new subfolder with the PNG pages for each compile.
     out_dir: PathBuf,
     /// The running compile. `None` when no compile runs.
     job: Option<Job>,
@@ -66,7 +66,7 @@ impl Editor {
             last_edit: None,
             discard_armed: false,
             message: String::new(),
-            out_dir: compile::new_out_dir(),
+            out_dir: compile::out_dir(),
             job: None,
             report: None,
             preview: Preview::new(picker),
@@ -118,8 +118,17 @@ impl Editor {
 
     fn save_and_compile(&mut self) {
         if self.save() {
-            // The new job replaces the old job. Dropping the old job kills its process.
-            self.job = Some(Job::start(&self.path, &self.out_dir));
+            self.stop_compile();
+            self.job = Some(Job::start(&self.path, compile::next_dir(&self.out_dir)));
+        }
+    }
+
+    /// Kills the running compile and deletes its page folder.
+    fn stop_compile(&mut self) {
+        if let Some(job) = self.job.take() {
+            let dir = job.dir().to_path_buf();
+            drop(job);
+            let _ = fs::remove_dir_all(dir);
         }
     }
 
@@ -139,16 +148,20 @@ impl Editor {
 
     /// Takes the report of a finished compile. Returns true when the screen must redraw.
     fn poll_compile(&mut self) -> bool {
-        let Some(mut report) = self.job.as_ref().and_then(Job::try_report) else {
+        let Some(job) = &self.job else {
             return false;
         };
-        if report.ok
-            && let Err(err) = self.preview.load(&self.out_dir.join("page-1.png"))
-        {
+        let Some(mut report) = job.try_report() else {
+            return false;
+        };
+        let dir = job.dir().to_path_buf();
+        self.job = None;
+        if !report.ok {
+            let _ = fs::remove_dir_all(dir);
+        } else if let Err(err) = self.preview.load(dir) {
             report = Report::failed(err);
         }
         self.report = Some(report);
-        self.job = None;
         true
     }
 
@@ -389,6 +402,36 @@ mod tests {
         assert!(text.contains("Compile (running)"), "{text}");
         assert!(text.contains("old error text"), "{text}");
         assert!(!text.contains("Compiling..."), "{text}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn only_the_folder_of_the_last_compile_stays() {
+        let path = temp_file("folders", "= Title\n");
+        let mut editor = open(&path);
+        let pages = path.parent().unwrap().join("pages");
+        editor.out_dir = pages.clone();
+
+        editor.handle_key(ctrl('b'));
+        editor.handle_key(ctrl('b')); // kills the first compile and deletes its folder
+        wait_for_report(&mut editor);
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        assert!(editor.report.as_ref().unwrap().ok);
+        assert_eq!(fs::read_dir(&pages).unwrap().count(), 1);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_failed_compile_leaves_no_folder() {
+        let path = temp_file("nofolder", "#nope()\n");
+        let mut editor = open(&path);
+        let pages = path.parent().unwrap().join("pages");
+        editor.out_dir = pages.clone();
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        assert!(!editor.report.as_ref().unwrap().ok);
+        assert_eq!(fs::read_dir(&pages).unwrap().count(), 0);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

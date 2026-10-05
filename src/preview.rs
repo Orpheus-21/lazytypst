@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fs, path::PathBuf};
 
 use ratatui::{
     Frame,
@@ -10,20 +10,34 @@ use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
 /// The pane that shows one compiled page as an image.
 pub struct Preview {
     picker: Picker,
+    /// The folder with the PNG pages that the pane shows. The preview owns the folder.
+    dir: Option<PathBuf>,
     /// The last page that loaded. It stays on screen when a later compile fails.
     page: Option<StatefulProtocol>,
 }
 
 impl Preview {
     pub fn new(picker: Picker) -> Self {
-        Self { picker, page: None }
+        Self { picker, dir: None, page: None }
     }
 
-    /// Loads the PNG file. If the load fails, the old page stays and the error text comes back.
-    pub fn load(&mut self, path: &Path) -> Result<(), String> {
-        let image = image::open(path).map_err(|err| format!("Cannot load {}: {err}", path.display()))?;
-        self.page = Some(self.picker.new_resize_protocol(image));
-        Ok(())
+    /// Shows page 1 of the new folder and deletes the old folder.
+    /// If page 1 does not load, the new folder is deleted, the old page stays, and the error text comes back.
+    pub fn load(&mut self, dir: PathBuf) -> Result<(), String> {
+        let path = dir.join("page-1.png");
+        match image::open(&path) {
+            Ok(image) => {
+                self.page = Some(self.picker.new_resize_protocol(image));
+                if let Some(old) = self.dir.replace(dir) {
+                    let _ = fs::remove_dir_all(old);
+                }
+                Ok(())
+            }
+            Err(err) => {
+                let _ = fs::remove_dir_all(&dir);
+                Err(format!("Cannot load {}: {err}", path.display()))
+            }
+        }
     }
 
     #[cfg(test)]
@@ -48,18 +62,16 @@ impl Preview {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend, style::Color};
-    use std::fs;
 
-    /// Writes a solid red PNG of 40 by 40 pixels in a new temporary folder.
-    fn red_png(name: &str) -> std::path::PathBuf {
+    /// Makes a folder with a solid red PNG of 40 by 40 pixels, named page-1.png.
+    fn red_pages(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("lazytypst-preview-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("page-1.png");
         image::RgbaImage::from_pixel(40, 40, image::Rgba([255, 0, 0, 255]))
-            .save(&path)
+            .save(dir.join("page-1.png"))
             .unwrap();
-        path
+        dir
     }
 
     fn screen_text(terminal: &Terminal<TestBackend>) -> String {
@@ -67,35 +79,50 @@ mod tests {
     }
 
     #[test]
-    fn load_reads_a_png() {
-        let path = red_png("load");
+    fn load_reads_page_1() {
+        let dir = red_pages("load");
         let mut preview = Preview::new(Picker::halfblocks());
         assert!(!preview.has_page());
-        preview.load(&path).unwrap();
+        preview.load(dir.clone()).unwrap();
         assert!(preview.has_page());
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn a_failed_load_keeps_the_old_page() {
-        let path = red_png("keep");
+    fn a_new_load_deletes_the_old_folder() {
+        let (first, second) = (red_pages("old"), red_pages("new"));
         let mut preview = Preview::new(Picker::halfblocks());
-        preview.load(&path).unwrap();
+        preview.load(first.clone()).unwrap();
+        preview.load(second.clone()).unwrap();
+        assert!(!first.exists(), "the old folder is still there");
+        assert!(second.exists());
+        fs::remove_dir_all(second).unwrap();
+    }
 
-        let err = preview.load(&path.with_file_name("missing.png")).unwrap_err();
+    #[test]
+    fn a_failed_load_keeps_the_old_page_and_deletes_the_new_folder() {
+        let good = red_pages("keep");
+        let mut preview = Preview::new(Picker::halfblocks());
+        preview.load(good.clone()).unwrap();
+
+        let empty = std::env::temp_dir().join(format!("lazytypst-preview-empty-{}", std::process::id()));
+        fs::create_dir_all(&empty).unwrap();
+        let err = preview.load(empty.clone()).unwrap_err();
         assert!(err.contains("Cannot load"), "{err}");
         assert!(preview.has_page());
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert!(good.exists(), "the folder of the shown page was deleted");
+        assert!(!empty.exists(), "the folder of the failed load is still there");
+        fs::remove_dir_all(good).unwrap();
     }
 
     #[test]
     fn a_file_that_is_not_a_png_is_an_error() {
-        let path = red_png("bad");
-        fs::write(&path, "not a png").unwrap();
+        let dir = red_pages("bad");
+        fs::write(dir.join("page-1.png"), "not a png").unwrap();
         let mut preview = Preview::new(Picker::halfblocks());
-        assert!(preview.load(&path).is_err());
+        assert!(preview.load(dir.clone()).is_err());
         assert!(!preview.has_page());
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert!(!dir.exists());
     }
 
     #[test]
@@ -108,10 +135,10 @@ mod tests {
 
     #[test]
     fn the_pane_draws_the_page() {
-        let path = red_png("draw");
+        let dir = red_pages("draw");
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
         let mut preview = Preview::new(Picker::halfblocks());
-        preview.load(&path).unwrap();
+        preview.load(dir.clone()).unwrap();
         terminal.draw(|frame| preview.draw(frame, frame.area())).unwrap();
 
         let screen = screen_text(&terminal);
@@ -119,6 +146,6 @@ mod tests {
         let cells = terminal.backend().buffer().content();
         assert!(cells.iter().any(|cell| cell.bg == red), "no red cell on screen");
         assert!(!screen.contains("No preview yet."));
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 }

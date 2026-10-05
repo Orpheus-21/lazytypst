@@ -34,10 +34,10 @@ pub fn out_dir() -> PathBuf {
 
 static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
 
-/// A new folder inside `out_dir` for the pages of one editor.
-/// A compile that outlives its editor then cannot write into the pages of the next editor.
-pub fn new_out_dir() -> PathBuf {
-    out_dir().join(NEXT_DIR.fetch_add(1, Ordering::Relaxed).to_string())
+/// A new folder name inside `root` for the pages of one compile.
+/// No two compiles share a folder. So a compile that was killed cannot add pages to a newer one.
+pub fn next_dir(root: &Path) -> PathBuf {
+    root.join(NEXT_DIR.fetch_add(1, Ordering::Relaxed).to_string())
 }
 
 /// Deletes the page folder. The program calls this when it exits.
@@ -50,36 +50,43 @@ pub struct Job {
     /// `None` when the command did not start. Then the report is already waiting.
     child: Option<Arc<Mutex<Child>>>,
     receiver: Receiver<Report>,
+    /// The folder that receives the PNG pages.
+    dir: PathBuf,
 }
 
 impl Job {
-    /// Runs `typst compile` on `file`. The pages go to `out_dir/page-{p}.png`.
-    pub fn start(file: &Path, out_dir: &Path) -> Job {
-        if let Err(err) = fs::create_dir_all(out_dir) {
-            return Job::failed(format!("Cannot make {}: {err}", out_dir.display()));
+    /// Runs `typst compile` on `file`. The pages go to `dir/page-{p}.png`.
+    pub fn start(file: &Path, dir: PathBuf) -> Job {
+        if let Err(err) = fs::create_dir_all(&dir) {
+            return Job::failed(format!("Cannot make {}: {err}", dir.display()), dir);
         }
         let mut command = Command::new("typst");
         command
             .args(["compile", "--format", "png", "--diagnostic-format", "short"])
             .arg(file)
-            .arg(out_dir.join("page-{p}.png"));
-        Job::spawn(command)
+            .arg(dir.join("page-{p}.png"));
+        Job::spawn(command, dir)
     }
 
-    fn failed(message: String) -> Job {
+    /// The folder that receives the PNG pages.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    fn failed(message: String, dir: PathBuf) -> Job {
         let (tx, receiver) = mpsc::channel();
         let _ = tx.send(Report::failed(message));
-        Job { child: None, receiver }
+        Job { child: None, receiver, dir }
     }
 
     /// Starts the command. The lines it prints on stderr become the report.
-    fn spawn(mut command: Command) -> Job {
+    fn spawn(mut command: Command, dir: PathBuf) -> Job {
         command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {
                 let program = command.get_program().to_string_lossy().into_owned();
-                return Job::failed(format!("Cannot run {program}: {err}"));
+                return Job::failed(format!("Cannot run {program}: {err}"), dir);
             }
         };
         let mut stderr = child.stderr.take().expect("stderr is piped");
@@ -94,7 +101,7 @@ impl Job {
             // The receiver is gone when the job was dropped. Then nobody needs the report.
             let _ = tx.send(report(status, &bytes));
         });
-        Job { child: Some(child), receiver }
+        Job { child: Some(child), receiver, dir }
     }
 
     /// Returns the report if the command has ended. Never waits.
@@ -160,7 +167,7 @@ mod tests {
     #[test]
     fn a_valid_file_makes_a_png_page() {
         let (file, pages) = project("ok", "= Title\nSome text.\n");
-        let report = wait(&Job::start(&file, &pages));
+        let report = wait(&Job::start(&file, pages.clone()));
         assert!(report.ok, "{:?}", report.lines);
         assert!(report.lines.is_empty());
         let png = fs::read(pages.join("page-1.png")).unwrap();
@@ -171,7 +178,7 @@ mod tests {
     #[test]
     fn an_error_report_names_the_line() {
         let (file, pages) = project("bad", "= Title\n#nope()\n");
-        let report = wait(&Job::start(&file, &pages));
+        let report = wait(&Job::start(&file, pages.clone()));
         assert!(!report.ok);
         assert!(
             report.lines.iter().any(|l| l.contains(":2:") && l.contains("error")),
@@ -182,17 +189,18 @@ mod tests {
     }
 
     #[test]
-    fn each_new_out_dir_is_different_and_inside_out_dir() {
-        let (first, second) = (new_out_dir(), new_out_dir());
+    fn each_next_dir_is_different_and_inside_the_root() {
+        let root = Path::new("/some/root");
+        let (first, second) = (next_dir(root), next_dir(root));
         assert_ne!(first, second);
-        assert_eq!(first.parent(), Some(out_dir().as_path()));
+        assert_eq!(first.parent(), Some(root));
     }
 
     #[test]
     fn a_missing_input_file_is_a_failure() {
         let (file, pages) = project("missing", "");
         fs::remove_file(&file).unwrap();
-        let report = wait(&Job::start(&file, &pages));
+        let report = wait(&Job::start(&file, pages.clone()));
         assert!(!report.ok);
         assert!(!report.lines.is_empty());
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -202,14 +210,14 @@ mod tests {
     fn a_failed_command_reports_its_stderr() {
         let mut command = Command::new("sh");
         command.args(["-c", "echo oops >&2; exit 3"]);
-        let report = wait(&Job::spawn(command));
+        let report = wait(&Job::spawn(command, PathBuf::new()));
         assert!(!report.ok);
         assert_eq!(report.lines, ["oops"]);
     }
 
     #[test]
     fn a_missing_program_is_a_failure() {
-        let report = wait(&Job::spawn(Command::new("no-such-program-xyz")));
+        let report = wait(&Job::spawn(Command::new("no-such-program-xyz"), PathBuf::new()));
         assert!(!report.ok);
         assert!(report.lines[0].contains("Cannot run no-such-program-xyz"), "{:?}", report.lines);
     }
@@ -218,7 +226,7 @@ mod tests {
     fn dropping_the_job_kills_the_process() {
         let mut command = Command::new("sleep");
         command.arg("30");
-        let job = Job::spawn(command);
+        let job = Job::spawn(command, PathBuf::new());
         let child = Arc::clone(job.child.as_ref().unwrap());
         assert!(child.lock().unwrap().try_wait().unwrap().is_none(), "the process ended too early");
 
