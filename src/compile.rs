@@ -106,12 +106,15 @@ enum State {
 impl Job {
     /// Runs `typst compile` on `file`. The pages go to `dir/page-{p}.png`.
     /// Typst can read the files under `root`. So `file` can import files from parent folders inside `root`.
+    /// Typst runs in `root`, so an error line names the file relative to `root`.
+    /// `file` and `dir` must be absolute, or relative to `root`.
     pub fn start(file: &Path, root: &Path, dir: PathBuf) -> Job {
         if let Err(err) = fs::create_dir_all(&dir) {
             return Job::failed(format!("Cannot make {}: {err}", dir.display()), dir);
         }
         let mut command = Command::new("typst");
         command
+            .current_dir(root)
             .args(["compile", "--format", "png", "--diagnostic-format", "short", "--root"])
             .arg(root)
             .arg(file)
@@ -120,9 +123,11 @@ impl Job {
     }
 
     /// Runs `typst compile` on `file`. The PDF goes to `pdf`. An old file at `pdf` is replaced.
+    /// The paths follow the same rules as in `start`.
     pub fn start_pdf(file: &Path, root: &Path, pdf: PathBuf) -> Job {
         let mut command = Command::new("typst");
         command
+            .current_dir(root)
             .args(["compile", "--format", "pdf", "--diagnostic-format", "short", "--root"])
             .arg(root)
             .arg(file)
@@ -256,6 +261,21 @@ mod tests {
         assert!(report.ok, "{:?}", report.lines);
         let report = wait(&mut Job::start_pdf(&chapter, root, root.join("c.pdf")));
         assert!(report.ok, "{:?}", report.lines);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_error_path_is_relative_to_the_root() {
+        let (file, pages) = project("relpath", "");
+        let root = file.parent().unwrap();
+        fs::create_dir_all(root.join("chapters")).unwrap();
+        let chapter = root.join("chapters").join("c.typ");
+        fs::write(&chapter, "#nope()\n").unwrap();
+
+        let report = wait(&mut Job::start(&chapter, root, pages.clone()));
+        assert!(report.lines[0].starts_with("chapters/c.typ:1:"), "{:?}", report.lines);
+        let report = wait(&mut Job::start_pdf(&chapter, root, root.join("c.pdf")));
+        assert!(report.lines[0].starts_with("chapters/c.typ:1:"), "{:?}", report.lines);
         fs::remove_dir_all(root).unwrap();
     }
 

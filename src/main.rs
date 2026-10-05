@@ -141,6 +141,14 @@ fn main() -> std::io::Result<()> {
             std::process::exit(2);
         }
     };
+    // An absolute root keeps every derived path valid when typst runs inside the root.
+    let root = match std::fs::canonicalize(&root) {
+        Ok(root) => root,
+        Err(err) => {
+            eprintln!("Cannot open the folder {}: {err}", root.display());
+            std::process::exit(1);
+        }
+    };
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
     compile::make_out_dir().map_err(|err| {
         let message = format!("Cannot make the folder {}: {err}", compile::out_dir().display());

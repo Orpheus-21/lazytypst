@@ -290,7 +290,8 @@ impl Editor {
         let [body, pane] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(PANE_HEIGHT)]).areas(left);
         let marker = if self.dirty { " [+]" } else { "" };
-        let block = Block::bordered().title(format!("{}{marker}", self.path.display()));
+        let name = self.path.strip_prefix(&self.root).unwrap_or(&self.path);
+        let block = Block::bordered().title(format!("{}{marker}", name.display()));
         let inner = block.inner(body);
         frame.render_widget(block, body);
         frame.render_widget(&self.textarea, inner);
@@ -598,6 +599,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| editor.draw(frame)).unwrap();
         terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn the_title_shows_the_path_relative_to_the_root() {
+        let path = temp_file("title", "text\n");
+        let mut editor = open(&path);
+        let text = screen_text(&mut editor);
+        assert!(text.contains("doc.typ"), "{text}");
+        assert!(!text.contains(&path.parent().unwrap().display().to_string()), "{text}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
