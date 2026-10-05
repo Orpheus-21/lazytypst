@@ -11,7 +11,7 @@ use std::{
 
 use ratatui::{
     DefaultTerminal, Frame,
-    crossterm::event::{self, Event, KeyCode},
+    crossterm::event::{self, Event, KeyCode, KeyEvent},
     layout::{Constraint, Layout},
     style::{Modifier, Style},
     widgets::{Block, List, ListState, Paragraph},
@@ -37,10 +37,52 @@ fn root_from_args(mut args: impl Iterator<Item = OsString>) -> PathBuf {
     args.nth(1).map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
+impl App {
+    fn new(root: PathBuf, files: Vec<PathBuf>, picker: Picker) -> Self {
+        let first = (!files.is_empty()).then_some(0);
+        App {
+            root,
+            picker,
+            files,
+            list: ListState::default().with_selected(first),
+            status: String::new(),
+            editor: None,
+        }
+    }
+
+    /// Handles one key. Returns true when the program must quit.
+    fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if let Some(editor) = &mut self.editor {
+            if matches!(editor.handle_key(key), Action::Close) {
+                self.editor = None;
+            }
+            return false;
+        }
+        match key.code {
+            KeyCode::Char('q') => return true,
+            KeyCode::Char('j') | KeyCode::Down => self.list.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => self.list.select_previous(),
+            KeyCode::Enter => {
+                if let Some(path) = self.list.selected().and_then(|i| self.files.get(i)) {
+                    let opened = Editor::open(self.root.join(path), self.root.clone(), self.picker.clone());
+                    self.status = match opened {
+                        Ok(editor) => {
+                            self.editor = Some(editor);
+                            String::new()
+                        }
+                        Err(err) => format!("Cannot open {}: {err}", path.display()),
+                    };
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let root = root_from_args(std::env::args_os());
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
-    let first = (!files.is_empty()).then_some(0);
     compile::make_out_dir().map_err(|err| {
         let message = format!("Cannot make the folder {}: {err}", compile::out_dir().display());
         std::io::Error::new(err.kind(), message)
@@ -50,14 +92,7 @@ fn main() -> std::io::Result<()> {
     // The query needs the raw terminal, and it must run before the first key is read.
     // It finds the image protocol and the font size. If it fails, the preview uses half blocks.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
-    let mut app = App {
-        root,
-        picker,
-        files,
-        list: ListState::default().with_selected(first),
-        status: String::new(),
-        editor: None,
-    };
+    let mut app = App::new(root, files, picker);
     let result = run(&mut terminal, &mut app);
     ratatui::restore();
     compile::cleanup();
@@ -77,28 +112,8 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
         }
         redraw = true;
         let Event::Key(key) = event::read()? else { continue };
-        if let Some(editor) = &mut app.editor {
-            if matches!(editor.handle_key(key), Action::Close) {
-                app.editor = None;
-            }
-            continue;
-        }
-        match key.code {
-            KeyCode::Char('q') => return Ok(()),
-            KeyCode::Char('j') | KeyCode::Down => app.list.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.list.select_previous(),
-            KeyCode::Enter => {
-                if let Some(path) = app.list.selected().and_then(|i| app.files.get(i)) {
-                    app.status = match Editor::open(app.root.join(path), app.root.clone(), app.picker.clone()) {
-                        Ok(editor) => {
-                            app.editor = Some(editor);
-                            String::new()
-                        }
-                        Err(err) => format!("Cannot open {}: {err}", path.display()),
-                    };
-                }
-            }
-            _ => {}
+        if app.handle_key(key) {
+            return Ok(());
         }
     }
 }
@@ -128,6 +143,104 @@ fn draw(frame: &mut Frame, app: &mut App) {
 mod tests {
     use super::*;
     use std::os::unix::ffi::OsStringExt;
+
+    use ratatui::{Terminal, backend::TestBackend};
+    use std::fs;
+
+    /// Makes a folder with the files `a.typ`, `sub/b.typ`, and `notes.txt`. Returns the app for it.
+    fn app(name: &str) -> App {
+        let root = std::env::temp_dir().join(format!("lazytypst-main-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("a.typ"), "text of a\n").unwrap();
+        fs::write(root.join("sub").join("b.typ"), "text of b\n").unwrap();
+        fs::write(root.join("notes.txt"), "").unwrap();
+        let files = browser::find_typ_files(&root, browser::MAX_DEPTH).unwrap();
+        App::new(root, files, Picker::halfblocks())
+    }
+
+    fn press(app: &mut App, code: KeyCode) -> bool {
+        app.handle_key(KeyEvent::from(code))
+    }
+
+    /// Draws the app on a 100 by 24 screen and returns all the text on it.
+    fn screen(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn the_list_shows_the_typ_files_only() {
+        let mut app = app("list");
+        let text = screen(&mut app);
+        assert!(text.contains("a.typ") && text.contains("sub/b.typ"), "{text}");
+        assert!(!text.contains("notes.txt"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn j_then_enter_opens_the_second_file_and_esc_goes_back() {
+        let mut app = app("open");
+        assert!(!press(&mut app, KeyCode::Char('j')));
+        assert!(!press(&mut app, KeyCode::Enter));
+        assert!(screen(&mut app).contains("text of b"));
+
+        assert!(!press(&mut app, KeyCode::Esc));
+        assert!(app.editor.is_none());
+        assert!(screen(&mut app).contains("sub/b.typ"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_selection_stops_at_both_ends_of_the_list() {
+        let mut app = app("ends");
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Down);
+            screen(&mut app); // a draw clamps the selection, as in the real loop
+        }
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("text of b"));
+        press(&mut app, KeyCode::Esc);
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Char('k'));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("text of a"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn q_quits_in_the_list_but_types_in_the_editor() {
+        let mut app = app("quit");
+        press(&mut app, KeyCode::Enter);
+        assert!(!press(&mut app, KeyCode::Char('q')), "q in the editor must not quit");
+        assert!(screen(&mut app).contains("qtext of a"));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.editor.is_none(), "Esc must save and close");
+        assert!(press(&mut app, KeyCode::Char('q')));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_shows_an_error_in_the_list() {
+        let mut app = app("unreadable");
+        fs::write(app.root.join("a.typ"), b"\xff\xfe").unwrap();
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editor.is_none());
+        assert!(screen(&mut app).contains("Cannot open a.typ"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn an_empty_folder_shows_a_message_and_enter_does_nothing() {
+        let root = std::env::temp_dir().join(format!("lazytypst-main-empty-{}", std::process::id()));
+        let mut app = App::new(root, Vec::new(), Picker::halfblocks());
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editor.is_none());
+        assert!(screen(&mut app).contains("No .typ files"));
+    }
 
     #[test]
     fn the_root_comes_from_the_first_argument_even_if_it_is_not_utf8() {
