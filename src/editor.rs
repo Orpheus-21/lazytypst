@@ -82,7 +82,7 @@ pub struct Editor {
     close_armed: bool,
     message: String,
     /// The folder that holds one new subfolder with the PNG pages for each compile.
-    out_dir: PathBuf,
+    pages_root: PathBuf,
     /// The running compile. `None` when no compile runs.
     job: Option<Job>,
     /// The running PDF export. `None` when no export runs.
@@ -109,7 +109,7 @@ impl Editor {
             last_edit: None,
             close_armed: false,
             message: String::new(),
-            out_dir: compile::out_dir(),
+            pages_root: compile::out_dir(),
             job: None,
             export: None,
             exported: None,
@@ -191,7 +191,7 @@ impl Editor {
     fn save_and_compile(&mut self) {
         if self.save(false) {
             self.stop_compile();
-            self.job = Some(Job::start(&self.path, &self.root, compile::next_dir(&self.out_dir)));
+            self.job = Some(Job::start(&self.path, &self.root, compile::next_dir(&self.pages_root)));
         }
     }
 
@@ -315,7 +315,7 @@ mod tests {
     fn open(path: &std::path::Path) -> Editor {
         let root = path.parent().unwrap().to_path_buf();
         let mut editor = Editor::open(path.to_path_buf(), root.clone(), Picker::halfblocks()).unwrap();
-        editor.out_dir = root.join("pages");
+        editor.pages_root = root.join("pages");
         editor
     }
 
