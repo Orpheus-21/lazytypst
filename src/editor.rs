@@ -215,7 +215,7 @@ impl Editor {
 
     /// Takes the report of a finished compile. Returns true when the screen must redraw.
     fn poll_compile(&mut self) -> bool {
-        let Some(job) = &self.job else {
+        let Some(job) = &mut self.job else {
             return false;
         };
         let Some(mut report) = job.try_report() else {
@@ -234,7 +234,7 @@ impl Editor {
 
     /// Takes the report of a finished export. The pane shows the path of the PDF, or the errors.
     fn poll_export(&mut self) -> bool {
-        let Some(job) = &self.export else {
+        let Some(job) = &mut self.export else {
             return false;
         };
         let Some(mut report) = job.try_report() else {

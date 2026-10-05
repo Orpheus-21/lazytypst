@@ -4,7 +4,6 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
         mpsc::{self, Receiver, TryRecvError},
     },
@@ -59,11 +58,16 @@ pub fn cleanup() {
 
 /// A running command. Dropping the job kills the process, so a new job can replace an old one.
 pub struct Job {
-    /// `None` when the command did not start. Then the report is already waiting.
-    child: Option<Arc<Mutex<Child>>>,
-    receiver: Receiver<Report>,
+    state: State,
     /// What the command writes: a folder of PNG pages, or one PDF file.
     output: PathBuf,
+}
+
+enum State {
+    /// The command did not start. The report waits here until `try_report` takes it.
+    Failed(Option<Report>),
+    /// The command runs. A thread reads its stderr and sends the bytes when the process closes stderr.
+    Running { child: Child, stderr: Receiver<Vec<u8>> },
 }
 
 impl Job {
@@ -99,9 +103,7 @@ impl Job {
     }
 
     fn failed(message: String, output: PathBuf) -> Job {
-        let (tx, receiver) = mpsc::channel();
-        let _ = tx.send(Report::failed(message));
-        Job { child: None, receiver, output }
+        Job { state: State::Failed(Some(Report::failed(message))), output }
     }
 
     /// Starts the command. The lines it prints on stderr become the report.
@@ -114,36 +116,44 @@ impl Job {
                 return Job::failed(format!("Cannot run {program}: {err}"), output);
             }
         };
-        let mut stderr = child.stderr.take().expect("stderr is piped");
-        let child = Arc::new(Mutex::new(child));
-        let waiter = Arc::clone(&child);
-        let (tx, receiver) = mpsc::channel();
+        let mut pipe = child.stderr.take().expect("stderr is piped");
+        let (tx, stderr) = mpsc::channel();
         thread::spawn(move || {
             let mut bytes = Vec::new();
-            // The read ends when the process ends, or when `Drop` kills it.
-            let _ = stderr.read_to_end(&mut bytes);
-            let status = waiter.lock().unwrap().wait();
-            // The receiver is gone when the job was dropped. Then nobody needs the report.
-            let _ = tx.send(report(status, &bytes));
+            let _ = pipe.read_to_end(&mut bytes);
+            // The receiver is gone when the job was dropped. Then nobody needs the bytes.
+            let _ = tx.send(bytes);
         });
-        Job { child: Some(child), receiver, output }
+        Job { state: State::Running { child, stderr }, output }
     }
 
     /// Returns the report if the command has ended. Never waits.
-    pub fn try_report(&self) -> Option<Report> {
-        match self.receiver.try_recv() {
-            Ok(report) => Some(report),
+    pub fn try_report(&mut self) -> Option<Report> {
+        let (child, stderr) = match &mut self.state {
+            State::Failed(report) => return report.take(),
+            State::Running { child, stderr } => (child, stderr),
+        };
+        let status = match child.try_wait() {
+            Ok(None) => return None,
+            Ok(Some(status)) => status,
+            Err(err) => return Some(report(Err(err), &[])),
+        };
+        match stderr.try_recv() {
+            Ok(bytes) => Some(report(Ok(status), &bytes)),
+            // The process has ended, but the thread has not sent the bytes yet. The next call gets them.
             Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Report::failed("The compile thread stopped.")),
+            Err(TryRecvError::Disconnected) => Some(report(Ok(status), &[])),
         }
     }
 }
 
 impl Drop for Job {
     fn drop(&mut self) {
-        if let Some(child) = &self.child {
+        if let State::Running { child, .. } = &mut self.state {
             // The process may have ended already. Then `kill` returns an error that does not matter.
-            let _ = child.lock().unwrap().kill();
+            let _ = child.kill();
+            // `wait` removes the dead process from the process table. After a kill it returns at once.
+            let _ = child.wait();
         }
     }
 }
@@ -168,7 +178,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     /// Waits up to 10 seconds for the report of the job.
-    fn wait(job: &Job) -> Report {
+    fn wait(job: &mut Job) -> Report {
         let start = Instant::now();
         loop {
             if let Some(report) = job.try_report() {
@@ -192,7 +202,7 @@ mod tests {
     #[test]
     fn a_valid_file_makes_a_png_page() {
         let (file, pages) = project("ok", "= Title\nSome text.\n");
-        let report = wait(&Job::start(&file, file.parent().unwrap(), pages.clone()));
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
         assert!(report.ok, "{:?}", report.lines);
         assert!(report.lines.is_empty());
         let png = fs::read(pages.join("page-1.png")).unwrap();
@@ -209,9 +219,9 @@ mod tests {
         let chapter = root.join("chapters").join("c.typ");
         fs::write(&chapter, "#import \"../lib.typ\": title\n= #title\n").unwrap();
 
-        let report = wait(&Job::start(&chapter, root, pages.clone()));
+        let report = wait(&mut Job::start(&chapter, root, pages.clone()));
         assert!(report.ok, "{:?}", report.lines);
-        let report = wait(&Job::start_pdf(&chapter, root, root.join("c.pdf")));
+        let report = wait(&mut Job::start_pdf(&chapter, root, root.join("c.pdf")));
         assert!(report.ok, "{:?}", report.lines);
         fs::remove_dir_all(root).unwrap();
     }
@@ -220,9 +230,9 @@ mod tests {
     fn a_pdf_job_writes_a_pdf_file() {
         let (file, pages) = project("pdf", "= Title\nSome text.\n");
         let pdf = pages.with_file_name("out.pdf");
-        let job = Job::start_pdf(&file, file.parent().unwrap(), pdf.clone());
+        let mut job = Job::start_pdf(&file, file.parent().unwrap(), pdf.clone());
         assert_eq!(job.output(), pdf);
-        let report = wait(&job);
+        let report = wait(&mut job);
         assert!(report.ok, "{:?}", report.lines);
         assert_eq!(&fs::read(&pdf).unwrap()[..4], b"%PDF");
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -232,7 +242,7 @@ mod tests {
     fn a_pdf_job_with_an_error_writes_no_file() {
         let (file, pages) = project("pdf-bad", "#nope()\n");
         let pdf = pages.with_file_name("out.pdf");
-        let report = wait(&Job::start_pdf(&file, file.parent().unwrap(), pdf.clone()));
+        let report = wait(&mut Job::start_pdf(&file, file.parent().unwrap(), pdf.clone()));
         assert!(!report.ok);
         assert!(report.lines.iter().any(|l| l.contains(":1:")), "{:?}", report.lines);
         assert!(!pdf.exists());
@@ -242,7 +252,7 @@ mod tests {
     #[test]
     fn an_error_report_names_the_line() {
         let (file, pages) = project("bad", "= Title\n#nope()\n");
-        let report = wait(&Job::start(&file, file.parent().unwrap(), pages.clone()));
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
         assert!(!report.ok);
         assert!(
             report.lines.iter().any(|l| l.contains(":2:") && l.contains("error")),
@@ -285,7 +295,7 @@ mod tests {
     fn a_missing_input_file_is_a_failure() {
         let (file, pages) = project("missing", "");
         fs::remove_file(&file).unwrap();
-        let report = wait(&Job::start(&file, file.parent().unwrap(), pages.clone()));
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
         assert!(!report.ok);
         assert!(!report.lines.is_empty());
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -295,35 +305,32 @@ mod tests {
     fn a_failed_command_reports_its_stderr() {
         let mut command = Command::new("sh");
         command.args(["-c", "echo oops >&2; exit 3"]);
-        let report = wait(&Job::spawn(command, PathBuf::new()));
+        let report = wait(&mut Job::spawn(command, PathBuf::new()));
         assert!(!report.ok);
         assert_eq!(report.lines, ["oops"]);
     }
 
     #[test]
     fn a_missing_program_is_a_failure() {
-        let report = wait(&Job::spawn(Command::new("no-such-program-xyz"), PathBuf::new()));
+        let report = wait(&mut Job::spawn(Command::new("no-such-program-xyz"), PathBuf::new()));
         assert!(!report.ok);
         assert!(report.lines[0].contains("Cannot run no-such-program-xyz"), "{:?}", report.lines);
     }
 
     #[test]
-    fn dropping_the_job_kills_the_process() {
+    fn dropping_the_job_kills_and_reaps_the_process() {
         let mut command = Command::new("sleep");
         command.arg("30");
-        let job = Job::spawn(command, PathBuf::new());
-        let child = Arc::clone(job.child.as_ref().unwrap());
-        assert!(child.lock().unwrap().try_wait().unwrap().is_none(), "the process ended too early");
+        let mut job = Job::spawn(command, PathBuf::new());
+        let State::Running { child, .. } = &job.state else {
+            panic!("the job did not start");
+        };
+        let proc_dir = PathBuf::from(format!("/proc/{}", child.id()));
+        assert!(proc_dir.exists(), "the process is not running");
+        assert!(job.try_report().is_none());
 
         drop(job);
-        let start = Instant::now();
-        loop {
-            if let Some(status) = child.lock().unwrap().try_wait().unwrap() {
-                assert!(!status.success());
-                break;
-            }
-            assert!(start.elapsed() < Duration::from_secs(5), "the process is still running");
-            thread::sleep(Duration::from_millis(10));
-        }
+        // The process is killed and reaped, so the kernel has removed its entry.
+        assert!(!proc_dir.exists(), "the process is still in the process table");
     }
 }
