@@ -78,7 +78,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
             KeyCode::Char('k') | KeyCode::Up => app.list.select_previous(),
             KeyCode::Enter => {
                 if let Some(path) = app.list.selected().and_then(|i| app.files.get(i)) {
-                    app.status = match Editor::open(app.root.join(path), app.picker.clone()) {
+                    app.status = match Editor::open(app.root.join(path), app.root.clone(), app.picker.clone()) {
                         Ok(editor) => {
                             app.editor = Some(editor);
                             String::new()

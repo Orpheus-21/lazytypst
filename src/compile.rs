@@ -56,23 +56,26 @@ pub struct Job {
 
 impl Job {
     /// Runs `typst compile` on `file`. The pages go to `dir/page-{p}.png`.
-    pub fn start(file: &Path, dir: PathBuf) -> Job {
+    /// Typst can read the files under `root`. So `file` can import files from parent folders inside `root`.
+    pub fn start(file: &Path, root: &Path, dir: PathBuf) -> Job {
         if let Err(err) = fs::create_dir_all(&dir) {
             return Job::failed(format!("Cannot make {}: {err}", dir.display()), dir);
         }
         let mut command = Command::new("typst");
         command
-            .args(["compile", "--format", "png", "--diagnostic-format", "short"])
+            .args(["compile", "--format", "png", "--diagnostic-format", "short", "--root"])
+            .arg(root)
             .arg(file)
             .arg(dir.join("page-{p}.png"));
         Job::spawn(command, dir)
     }
 
     /// Runs `typst compile` on `file`. The PDF goes to `pdf`. An old file at `pdf` is replaced.
-    pub fn start_pdf(file: &Path, pdf: PathBuf) -> Job {
+    pub fn start_pdf(file: &Path, root: &Path, pdf: PathBuf) -> Job {
         let mut command = Command::new("typst");
         command
-            .args(["compile", "--format", "pdf", "--diagnostic-format", "short"])
+            .args(["compile", "--format", "pdf", "--diagnostic-format", "short", "--root"])
+            .arg(root)
             .arg(file)
             .arg(&pdf);
         Job::spawn(command, pdf)
@@ -177,7 +180,7 @@ mod tests {
     #[test]
     fn a_valid_file_makes_a_png_page() {
         let (file, pages) = project("ok", "= Title\nSome text.\n");
-        let report = wait(&Job::start(&file, pages.clone()));
+        let report = wait(&Job::start(&file, file.parent().unwrap(), pages.clone()));
         assert!(report.ok, "{:?}", report.lines);
         assert!(report.lines.is_empty());
         let png = fs::read(pages.join("page-1.png")).unwrap();
@@ -186,10 +189,26 @@ mod tests {
     }
 
     #[test]
+    fn a_file_in_a_subfolder_can_import_a_file_from_the_root() {
+        let (file, pages) = project("root", "");
+        let root = file.parent().unwrap();
+        fs::write(root.join("lib.typ"), "#let title = \"Lib\"\n").unwrap();
+        fs::create_dir_all(root.join("chapters")).unwrap();
+        let chapter = root.join("chapters").join("c.typ");
+        fs::write(&chapter, "#import \"../lib.typ\": title\n= #title\n").unwrap();
+
+        let report = wait(&Job::start(&chapter, root, pages.clone()));
+        assert!(report.ok, "{:?}", report.lines);
+        let report = wait(&Job::start_pdf(&chapter, root, root.join("c.pdf")));
+        assert!(report.ok, "{:?}", report.lines);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_pdf_job_writes_a_pdf_file() {
         let (file, pages) = project("pdf", "= Title\nSome text.\n");
         let pdf = pages.with_file_name("out.pdf");
-        let job = Job::start_pdf(&file, pdf.clone());
+        let job = Job::start_pdf(&file, file.parent().unwrap(), pdf.clone());
         assert_eq!(job.output(), pdf);
         let report = wait(&job);
         assert!(report.ok, "{:?}", report.lines);
@@ -201,7 +220,7 @@ mod tests {
     fn a_pdf_job_with_an_error_writes_no_file() {
         let (file, pages) = project("pdf-bad", "#nope()\n");
         let pdf = pages.with_file_name("out.pdf");
-        let report = wait(&Job::start_pdf(&file, pdf.clone()));
+        let report = wait(&Job::start_pdf(&file, file.parent().unwrap(), pdf.clone()));
         assert!(!report.ok);
         assert!(report.lines.iter().any(|l| l.contains(":1:")), "{:?}", report.lines);
         assert!(!pdf.exists());
@@ -211,7 +230,7 @@ mod tests {
     #[test]
     fn an_error_report_names_the_line() {
         let (file, pages) = project("bad", "= Title\n#nope()\n");
-        let report = wait(&Job::start(&file, pages.clone()));
+        let report = wait(&Job::start(&file, file.parent().unwrap(), pages.clone()));
         assert!(!report.ok);
         assert!(
             report.lines.iter().any(|l| l.contains(":2:") && l.contains("error")),
@@ -233,7 +252,7 @@ mod tests {
     fn a_missing_input_file_is_a_failure() {
         let (file, pages) = project("missing", "");
         fs::remove_file(&file).unwrap();
-        let report = wait(&Job::start(&file, pages.clone()));
+        let report = wait(&Job::start(&file, file.parent().unwrap(), pages.clone()));
         assert!(!report.ok);
         assert!(!report.lines.is_empty());
         fs::remove_dir_all(file.parent().unwrap()).unwrap();

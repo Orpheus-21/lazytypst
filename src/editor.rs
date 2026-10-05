@@ -44,6 +44,8 @@ pub enum Action {
 
 pub struct Editor {
     path: PathBuf,
+    /// The project folder. Typst can read the files under it.
+    root: PathBuf,
     textarea: TextArea<'static>,
     /// True when the buffer has text that is not on disk.
     dirty: bool,
@@ -68,7 +70,7 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn open(path: PathBuf, picker: Picker) -> io::Result<Self> {
+    pub fn open(path: PathBuf, root: PathBuf, picker: Picker) -> io::Result<Self> {
         let text = fs::read_to_string(&path)?;
         let mut textarea = TextArea::new(text.lines().map(String::from).collect());
         textarea.set_cursor_line_style(Style::default());
@@ -76,6 +78,7 @@ impl Editor {
             disk_time: disk_time(&path),
             conflict: false,
             path,
+            root,
             textarea,
             dirty: false,
             last_edit: None,
@@ -136,7 +139,7 @@ impl Editor {
         } else if ctrl && key.code == KeyCode::Char('e') {
             if self.save(false) {
                 // The new export replaces the old export. Dropping the old export kills its process.
-                self.export = Some(Job::start_pdf(&self.path, self.path.with_extension("pdf")));
+                self.export = Some(Job::start_pdf(&self.path, &self.root, self.path.with_extension("pdf")));
                 self.message = "Exporting the PDF...".into();
             }
         } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char('n' | 'p')) {
@@ -160,7 +163,7 @@ impl Editor {
     fn save_and_compile(&mut self) {
         if self.save(false) {
             self.stop_compile();
-            self.job = Some(Job::start(&self.path, compile::next_dir(&self.out_dir)));
+            self.job = Some(Job::start(&self.path, &self.root, compile::next_dir(&self.out_dir)));
         }
     }
 
@@ -276,7 +279,8 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     fn open(path: &std::path::Path) -> Editor {
-        Editor::open(path.to_path_buf(), Picker::halfblocks()).unwrap()
+        let root = path.parent().unwrap().to_path_buf();
+        Editor::open(path.to_path_buf(), root, Picker::halfblocks()).unwrap()
     }
 
     fn key(code: KeyCode) -> KeyEvent {
