@@ -51,6 +51,39 @@ fn make_private_dir(path: &Path) -> io::Result<()> {
     fs::DirBuilder::new().mode(0o700).create(path)
 }
 
+/// Deletes the page folders of earlier runs that ended without a cleanup, for example after a crash
+/// or a closed terminal window. Call it after `make_out_dir`: the owner of that new folder is this user.
+pub fn remove_stale_dirs() {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(own) = fs::metadata(out_dir()) {
+        remove_stale_dirs_in(&std::env::temp_dir(), own.uid());
+    }
+}
+
+/// Deletes each folder `lazytypst-<pid>` in `tmp` that is a real folder (not a symlink),
+/// belongs to the user `uid`, and has no running process with that pid.
+fn remove_stale_dirs_in(tmp: &Path, uid: u32) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = fs::read_dir(tmp) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|name| name.strip_prefix("lazytypst-")) else {
+            continue;
+        };
+        if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if meta.is_dir() && meta.uid() == uid && !Path::new("/proc").join(pid).exists() {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Deletes the page folder. The program calls this when it exits.
 pub fn cleanup() {
     let _ = fs::remove_dir_all(out_dir());
@@ -281,6 +314,74 @@ mod tests {
         std::os::unix::fs::symlink(base.join("target"), base.join("link")).unwrap();
         assert!(make_private_dir(&base.join("link")).is_err());
         fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// The pid of a process that has ended and was reaped.
+    fn dead_pid() -> u32 {
+        let mut child = Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        child.id()
+    }
+
+    /// A new folder that stands for the temporary directory in the stale folder tests.
+    fn fake_tmp(name: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!("lazytypst-stale-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        tmp
+    }
+
+    fn uid_of(path: &Path) -> u32 {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(path).unwrap().uid()
+    }
+
+    #[test]
+    fn a_stale_folder_of_a_dead_run_is_deleted() {
+        let tmp = fake_tmp("dead");
+        let stale = tmp.join(format!("lazytypst-{}", dead_pid()));
+        fs::create_dir_all(stale.join("0")).unwrap();
+        remove_stale_dirs_in(&tmp, uid_of(&tmp));
+        assert!(!stale.exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn the_folder_of_a_running_process_stays() {
+        let tmp = fake_tmp("alive");
+        let live = tmp.join(format!("lazytypst-{}", std::process::id()));
+        fs::create_dir_all(&live).unwrap();
+        remove_stale_dirs_in(&tmp, uid_of(&tmp));
+        assert!(live.exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn a_folder_of_another_user_stays() {
+        let tmp = fake_tmp("owner");
+        let foreign = tmp.join(format!("lazytypst-{}", dead_pid()));
+        fs::create_dir_all(&foreign).unwrap();
+        remove_stale_dirs_in(&tmp, uid_of(&tmp) + 1);
+        assert!(foreign.exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_and_other_names_stay() {
+        let tmp = fake_tmp("names");
+        fs::create_dir_all(tmp.join("target").join("keep")).unwrap();
+        let link = tmp.join(format!("lazytypst-{}", dead_pid()));
+        std::os::unix::fs::symlink(tmp.join("target"), &link).unwrap();
+        let other = tmp.join(format!("lazytypst-notes-{}", dead_pid()));
+        let plus = tmp.join(format!("lazytypst-+{}", dead_pid()));
+        fs::create_dir_all(&other).unwrap();
+        fs::create_dir_all(&plus).unwrap();
+
+        remove_stale_dirs_in(&tmp, uid_of(&tmp));
+        assert!(fs::symlink_metadata(&link).is_ok(), "the symlink was deleted");
+        assert!(tmp.join("target").join("keep").exists(), "the symlink target was emptied");
+        assert!(other.exists() && plus.exists());
+        fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]

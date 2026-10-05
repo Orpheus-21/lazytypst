@@ -87,8 +87,15 @@ fn main() -> std::io::Result<()> {
         let message = format!("Cannot make the folder {}: {err}", compile::out_dir().display());
         std::io::Error::new(err.kind(), message)
     })?;
+    compile::remove_stale_dirs();
     // ratatui::init also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
+    // The panic hook of ratatui runs after this one, so a panic also deletes the page folder.
+    let restore_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        compile::cleanup();
+        restore_hook(info);
+    }));
     // The query needs the raw terminal, and it must run before the first key is read.
     // It finds the image protocol and the font size. If it fails, the preview uses half blocks.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
