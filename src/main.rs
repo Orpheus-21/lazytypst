@@ -3,7 +3,10 @@ mod compile;
 mod editor;
 mod preview;
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use ratatui::{
     DefaultTerminal, Frame,
@@ -56,9 +59,9 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
         if redraw {
             terminal.draw(|frame| draw(frame, app))?;
         }
-        // While no key arrives, check every 50 ms if a compile has finished.
+        // While no key arrives, every 50 ms the editor checks its autosave and its compile.
         if !event::poll(Duration::from_millis(50))? {
-            redraw = app.editor.as_mut().is_some_and(|editor| editor.poll_compile());
+            redraw = app.editor.as_mut().is_some_and(|editor| editor.tick(Instant::now()));
             continue;
         }
         redraw = true;

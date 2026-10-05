@@ -1,4 +1,8 @@
-use std::{fs, io, path::PathBuf};
+use std::{
+    fs, io,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use ratatui::{
     Frame,
@@ -18,6 +22,14 @@ use crate::{
 /// The height of the compile pane, with its border.
 const PANE_HEIGHT: u16 = 6;
 
+/// The time without a key after which the editor saves and compiles.
+const DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// True when the user edited the text and then typed nothing for `DEBOUNCE`.
+fn debounce_done(last_edit: Option<Instant>, now: Instant) -> bool {
+    last_edit.is_some_and(|edit| now.saturating_duration_since(edit) >= DEBOUNCE)
+}
+
 pub enum Action {
     Stay,
     Close,
@@ -28,6 +40,8 @@ pub struct Editor {
     textarea: TextArea<'static>,
     /// True when the buffer has text that is not on disk.
     dirty: bool,
+    /// The time of the last edit that no save has covered yet.
+    last_edit: Option<Instant>,
     /// True after the first Esc on a dirty buffer. A second Esc discards the text.
     discard_armed: bool,
     message: String,
@@ -49,6 +63,7 @@ impl Editor {
             path,
             textarea,
             dirty: false,
+            last_edit: None,
             discard_armed: false,
             message: String::new(),
             out_dir: compile::new_out_dir(),
@@ -69,6 +84,7 @@ impl Editor {
         match fs::write(&self.path, text) {
             Ok(()) => {
                 self.dirty = false;
+                self.last_edit = None;
                 self.message = "Saved".into();
                 true
             }
@@ -86,10 +102,7 @@ impl Editor {
         if ctrl && key.code == KeyCode::Char('s') {
             self.save();
         } else if ctrl && key.code == KeyCode::Char('b') {
-            if self.save() {
-                // The new job replaces the old job. Dropping the old job kills its process.
-                self.job = Some(Job::start(&self.path, &self.out_dir));
-            }
+            self.save_and_compile();
         } else if key.code == KeyCode::Esc {
             if !self.dirty || armed {
                 return Action::Close;
@@ -98,12 +111,34 @@ impl Editor {
             self.message = "Unsaved changes. Press Esc again to discard them, or Ctrl-S to save.".into();
         } else if self.textarea.input(key) {
             self.dirty = true;
+            self.last_edit = Some(Instant::now());
         }
         Action::Stay
     }
 
+    fn save_and_compile(&mut self) {
+        if self.save() {
+            // The new job replaces the old job. Dropping the old job kills its process.
+            self.job = Some(Job::start(&self.path, &self.out_dir));
+        }
+    }
+
+    /// Runs the autosave when the user paused, and takes the report of a finished compile.
+    /// The main loop calls this when no key arrives. Returns true when the screen must redraw.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        let mut changed = false;
+        if debounce_done(self.last_edit, now) {
+            // `save` clears `last_edit`. If the save fails, nothing retries until the next edit.
+            self.last_edit = None;
+            self.save_and_compile();
+            changed = true;
+        }
+        changed |= self.poll_compile();
+        changed
+    }
+
     /// Takes the report of a finished compile. Returns true when the screen must redraw.
-    pub fn poll_compile(&mut self) -> bool {
+    fn poll_compile(&mut self) -> bool {
         let Some(mut report) = self.job.as_ref().and_then(Job::try_report) else {
             return false;
         };
@@ -158,7 +193,6 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
 
     fn open(path: &std::path::Path) -> Editor {
         Editor::open(path.to_path_buf(), Picker::halfblocks()).unwrap()
@@ -252,6 +286,65 @@ mod tests {
         editor.handle_key(key(KeyCode::Esc));
         editor.handle_key(key(KeyCode::Char('Y')));
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_autosave_waits_for_a_quiet_300_ms() {
+        let t0 = Instant::now();
+        assert!(!debounce_done(None, t0));
+        assert!(!debounce_done(Some(t0), t0));
+        assert!(!debounce_done(Some(t0), t0 + Duration::from_millis(299)));
+        assert!(debounce_done(Some(t0), t0 + DEBOUNCE));
+        // A clock that runs back is not a pause.
+        assert!(!debounce_done(Some(t0 + DEBOUNCE), t0));
+    }
+
+    #[test]
+    fn typing_alone_does_not_save_or_compile() {
+        let path = temp_file("typing", "= Title\n");
+        let mut editor = open(&path);
+        for c in "abcdefghij".chars() {
+            editor.handle_key(key(KeyCode::Char(c)));
+        }
+        assert!(!editor.tick(Instant::now()));
+        assert!(editor.job.is_none());
+        assert!(editor.dirty);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "= Title\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_pause_after_ten_keys_saves_and_compiles_once() {
+        let path = temp_file("pause", "= Title\n");
+        let mut editor = open(&path);
+        editor.out_dir = path.parent().unwrap().join("pages");
+        for c in "abcdefghij".chars() {
+            editor.handle_key(key(KeyCode::Char(c)));
+        }
+        let later = Instant::now() + Duration::from_millis(400);
+        assert!(editor.tick(later));
+        assert!(!editor.dirty);
+        assert!(editor.job.is_some());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "abcdefghij= Title\n");
+
+        wait_for_report(&mut editor);
+        assert!(editor.report.as_ref().unwrap().ok);
+        assert!(editor.preview.has_page());
+        // The same burst of keys does not start a second compile.
+        assert!(!editor.tick(later));
+        assert!(editor.job.is_none());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_manual_save_cancels_the_autosave() {
+        let path = temp_file("cancel-auto", "= Title\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(ctrl('s'));
+        assert!(!editor.tick(Instant::now() + Duration::from_millis(400)));
+        assert!(editor.job.is_none());
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
