@@ -4,11 +4,9 @@ lazytypst is a terminal program for Typst documents.
 
 ## What it does
 
-lazytypst lists the `.typ` files in a folder. The user opens one file, edits the text, and saves it. The user can also compile the file with the `typst` command. The program shows the compile errors with their line numbers. After a good compile, the program shows page 1 of the document as an image next to the editor. A failed compile keeps the last good page on screen.
+lazytypst lists the `.typ` files in a folder. The user opens one file, edits the text, and saves it. The user can also compile the file with the `typst` command. The program shows the compile errors with their line numbers. After a good compile, the program shows the pages of the document as images next to the editor, one page at a time. A failed compile keeps the last good page on screen. A new compile keeps the page number.
 
 The program saves the file 300 ms after the last key. Then it compiles the file. A new compile kills the compile that still runs. The preview follows the text.
-
-The program shows only page 1.
 
 ## Requirements
 
@@ -60,9 +58,11 @@ Keys in the editor:
 
 - `Ctrl-S`: save the file now.
 - `Ctrl-B`: save the file and compile it now. A compile that still runs is killed and replaced.
+- `Ctrl-E`: save the file and export a PDF. The PDF has the name of the file with the ending `.pdf`, in the same folder. Example: `doc.typ` becomes `doc.pdf`. The program replaces a PDF with this name without a question. The pane shows the path, or the errors.
+- `Alt-n`: show the next page. `Alt-p`: show the previous page. Both stop at the first page and at the last page. The title of the preview shows the page number and the page count.
 - `Esc`: go back to the file list. If the last key was less than 300 ms ago, the autosave has not run yet. The program then shows a warning. A second `Esc` before the autosave runs closes the editor and discards the text. Closing the editor kills a compile that still runs.
 
-All other keys edit the text. The text area uses the Emacs-style keys of the `ratatui-textarea` crate.
+All other keys edit the text. The text area uses the Emacs-style keys of the `ratatui-textarea` crate. `Ctrl-B` and `Ctrl-E` do the jobs above and not the Emacs jobs. Use `Left` and `End` instead.
 
 A save writes the text with LF line ends and one final newline. A file with CRLF line ends changes to LF.
 
@@ -70,8 +70,8 @@ A save writes the text with LF line ends and one final newline. A file with CRLF
 
 - `src/browser.rs` finds the `.typ` files.
 - `src/editor.rs` holds the text area, the save, the 300 ms autosave, the screen layout, and the pane that shows the compile result.
-- `src/preview.rs` loads the PNG file and draws it with the `ratatui-image` crate.
-- `src/compile.rs` runs `typst compile --format png --diagnostic-format short` as a job. A thread collects the output. Dropping the job kills the `typst` process. The pages go to PNG files in a folder in the temporary directory. The program deletes the folder when it exits. When a compile ends, the editor loads `page-1.png` from that folder.
+- `src/preview.rs` holds the folder of PNG pages from the last good compile. It draws one page with the `ratatui-image` crate. It deletes the old folder when a new folder loads.
+- `src/compile.rs` runs `typst compile --format png --diagnostic-format short` as a job. A thread collects the output. Dropping the job kills the `typst` process. Each compile writes its PNG pages to its own new folder in the temporary directory. The editor deletes the folder of a compile that failed or that it killed. The program deletes the temporary directory when it exits. The PDF export is a second job of the same kind.
 - `src/main.rs` runs the event loop. Every 50 ms without a key, the loop calls the editor. The editor then runs the autosave if it is due and checks if a compile has finished.
 
 ## License
