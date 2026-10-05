@@ -6,7 +6,7 @@
 
 ## Architecture Decisions
 
-- Language: Rust. Crates: `ratatui`, `crossterm`, `tui-textarea`, `ratatui-image`. Reason: the crates give the editor, the layout, and the image widget. We write none of them.
+- Language: Rust. Crates: `ratatui`, `crossterm`, `ratatui-textarea`, `ratatui-image`. Reason: the crates give the editor, the layout, and the image widget. We write none of them.
 - Preview: `typst compile file.typ out-{p}.png`. The program shows page 1 with `ratatui-image`. The crate picks kitty, sixel, iTerm2, or half blocks. It does not need `chafa`.
 - Live update: the program saves the file 300 ms after the last key. Then it runs one `typst compile`. If a new key arrives, the program kills the old compile first.
 - Errors: `--diagnostic-format short`. The program shows each line in a pane under the editor.
@@ -46,7 +46,7 @@
 | The terminal cannot show images (`TERM` is `xterm-256color`, `kitty` is not installed) | High | `ratatui-image` falls back to half blocks. Task 5 tests this first. |
 | Fast typing starts many compiles | Medium | Debounce 300 ms. Kill the old child process. |
 | Imports with relative paths break if the file is not saved | Medium | Save to the real file before each compile. |
-| `tui-textarea` has no Typst syntax color | Low | Accept plain text for now. |
+| `ratatui-textarea` has no Typst syntax color | Low | Accept plain text for now. |
 
 ## Open Questions
 

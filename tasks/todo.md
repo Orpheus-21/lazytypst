@@ -29,7 +29,7 @@
 - [ ] Build passes. Browser works. Review with the user.
 
 ## Task 3: Text editor with save
-**Description:** Enter opens the file in a `tui-textarea` widget. `Ctrl-S` saves. `Esc` goes back to the browser.
+**Description:** Enter opens the file in a `ratatui-textarea` widget. `Ctrl-S` saves. `Esc` goes back to the browser.
 **Acceptance criteria:**
 - [ ] The file text shows in the editor.
 - [ ] `Ctrl-S` writes the file. The bytes on disk match the buffer.
