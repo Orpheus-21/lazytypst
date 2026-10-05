@@ -278,9 +278,13 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
 
+    /// Opens the file. The pages of each compile go to the folder `pages` next to the file,
+    /// so no test writes into the temporary folder that the whole program shares.
     fn open(path: &std::path::Path) -> Editor {
         let root = path.parent().unwrap().to_path_buf();
-        Editor::open(path.to_path_buf(), root, Picker::halfblocks()).unwrap()
+        let mut editor = Editor::open(path.to_path_buf(), root.clone(), Picker::halfblocks()).unwrap();
+        editor.out_dir = root.join("pages");
+        editor
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -407,7 +411,6 @@ mod tests {
         let path = temp_file("nowrite", "");
         fs::write(&path, "= A\r\nb\r\n").unwrap();
         let mut editor = open(&path);
-        editor.out_dir = path.parent().unwrap().join("pages");
         editor.handle_key(ctrl('b'));
         assert!(editor.job.is_some(), "Ctrl-B must still compile");
         assert_eq!(fs::read(&path).unwrap(), b"= A\r\nb\r\n");
@@ -418,7 +421,6 @@ mod tests {
     fn ctrl_b_does_not_overwrite_a_change_made_by_another_program() {
         let path = temp_file("outside", "= Mine\n");
         let mut editor = open(&path);
-        editor.out_dir = path.parent().unwrap().join("pages");
         editor.handle_key(key(KeyCode::Char('X')));
         fs::write(&path, "= Changed outside\n").unwrap();
 
@@ -489,7 +491,6 @@ mod tests {
     fn a_pause_after_ten_keys_saves_and_compiles_once() {
         let path = temp_file("pause", "= Title\n");
         let mut editor = open(&path);
-        editor.out_dir = path.parent().unwrap().join("pages");
         for c in "abcdefghij".chars() {
             editor.handle_key(key(KeyCode::Char(c)));
         }
@@ -530,7 +531,6 @@ mod tests {
     fn the_pane_says_compiling_before_the_first_report() {
         let path = temp_file("pane-first", "= Title\n");
         let mut editor = open(&path);
-        editor.out_dir = path.parent().unwrap().join("pages");
         assert!(screen_text(&mut editor).contains("Press Ctrl-B to compile."));
 
         editor.handle_key(ctrl('b'));
@@ -543,7 +543,6 @@ mod tests {
     fn the_pane_keeps_the_last_report_while_a_compile_runs() {
         let path = temp_file("pane-keep", "= Title\n");
         let mut editor = open(&path);
-        editor.out_dir = path.parent().unwrap().join("pages");
         editor.report = Some(Report::failed("old error text"));
 
         editor.handle_key(ctrl('b'));
@@ -559,7 +558,6 @@ mod tests {
         let path = temp_file("folders", "= Title\n");
         let mut editor = open(&path);
         let pages = path.parent().unwrap().join("pages");
-        editor.out_dir = pages.clone();
 
         editor.handle_key(ctrl('b'));
         editor.handle_key(ctrl('b')); // kills the first compile and deletes its folder
@@ -576,7 +574,6 @@ mod tests {
         let path = temp_file("nofolder", "#nope()\n");
         let mut editor = open(&path);
         let pages = path.parent().unwrap().join("pages");
-        editor.out_dir = pages.clone();
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
         assert!(!editor.report.as_ref().unwrap().ok);
@@ -592,7 +589,6 @@ mod tests {
     fn alt_n_and_alt_p_turn_the_preview_page() {
         let path = temp_file("pages", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
         let mut editor = open(&path);
-        editor.out_dir = path.parent().unwrap().join("pages");
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 1/3"));
@@ -665,7 +661,6 @@ mod tests {
     fn ctrl_b_saves_then_compiles() {
         let path = temp_file("build", "= Title\n");
         let mut editor = open(&path);
-        editor.out_dir = path.parent().unwrap().join("pages");
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(ctrl('b'));
         assert!(!editor.dirty, "Ctrl-B must save first");
@@ -684,7 +679,6 @@ mod tests {
     fn a_compile_error_reaches_the_report() {
         let path = temp_file("builderr", "#nope()\n");
         let mut editor = open(&path);
-        editor.out_dir = path.parent().unwrap().join("pages");
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
         let report = editor.report.as_ref().unwrap();
