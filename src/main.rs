@@ -31,10 +31,55 @@ struct App {
     editor: Option<Editor>,
 }
 
-/// The folder to browse: the first argument, or the current folder.
-/// `args_os` keeps a folder name that is not UTF-8. `args` would panic on it.
-fn root_from_args(mut args: impl Iterator<Item = OsString>) -> PathBuf {
-    args.nth(1).map_or_else(|| PathBuf::from("."), PathBuf::from)
+const USAGE: &str = "\
+Usage: lazytypst [FOLDER]
+
+lazytypst lists the .typ files in FOLDER and opens them in an editor with a live preview.
+Without FOLDER, lazytypst uses the current folder. FOLDER is also the Typst project root.
+
+Options:
+  -h, --help     Show this help.
+  -V, --version  Show the version.
+
+Keys in the file list:
+  j or Down      Select the next file.
+  k or Up        Select the previous file.
+  Enter          Open the selected file.
+  q              Quit.
+
+Keys in the editor:
+  Ctrl-S         Save the file.
+  Ctrl-B         Save and compile the file.
+  Ctrl-E         Save the file and export a PDF next to it.
+  Alt-Down       Show the next page.
+  Alt-Up         Show the previous page.
+  Esc            Save the file and go back to the file list.
+";
+
+#[derive(Debug, PartialEq)]
+enum Args {
+    Run(PathBuf),
+    Help,
+    Version,
+}
+
+/// Reads the arguments. `args_os` keeps a folder name that is not UTF-8. `args` would panic on it.
+fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, String> {
+    args.next(); // the program name
+    let Some(first) = args.next() else {
+        return Ok(Args::Run(PathBuf::from(".")));
+    };
+    if args.next().is_some() {
+        return Err("Give one folder only.".into());
+    }
+    match first.to_str() {
+        Some("-h" | "--help") => Ok(Args::Help),
+        Some("-V" | "--version") => Ok(Args::Version),
+        Some(option) if option.starts_with('-') => Err(format!(
+            "Unknown option: {option}. For a folder that starts with a dash, write ./{option}."
+        )),
+        _ => Ok(Args::Run(PathBuf::from(first))),
+    }
 }
 
 impl App {
@@ -81,7 +126,21 @@ impl App {
 }
 
 fn main() -> std::io::Result<()> {
-    let root = root_from_args(std::env::args_os());
+    let root = match parse_args(std::env::args_os()) {
+        Ok(Args::Run(root)) => root,
+        Ok(Args::Help) => {
+            print!("{USAGE}");
+            return Ok(());
+        }
+        Ok(Args::Version) => {
+            println!("lazytypst {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Err(message) => {
+            eprint!("{message}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    };
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
     compile::make_out_dir().map_err(|err| {
         let message = format!("Cannot make the folder {}: {err}", compile::out_dir().display());
@@ -249,15 +308,38 @@ mod tests {
         assert!(screen(&mut app).contains("No .typ files"));
     }
 
+    fn args(list: &[&str]) -> Result<Args, String> {
+        parse_args(list.iter().map(OsString::from))
+    }
+
     #[test]
     fn the_root_comes_from_the_first_argument_even_if_it_is_not_utf8() {
         let name = OsString::from_vec(b"dir-\xff".to_vec());
-        let args = [OsString::from("lazytypst"), name.clone()];
-        assert_eq!(root_from_args(args.into_iter()), PathBuf::from(name));
+        let list = [OsString::from("lazytypst"), name.clone()];
+        assert_eq!(parse_args(list.into_iter()), Ok(Args::Run(PathBuf::from(name))));
     }
 
     #[test]
     fn the_root_is_the_current_folder_without_an_argument() {
-        assert_eq!(root_from_args([OsString::from("lazytypst")].into_iter()), PathBuf::from("."));
+        assert_eq!(args(&["lazytypst"]), Ok(Args::Run(PathBuf::from("."))));
+    }
+
+    #[test]
+    fn help_and_version_have_a_long_and_a_short_form() {
+        assert_eq!(args(&["lazytypst", "--help"]), Ok(Args::Help));
+        assert_eq!(args(&["lazytypst", "-h"]), Ok(Args::Help));
+        assert_eq!(args(&["lazytypst", "--version"]), Ok(Args::Version));
+        assert_eq!(args(&["lazytypst", "-V"]), Ok(Args::Version));
+    }
+
+    #[test]
+    fn an_unknown_option_and_a_second_folder_are_errors() {
+        assert!(args(&["lazytypst", "--frobnicate"]).unwrap_err().contains("--frobnicate"));
+        assert!(args(&["lazytypst", "a", "b"]).unwrap_err().contains("one folder"));
+    }
+
+    #[test]
+    fn a_folder_that_starts_with_a_dash_works_with_a_dot_slash() {
+        assert_eq!(args(&["lazytypst", "./-notes"]), Ok(Args::Run(PathBuf::from("./-notes"))));
     }
 }
