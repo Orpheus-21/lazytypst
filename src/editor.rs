@@ -1,5 +1,6 @@
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
@@ -33,26 +34,52 @@ fn disk_time(path: &Path) -> Option<SystemTime> {
 }
 
 /// Writes `text` to the file at `path` so that a crash leaves the old file or the new file, never a cut file.
-/// The text goes to a hidden temp file next to the real file. Then a rename replaces the real file.
-/// A symlink stays a symlink, and the permissions stay. A hard link to the old file keeps the old text.
+/// The text goes to a new hidden temp file next to the real file. Then a rename replaces the real file.
+/// A symlink at `path` stays a symlink, and the permissions stay. A hard link to the old file keeps the old text.
 fn write_file(path: &Path, text: &str) -> io::Result<()> {
     let target = match fs::canonicalize(path) {
         Ok(target) => target,
-        // The file is gone. Then no old text can be cut, and a plain write creates the file again.
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return fs::write(path, text),
+        // The file is gone. `create_new` also refuses a dangling symlink at `path`.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+            return file.write_all(text.as_bytes()).and_then(|()| file.sync_all());
+        }
         Err(err) => return Err(err),
     };
     // A rename can replace a file that the user cannot write. This open makes the same check as a direct write.
     fs::OpenOptions::new().write(true).open(&target)?;
-    let name = target.file_name().unwrap_or_default().to_string_lossy();
-    let temp = target.with_file_name(format!(".{name}.lazytypst-tmp"));
-    let result = fs::write(&temp, text)
-        .and_then(|()| fs::set_permissions(&temp, fs::metadata(&target)?.permissions()))
+    let (mut file, temp) = create_temp_beside(&target)?;
+    let result = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.set_permissions(fs::metadata(&target)?.permissions()))
+        .and_then(|()| file.sync_all())
         .and_then(|()| fs::rename(&temp, &target));
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
     result
+}
+
+/// Creates a new hidden temp file next to `target` and returns it with its path.
+/// `create_new` refuses every existing path, also a symlink, so a link that someone planted
+/// can never redirect the write. A name that is taken is skipped.
+fn create_temp_beside(target: &Path) -> io::Result<(fs::File, PathBuf)> {
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    let stamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |time| time.subsec_nanos());
+    for attempt in 0..100 {
+        let temp = target.with_file_name(format!(
+            ".{name}.{}-{stamp}-{attempt}.lazytypst-tmp",
+            std::process::id()
+        ));
+        match fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => return Ok((file, temp)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free name for the temp file"))
 }
 
 /// True when the user edited the text and then typed nothing for `DEBOUNCE`.
@@ -394,6 +421,39 @@ mod tests {
             .collect();
         assert_eq!(names, ["doc.typ"], "a temp file is left behind");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_save_never_writes_through_a_planted_symlink() {
+        // A cloned repository can contain a symlink at the old, fixed temp path.
+        let path = temp_file("planted", "= Hi\n");
+        let dir = path.parent().unwrap();
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, "IMPORTANT\n").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join(".doc.typ.lazytypst-tmp")).unwrap();
+
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(ctrl('s'));
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "IMPORTANT\n", "the save wrote through the link");
+        assert!(!fs::symlink_metadata(&path).unwrap().file_type().is_symlink(), "doc.typ became a link");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "X= Hi\n");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_file_is_not_created_through_a_dangling_symlink() {
+        let path = temp_file("dangling", "text\n");
+        let dir = path.parent().unwrap();
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(dir.join("elsewhere.txt"), &path).unwrap();
+
+        editor.handle_key(ctrl('s'));
+        assert!(!dir.join("elsewhere.txt").exists(), "the save created the link target");
+        assert!(editor.message.contains("Save failed"), "{}", editor.message);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
