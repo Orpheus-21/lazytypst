@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# The jobs only read the repository.
+permissions:
+  contents: read
+
+# A new push to the same branch stops the run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # The tests run the real typst command. Fix its version, and check the file against a fixed hash.
+  TYPST_VERSION: "0.15.1"
+  TYPST_SHA256: a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c
+  # The tests give the same result on every machine, whatever fonts it has.
+  TYPST_IGNORE_SYSTEM_FONTS: "true"
+
+jobs:
+  test:
+    name: Rust ${{ matrix.rust }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The README names 1.90 as the first Rust version that builds the program.
+        rust: [stable, "1.90"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Typst
+        run: |
+          curl -fsSL -o typst.tar.xz "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz"
+          echo "${TYPST_SHA256}  typst.tar.xz" | sha256sum --check
+          tar -xJf typst.tar.xz
+          mkdir -p "$HOME/.local/bin"
+          install -m 755 typst-x86_64-unknown-linux-musl/typst "$HOME/.local/bin/typst"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/typst" --version
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "${{ matrix.rust }}" --profile minimal --component clippy
+          rustup default "${{ matrix.rust }}"
+          rustc --version
+
+      - name: Test
+        run: cargo test --locked
+
+      # Clippy is checked with the current stable version only. Older versions have fewer lints.
+      - name: Clippy
+        if: matrix.rust == 'stable'
+        run: cargo clippy --locked --all-targets -- -D warnings
