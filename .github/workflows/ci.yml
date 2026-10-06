@@ -49,12 +49,17 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install "${{ matrix.rust }}" --profile minimal --component clippy
+          rustup toolchain install "${{ matrix.rust }}" --profile minimal --component clippy,rustfmt
           rustup default "${{ matrix.rust }}"
           rustc --version
 
       - name: Test
         run: cargo test --locked
+
+      # Rustfmt is checked with the current stable version only. Its style can change between versions.
+      - name: Format
+        if: matrix.rust == 'stable'
+        run: cargo fmt --check
 
       # Clippy is checked with the current stable version only. Older versions have fewer lints.
       - name: Clippy
