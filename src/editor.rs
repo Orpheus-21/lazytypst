@@ -84,6 +84,8 @@ impl Editor {
         textarea.set_cursor_line_style(Style::default());
         // A long line wraps on screen, at a word if possible. The file keeps the line as one line.
         textarea.set_wrap_mode(WrapMode::WordOrGlyph);
+        // Typst code uses 2 spaces for each level. Tab inserts spaces: it never makes a tab character.
+        textarea.set_tab_length(2);
         // Line numbers help with the error lines of Typst. A dim style keeps them from competing with the text.
         textarea.set_line_number_style(Style::new().add_modifier(Modifier::DIM));
         Ok(Self {
@@ -1037,6 +1039,50 @@ mod tests {
         let row: String = (0..40).map(|column| buffer[(column, 11)].symbol()).collect();
         assert!(row.trim_end().ends_with("1:1"), "{row:?}");
         assert!(row.starts_with("Ctrl-S save"), "{row:?}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn tab_at_the_start_of_a_line_inserts_exactly_two_spaces() {
+        let path = temp_file("tab", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Tab));
+        assert_eq!(editor.textarea.lines()[0], "  text");
+        editor.handle_key(key(KeyCode::Tab));
+        assert_eq!(editor.textarea.lines()[0], "    text", "a second Tab adds two more spaces");
+        assert!(editor.dirty);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn tab_in_the_middle_of_a_line_goes_to_the_next_stop_of_two_columns() {
+        let path = temp_file("tabmiddle", "ab\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Right)); // column 1
+        editor.handle_key(key(KeyCode::Tab));
+        assert_eq!(editor.textarea.lines()[0], "a b", "one space to reach the stop at column 2");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn tab_inserts_spaces_and_never_a_tab_character_in_the_file() {
+        let path = temp_file("tabsoft", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Tab));
+        editor.handle_key(ctrl('s'));
+        let saved = fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, "  text\n");
+        assert!(!saved.contains('\t'));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn tab_characters_that_are_already_in_the_file_stay_on_save() {
+        let path = temp_file("tabkeep", "\tindented\n\tmore\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(ctrl('s'));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "X\tindented\n\tmore\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
