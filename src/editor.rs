@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 use ratatui_image::picker::Picker;
-use ratatui_textarea::{TextArea, WrapMode};
+use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 
 use crate::{
     compile::{self, Job, Report},
@@ -144,6 +144,8 @@ impl Editor {
             self.save(true);
         } else if ctrl && key.code == KeyCode::Char('b') {
             self.save_and_compile();
+        } else if ctrl && key.code == KeyCode::Char('g') {
+            self.go_to_first_error();
         } else if ctrl && key.code == KeyCode::Char('e') {
             if self.save(false) {
                 // The new export replaces the old export. Dropping the old export kills its process.
@@ -170,6 +172,27 @@ impl Editor {
             self.last_edit = Some(Instant::now());
         }
         Action::Stay
+    }
+
+    /// Moves the cursor to the first error of the last report, if that error is in the open file.
+    /// An error in another file only gets named: the cursor stays. The line and the column of the report
+    /// are those of the text at the time of the compile. After more edits, a new compile makes them exact.
+    fn go_to_first_error(&mut self) {
+        let Some(error) = self.report.as_ref().and_then(Report::first_error) else {
+            self.message = "No error to go to.".into();
+            return;
+        };
+        let open_file = self.path.strip_prefix(&self.root).unwrap_or(&self.path);
+        if error.file.as_deref() != Some(open_file) {
+            let file = error.file.as_deref().unwrap_or(open_file);
+            self.message = format!("The first error is in {}.", file.display());
+            return;
+        }
+        // Typst counts from 1. The text area counts from 0, in characters, and it stops at the end of the text.
+        let to_index = |number: usize| u16::try_from(number.saturating_sub(1)).unwrap_or(u16::MAX);
+        let (line, column) = (error.line, error.column);
+        self.textarea.move_cursor(CursorMove::Jump(to_index(line), to_index(column)));
+        self.message = format!("Error at {line}:{column}: {}", error.message);
     }
 
     fn save_and_compile(&mut self) {
@@ -296,7 +319,7 @@ impl Editor {
         frame.render_widget(self.compile_pane(), pane);
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
-            "Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Alt-Down/Alt-Up page  Esc back"
+            "Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Ctrl-G error  Alt-Down/Alt-Up page  Esc back"
         } else {
             &self.message
         };
@@ -512,6 +535,103 @@ mod tests {
         assert!(dir.join("chapters").join("one.pdf").exists());
         assert!(!dir.join("main.pdf").exists());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Compiles the file in the editor and waits for the report.
+    fn compile_and_wait(editor: &mut Editor) {
+        editor.handle_key(ctrl('b'));
+        wait_for_report(editor);
+    }
+
+    #[test]
+    fn ctrl_g_moves_the_cursor_to_the_first_error() {
+        let path = temp_file("goto", "= Title\n#nope()\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        editor.handle_key(ctrl('g'));
+        assert_eq!(editor.textarea.cursor(), (1, 0));
+        assert!(editor.message.contains("2:1"), "{}", editor.message);
+        assert!(!editor.dirty, "Ctrl-G must not change the text");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_g_uses_the_column_of_the_error() {
+        let path = temp_file("gotocolumn", "ab #nope()\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        editor.handle_key(ctrl('g'));
+        assert_eq!(editor.textarea.cursor(), (0, 3), "the cursor must stand on the #");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_g_counts_the_column_in_characters_not_bytes() {
+        for text in ["é #nope()", "संस्कृतम् #nope()", "👨\u{200d}👩\u{200d}👧\u{200d}👦 #nope()"] {
+            let path = temp_file("gotounicode", &format!("{text}\n"));
+            let mut editor = open(&path);
+            compile_and_wait(&mut editor);
+            editor.handle_key(ctrl('g'));
+            let cursor = editor.textarea.cursor();
+            let (row, column) = (cursor.0, cursor.1);
+            assert_eq!(editor.textarea.lines()[row].chars().nth(column), Some('#'), "{text}");
+            fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn ctrl_g_with_an_error_in_another_file_names_the_file_and_keeps_the_cursor() {
+        let chapter = book("gotoother", "= One\n");
+        let dir = chapter.parent().unwrap().parent().unwrap().to_path_buf();
+        fs::write(dir.join("main.typ"), "#nope()\n#include \"chapters/one.typ\"\n").unwrap();
+        let mut editor = open_with_main(&chapter, Some("main.typ"));
+        editor.handle_key(key(KeyCode::Right));
+        editor.handle_key(key(KeyCode::Right));
+        compile_and_wait(&mut editor);
+
+        editor.handle_key(ctrl('g'));
+        assert_eq!(editor.textarea.cursor(), (0, 2), "the cursor must stay");
+        assert!(editor.message.contains("main.typ"), "{}", editor.message);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ctrl_g_without_an_error_says_so_and_keeps_the_cursor() {
+        let path = temp_file("gotonone", "= Title\ntext\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Down));
+        editor.handle_key(ctrl('g')); // before any compile
+        assert_eq!(editor.textarea.cursor(), (1, 0));
+        assert!(editor.message.contains("No error"), "{}", editor.message);
+
+        compile_and_wait(&mut editor);
+        assert!(editor.report.as_ref().unwrap().ok);
+        editor.handle_key(ctrl('g'));
+        assert_eq!(editor.textarea.cursor(), (1, 0));
+        assert!(editor.message.contains("No error"), "{}", editor.message);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_g_ignores_a_warning() {
+        let path = temp_file("gotowarning", "#set text(font: \"NoSuchFont\")\nHello\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        assert!(editor.report.as_ref().unwrap().lines.iter().any(|l| l.contains("warning")));
+        editor.handle_key(ctrl('g'));
+        assert_eq!(editor.textarea.cursor(), (0, 0));
+        assert!(editor.message.contains("No error"), "{}", editor.message);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_g_with_an_old_report_stays_inside_the_text() {
+        let path = temp_file("gotostale", "one\ntwo\n");
+        let mut editor = open(&path);
+        editor.report = Some(Report::new(false, vec!["doc.typ:50:90: error: x".into()]));
+        editor.handle_key(ctrl('g'));
+        assert_eq!(editor.textarea.cursor(), (1, 3), "the cursor goes to the end of the last line");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

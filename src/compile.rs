@@ -15,13 +15,86 @@ pub struct Report {
     pub ok: bool,
     /// The lines that `typst` printed on stderr. Errors and warnings are here.
     pub lines: Vec<String>,
+    /// One entry for each line of `lines`, parsed once when the report is made.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl Report {
+    pub fn new(ok: bool, lines: Vec<String>) -> Self {
+        let diagnostics = lines.iter().map(|line| Diagnostic::parse(line)).collect();
+        Self { ok, lines, diagnostics }
+    }
+
     pub fn failed(message: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            lines: vec![message.into()],
+        Self::new(false, vec![message.into()])
+    }
+
+    /// The first error that has a position in a file.
+    pub fn first_error(&self) -> Option<&Diagnostic> {
+        self.diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.severity == Severity::Error && diagnostic.file.is_some())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+    /// A line that is not an error or a warning with a position, for example a hint or a message of lazytypst.
+    Other,
+}
+
+/// One line of the output of `typst compile --diagnostic-format short`:
+/// `<file>:<line>:<column>: error: <message>`, or the same with `warning`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub severity: Severity,
+    /// The file as Typst prints it. Typst runs in the project root, so this is a path relative to the root.
+    pub file: Option<PathBuf>,
+    /// The line, counted from 1. It is 0 when the line has no position.
+    pub line: usize,
+    /// The column, counted from 1 in characters (Unicode scalar values). It is 0 when the line has no position.
+    pub column: usize,
+    /// The text after `error: ` or `warning: `. For `Other`, the whole line.
+    pub message: String,
+}
+
+impl Diagnostic {
+    /// Parses one line. A line that does not have the form above becomes `Other` with the whole line as message.
+    /// The first marker `: error: ` or `: warning: ` splits the line, so a colon or a marker inside the message
+    /// is safe. The part before it is split from the right, so a colon inside the path is safe too.
+    pub fn parse(line: &str) -> Diagnostic {
+        let other = || Diagnostic {
+            severity: Severity::Other,
+            file: None,
+            line: 0,
+            column: 0,
+            message: line.to_string(),
+        };
+        let found = [(": error: ", Severity::Error), (": warning: ", Severity::Warning)]
+            .into_iter()
+            .filter_map(|(marker, severity)| line.find(marker).map(|at| (at, marker, severity)))
+            .min_by_key(|(at, _, _)| *at);
+        let Some((at, marker, severity)) = found else {
+            return other();
+        };
+        let mut head = line[..at].rsplitn(3, ':');
+        let (Some(column), Some(row), Some(file)) = (head.next(), head.next(), head.next()) else {
+            return other();
+        };
+        let (Ok(column), Ok(row)) = (column.parse::<usize>(), row.parse::<usize>()) else {
+            return other();
+        };
+        if file.is_empty() {
+            return other();
+        }
+        Diagnostic {
+            severity,
+            file: Some(PathBuf::from(file)),
+            line: row,
+            column,
+            message: line[at + marker.len()..].to_string(),
         }
     }
 }
@@ -204,7 +277,7 @@ fn report(status: io::Result<ExitStatus>, stderr: &[u8]) -> Report {
             if !ok && lines.is_empty() {
                 lines.push(format!("typst failed: {status}"));
             }
-            Report { ok, lines }
+            Report::new(ok, lines)
         }
         Err(err) => Report::failed(format!("Cannot wait for typst: {err}")),
     }
@@ -235,6 +308,114 @@ mod tests {
         let file = dir.join("doc.typ");
         fs::write(&file, content).unwrap();
         (file, dir.join("pages"))
+    }
+
+    fn parse(line: &str) -> Diagnostic {
+        Diagnostic::parse(line)
+    }
+
+    fn at(file: &str, line: usize, column: usize, severity: Severity, message: &str) -> Diagnostic {
+        Diagnostic { severity, file: Some(PathBuf::from(file)), line, column, message: message.into() }
+    }
+
+    #[test]
+    fn an_error_line_is_parsed() {
+        assert_eq!(
+            parse("report.typ:12:5: error: unknown variable: x"),
+            at("report.typ", 12, 5, Severity::Error, "unknown variable: x")
+        );
+    }
+
+    #[test]
+    fn a_warning_line_is_parsed() {
+        assert_eq!(
+            parse("w.typ:1:16: warning: unknown font family: nosuchfont"),
+            at("w.typ", 1, 16, Severity::Warning, "unknown font family: nosuchfont")
+        );
+    }
+
+    #[test]
+    fn a_path_with_spaces_or_a_colon_is_parsed() {
+        assert_eq!(
+            parse("sp ace/a b.typ:1:1: error: unknown variable: nope"),
+            at("sp ace/a b.typ", 1, 1, Severity::Error, "unknown variable: nope")
+        );
+        assert_eq!(
+            parse("co:lon/x.typ:3:2: error: boom"),
+            at("co:lon/x.typ", 3, 2, Severity::Error, "boom")
+        );
+    }
+
+    #[test]
+    fn a_message_with_colons_and_markers_stays_whole() {
+        assert_eq!(
+            parse("a.typ:2:3: error: expected: error: found: warning: x"),
+            at("a.typ", 2, 3, Severity::Error, "expected: error: found: warning: x")
+        );
+    }
+
+    #[test]
+    fn a_line_that_is_not_a_diagnostic_stays_as_it_is() {
+        for line in [
+            "hint: try adding a space",
+            "error: the input file was not found",
+            "Cannot run typst: No such file or directory",
+            "a.typ:x:2: error: not a number",
+            ":1:2: error: no file",
+            "",
+        ] {
+            let d = parse(line);
+            assert_eq!(d.severity, Severity::Other, "{line:?}");
+            assert_eq!(d.file, None, "{line:?}");
+            assert_eq!(d.message, line, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_report_parses_each_line_once_and_keeps_the_text() {
+        let report = Report::new(false, vec!["a.typ:1:2: error: boom".into(), "hint: x".into()]);
+        assert_eq!(report.lines, ["a.typ:1:2: error: boom", "hint: x"]);
+        assert_eq!(report.diagnostics.len(), 2);
+        assert_eq!(report.diagnostics[0].severity, Severity::Error);
+        assert_eq!(report.diagnostics[1].severity, Severity::Other);
+        assert_eq!(Report::failed("Cannot run typst").diagnostics[0].severity, Severity::Other);
+    }
+
+    #[test]
+    fn the_first_error_skips_warnings_and_lines_without_a_position() {
+        let report = Report::new(
+            false,
+            vec![
+                "hint: first".into(),
+                "a.typ:1:1: warning: w".into(),
+                "b.typ:4:7: error: e1".into(),
+                "c.typ:9:9: error: e2".into(),
+            ],
+        );
+        assert_eq!(report.first_error(), Some(&at("b.typ", 4, 7, Severity::Error, "e1")));
+        assert_eq!(Report::new(true, vec!["a.typ:1:1: warning: w".into()]).first_error(), None);
+        assert_eq!(Report::new(true, vec![]).first_error(), None);
+    }
+
+    #[test]
+    fn a_real_typst_error_gets_a_position() {
+        let (file, pages) = project("diag", "= Title\n#nope()\n");
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
+        let first = report.first_error().expect("an error with a position");
+        assert_eq!((first.line, first.column), (2, 1), "{first:?}");
+        assert!(first.message.contains("unknown variable"), "{first:?}");
+        fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn typst_counts_the_column_in_characters_from_1() {
+        for (text, column) in [("é #nope()", 3), ("संस्कृतम् #nope()", 11), ("👨\u{200d}👩\u{200d}👧\u{200d}👦 #nope()", 9)] {
+            let (file, pages) = project("column", &format!("{text}\n"));
+            let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
+            let first = report.first_error().expect("an error with a position");
+            assert_eq!(first.column, column, "{text}");
+            fs::remove_dir_all(file.parent().unwrap()).unwrap();
+        }
     }
 
     #[test]

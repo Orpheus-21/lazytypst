@@ -65,6 +65,7 @@ Keys in the editor:
   Ctrl-S         Save the file.
   Ctrl-B         Save and compile the file.
   Ctrl-E         Save the file and export a PDF next to it.
+  Ctrl-G         Go to the first error of the last compile.
   Alt-Down       Show the next page.
   Alt-Up         Show the previous page.
   Esc            Save the file and go back to the file list.
