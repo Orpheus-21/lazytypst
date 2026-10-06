@@ -595,17 +595,33 @@ mod tests {
         (program, dir)
     }
 
+    /// `version_of`, with a retry for the error "Text file busy". Linux gives it when the script that a test
+    /// has just written is still open for writing in a child that another test thread has just forked.
+    fn version_of_script(program: &Path) -> io::Result<String> {
+        let mut result = version_of(program.to_str().unwrap());
+        for _ in 0..50 {
+            match &result {
+                Err(err) if err.raw_os_error() == Some(26) => {
+                    thread::sleep(Duration::from_millis(20));
+                    result = version_of(program.to_str().unwrap());
+                }
+                _ => break,
+            }
+        }
+        result
+    }
+
     #[test]
     fn the_version_is_the_first_line_that_the_program_prints() {
         let (program, dir) = fake_program("version", "echo 'typst 9.9.9 (abc123)'; echo 'a second line'");
-        assert_eq!(version_of(program.to_str().unwrap()).unwrap(), "typst 9.9.9 (abc123)");
+        assert_eq!(version_of_script(&program).unwrap(), "typst 9.9.9 (abc123)");
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn the_program_gets_the_argument_version() {
         let (program, dir) = fake_program("arg", r#"[ "$1" = "--version" ] && echo "got the argument" || echo "wrong: $*""#);
-        assert_eq!(version_of(program.to_str().unwrap()).unwrap(), "got the argument");
+        assert_eq!(version_of_script(&program).unwrap(), "got the argument");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -618,12 +634,12 @@ mod tests {
     #[test]
     fn a_program_that_fails_or_prints_nothing_gives_an_error() {
         let (failing, dir) = fake_program("fails", "echo oops >&2; exit 3");
-        let err = version_of(failing.to_str().unwrap()).unwrap_err();
+        let err = version_of_script(&failing).unwrap_err();
         assert!(err.to_string().contains("failed"), "{err}");
         fs::remove_dir_all(dir).unwrap();
 
         let (silent, dir) = fake_program("silent", "exit 0");
-        let err = version_of(silent.to_str().unwrap()).unwrap_err();
+        let err = version_of_script(&silent).unwrap_err();
         assert!(err.to_string().contains("printed nothing"), "{err}");
         fs::remove_dir_all(dir).unwrap();
     }
