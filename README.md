@@ -134,6 +134,10 @@ Save rules:
 - `src/state.rs` reads and writes the state file with the main file of each project. `src/fsutil.rs` holds the safe write that the editor and the state file both use.
 - `src/main.rs` reads the arguments and runs the event loop. `App::handle_key` handles the keys of the file list. Every 50 ms without a key, the loop calls the editor. The editor then runs the autosave if it is due and checks if a compile has finished.
 
+## Contributing
+
+The file `CONTRIBUTING.md` tells you how to build the program, which rules the code follows, and how a commit and a pull request must look.
+
 ## Changes
 
 The file `CHANGELOG.md` lists the changes that a user can see, for each version. Each change that a user can see adds one line under `Unreleased` there.
@@ -146,9 +150,9 @@ A manual run of the workflow is a dry run. It builds and checks the archive and 
 
 ## Tests
 
-`cargo test` runs the tests. Many tests run the real `typst` command, so `typst` must be in `PATH`. The tests run on Linux only, because some of them read `/proc`. `cargo clippy --all-targets -- -D warnings` must show no warning.
+`cargo test` runs the tests. Many tests run the real `typst` command, so `typst` must be in `PATH`. The tests run on Linux only, because some of them read `/proc`. `cargo clippy --all-targets -- -D warnings` must show no warning, and `cargo fmt --check` must pass.
 
-GitHub Actions runs both on each push and on each pull request to `main`. The workflow is the file `.github/workflows/ci.yml`. It installs Typst 0.15.1 from the release page of Typst and checks the file against a fixed SHA-256 hash. It runs `cargo test` with the current stable version of Rust and with Rust 1.90. It runs clippy with the stable version only. The run with Rust 1.90 is the check for the minimum Rust version in the requirements above.
+GitHub Actions runs both on each push and on each pull request to `main`. The workflow is the file `.github/workflows/ci.yml`. It installs Typst 0.15.1 from the release page of Typst and checks the file against a fixed SHA-256 hash. It runs `cargo test` with the current stable version of Rust and with Rust 1.90. It runs clippy and `cargo fmt --check` with the stable version only. The run with Rust 1.90 is the check for the minimum Rust version in the requirements above.
 
 ## Measuring
 
