@@ -187,6 +187,30 @@ pub fn cleanup() {
     let _ = fs::remove_dir_all(out_dir());
 }
 
+/// The first line that `<program> --version` prints, for example `typst 0.15.1 (9dfd3a08)`.
+/// The error has the kind `NotFound` when the program is not in `PATH`.
+pub fn version_of(program: &str) -> io::Result<String> {
+    let output = Command::new(program)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!("{program} --version failed: {}", output.status)));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(String::from)
+        .ok_or_else(|| io::Error::other(format!("{program} --version printed nothing")))
+}
+
+/// The version line of the `typst` command. See `version_of`.
+pub fn typst_version() -> io::Result<String> {
+    version_of("typst")
+}
+
 /// A running command. Dropping the job kills the process, so a new job can replace an old one.
 pub struct Job {
     state: State,
@@ -557,6 +581,57 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let uid = uid_of(&dir);
         (dir, uid)
+    }
+
+    /// A program for a test: a shell script in a new folder. Returns the path of the script and its folder.
+    fn fake_program(name: &str, script: &str) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("lazytypst-fake-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("typst");
+        fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        (program, dir)
+    }
+
+    #[test]
+    fn the_version_is_the_first_line_that_the_program_prints() {
+        let (program, dir) = fake_program("version", "echo 'typst 9.9.9 (abc123)'; echo 'a second line'");
+        assert_eq!(version_of(program.to_str().unwrap()).unwrap(), "typst 9.9.9 (abc123)");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_program_gets_the_argument_version() {
+        let (program, dir) = fake_program("arg", r#"[ "$1" = "--version" ] && echo "got the argument" || echo "wrong: $*""#);
+        assert_eq!(version_of(program.to_str().unwrap()).unwrap(), "got the argument");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_program_that_is_not_there_gives_the_error_not_found() {
+        let err = version_of("no-such-program-xyz").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn a_program_that_fails_or_prints_nothing_gives_an_error() {
+        let (failing, dir) = fake_program("fails", "echo oops >&2; exit 3");
+        let err = version_of(failing.to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("failed"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+
+        let (silent, dir) = fake_program("silent", "exit 0");
+        let err = version_of(silent.to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("printed nothing"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_real_typst_has_a_version() {
+        let version = typst_version().expect("typst must be in PATH to run the tests");
+        assert!(version.starts_with("typst "), "{version}");
     }
 
     #[test]

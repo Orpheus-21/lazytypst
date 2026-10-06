@@ -78,6 +78,24 @@ enum Args {
     Version,
 }
 
+/// Why the `typst` command does not run, in a few words for the user.
+fn typst_problem(err: &std::io::Error) -> String {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        "not found in PATH".into()
+    } else {
+        err.to_string()
+    }
+}
+
+/// The text that the program prints, before it draws anything, when the `typst` command does not run.
+fn missing_typst_message(err: &std::io::Error) -> String {
+    format!(
+        "lazytypst needs the typst command, and it cannot run it: {}.\n\
+         Install Typst, and make sure that it is in PATH: https://github.com/typst/typst#installation\n",
+        typst_problem(err)
+    )
+}
+
 /// Reads the arguments. `args_os` keeps a folder name that is not UTF-8. `args` would panic on it.
 fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, String> {
     args.next(); // the program name
@@ -279,6 +297,11 @@ fn main() -> std::io::Result<()> {
             std::process::exit(1);
         }
     };
+    // Check typst before anything else changes: no temporary folder is made, and the terminal is not touched.
+    if let Err(err) = compile::typst_version() {
+        eprint!("{}", missing_typst_message(&err));
+        std::process::exit(1);
+    }
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
     compile::make_out_dir().map_err(|err| {
         let message = format!("Cannot make the folder {}: {err}", compile::out_dir().display());
@@ -783,6 +806,23 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.editor.is_none());
         assert!(screen(&mut app).contains("No .typ files"));
+    }
+
+    #[test]
+    fn the_reason_for_a_missing_program_says_not_found_in_path() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(typst_problem(&missing), "not found in PATH");
+        let other = std::io::Error::other("typst --version failed: exit status: 3");
+        assert_eq!(typst_problem(&other), "typst --version failed: exit status: 3");
+    }
+
+    #[test]
+    fn the_start_message_names_the_command_the_reason_and_the_install_page() {
+        let message = missing_typst_message(&std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(message.contains("typst"), "{message}");
+        assert!(message.contains("not found in PATH"), "{message}");
+        assert!(message.contains("https://github.com/typst/typst#installation"), "{message}");
+        assert!(message.ends_with('\n'));
     }
 
     fn args(list: &[&str]) -> Result<Args, String> {
