@@ -3,6 +3,7 @@ mod compile;
 mod editor;
 mod fsutil;
 mod preview;
+mod state;
 
 use std::{
     ffi::OsString,
@@ -28,6 +29,8 @@ struct App {
     files: Vec<PathBuf>,
     /// The main file, as a path relative to `root`. The compile and the export use it.
     main_file: Option<PathBuf>,
+    /// The file that keeps the main file of each project. `None` if the environment names no place.
+    state_file: Option<PathBuf>,
     list: ListState,
     status: String,
     /// The open file. The browser shows while this is `None`.
@@ -95,9 +98,30 @@ impl App {
             picker,
             files,
             main_file: None,
+            state_file: None,
             list: ListState::default().with_selected(first),
             status: String::new(),
             editor: None,
+        }
+    }
+
+    /// Sets the state file and takes the saved main file of this project. A saved file that is not in the list
+    /// is ignored.
+    fn load_state(&mut self, state_file: Option<PathBuf>) {
+        self.main_file = state_file
+            .as_deref()
+            .and_then(|file| state::load_main(file, &self.root))
+            .filter(|main| self.files.contains(main));
+        self.state_file = state_file;
+    }
+
+    /// Saves the main file choice. A failure only shows a message: the mark still works in this run.
+    fn save_main_choice(&mut self) {
+        let Some(file) = &self.state_file else {
+            return;
+        };
+        if let Err(err) = state::save_main(file, &self.root, self.main_file.as_deref()) {
+            self.status = format!("Cannot save the main file choice: {err}");
         }
     }
 
@@ -118,6 +142,7 @@ impl App {
             self.status = format!("Main file: {}", selected.display());
             self.main_file = Some(selected);
         }
+        self.save_main_choice();
     }
 
     /// Handles one key. Returns true when the program must quit.
@@ -194,6 +219,7 @@ fn main() -> std::io::Result<()> {
     // It finds the image protocol and the font size. If it fails, the preview uses half blocks.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     let mut app = App::new(root, files, picker);
+    app.load_state(state::default_state_file());
     let result = run(&mut terminal, &mut app);
     ratatui::restore();
     compile::cleanup();
@@ -348,6 +374,73 @@ mod tests {
         press(&mut app, KeyCode::Char('k'));
         press(&mut app, KeyCode::Enter); // open a.typ
         assert!(screen(&mut app).contains("a.typ (main: sub/b.typ)"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    /// A state file path in a new temporary folder.
+    fn state_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lazytypst-main-state-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        dir.join("lazytypst").join("main-files")
+    }
+
+    #[test]
+    fn the_main_file_is_saved_and_comes_back_in_the_next_run() {
+        let state = state_path("roundtrip");
+        let mut first = app("restore");
+        first.load_state(Some(state.clone()));
+        press(&mut first, KeyCode::Char('j'));
+        press(&mut first, KeyCode::Char('m')); // sub/b.typ
+
+        let mut second = App::new(first.root.clone(), first.files.clone(), Picker::halfblocks());
+        second.load_state(Some(state.clone()));
+        assert_eq!(second.main_file, Some(PathBuf::from("sub/b.typ")));
+        assert!(screen(&mut second).contains("sub/b.typ [main]"));
+
+        press(&mut second, KeyCode::Char('j'));
+        press(&mut second, KeyCode::Char('m')); // sub/b.typ again: removes the mark
+        let mut third = App::new(first.root.clone(), first.files.clone(), Picker::halfblocks());
+        third.load_state(Some(state.clone()));
+        assert_eq!(third.main_file, None);
+        fs::remove_dir_all(&first.root).unwrap();
+        fs::remove_dir_all(state.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_saved_main_file_that_is_not_in_the_list_is_ignored() {
+        let state = state_path("notlisted");
+        let mut first = app("notlisted");
+        first.load_state(Some(state.clone()));
+        press(&mut first, KeyCode::Char('m'));
+        fs::remove_file(first.root.join("a.typ")).unwrap();
+
+        let files = browser::find_typ_files(&first.root, browser::MAX_DEPTH).unwrap();
+        let mut second = App::new(first.root.clone(), files, Picker::halfblocks());
+        second.load_state(Some(state.clone()));
+        assert_eq!(second.main_file, None);
+        assert!(second.status.is_empty(), "no error for a missing main file: {}", second.status);
+        fs::remove_dir_all(&first.root).unwrap();
+        fs::remove_dir_all(state.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_state_file_that_cannot_be_written_shows_a_message_and_keeps_the_mark() {
+        let mut app = app("unwritable");
+        // The parent of the state file is a regular file, so the folder cannot be made.
+        let blocker = app.root.join("a.typ");
+        app.load_state(Some(blocker.join("lazytypst").join("main-files")));
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.main_file, Some(PathBuf::from("a.typ")), "the mark must work without the state file");
+        assert!(app.status.contains("Cannot save the main file"), "{}", app.status);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn without_a_state_file_the_mark_still_works() {
+        let mut app = app("nostate");
+        app.load_state(None);
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.main_file, Some(PathBuf::from("a.typ")));
         fs::remove_dir_all(&app.root).unwrap();
     }
 
