@@ -1,6 +1,5 @@
 use std::{
-    fs,
-    io::{self, Write},
+    fs, io,
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
@@ -17,6 +16,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::{
     compile::{self, Job, Report},
+    fsutil,
     preview::Preview,
 };
 
@@ -31,55 +31,6 @@ const CONFLICT: &str = "The file changed on disk. Ctrl-S overwrites it with this
 /// The modification time of the file, or `None` if the file cannot be read.
 fn disk_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
-}
-
-/// Writes `text` to the file at `path` so that a crash leaves the old file or the new file, never a cut file.
-/// The text goes to a new hidden temp file next to the real file. Then a rename replaces the real file.
-/// A symlink at `path` stays a symlink, and the permissions stay. A hard link to the old file keeps the old text.
-fn write_file(path: &Path, text: &str) -> io::Result<()> {
-    let target = match fs::canonicalize(path) {
-        Ok(target) => target,
-        // The file is gone. `create_new` also refuses a dangling symlink at `path`.
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
-            return file.write_all(text.as_bytes()).and_then(|()| file.sync_all());
-        }
-        Err(err) => return Err(err),
-    };
-    // A rename can replace a file that the user cannot write. This open makes the same check as a direct write.
-    fs::OpenOptions::new().write(true).open(&target)?;
-    let (mut file, temp) = create_temp_beside(&target)?;
-    let result = file
-        .write_all(text.as_bytes())
-        .and_then(|()| file.set_permissions(fs::metadata(&target)?.permissions()))
-        .and_then(|()| file.sync_all())
-        .and_then(|()| fs::rename(&temp, &target));
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
-}
-
-/// Creates a new hidden temp file next to `target` and returns it with its path.
-/// `create_new` refuses every existing path, also a symlink, so a link that someone planted
-/// can never redirect the write. A name that is taken is skipped.
-fn create_temp_beside(target: &Path) -> io::Result<(fs::File, PathBuf)> {
-    let name = target.file_name().unwrap_or_default().to_string_lossy();
-    let stamp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |time| time.subsec_nanos());
-    for attempt in 0..100 {
-        let temp = target.with_file_name(format!(
-            ".{name}.{}-{stamp}-{attempt}.lazytypst-tmp",
-            std::process::id()
-        ));
-        match fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
-            Ok(file) => return Ok((file, temp)),
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free name for the temp file"))
 }
 
 /// True when the user edited the text and then typed nothing for `DEBOUNCE`.
@@ -166,7 +117,7 @@ impl Editor {
             text.push('\n');
         }
         // CRLF line ends become LF.
-        match write_file(&self.path, &text) {
+        match fsutil::write_file(&self.path, text.as_bytes()) {
             Ok(()) => {
                 self.dirty = false;
                 self.conflict = false;

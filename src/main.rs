@@ -1,6 +1,7 @@
 mod browser;
 mod compile;
 mod editor;
+mod fsutil;
 mod preview;
 
 use std::{
