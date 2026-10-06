@@ -60,6 +60,7 @@ Keys in the file list:
 - `j` or `Down`: select the next file.
 - `k` or `Up`: select the previous file.
 - `Enter`: open the selected file in the editor.
+- `r`: read the folder again. New files appear and deleted files go. The selection stays on the same file if it is still there. A main file that is gone loses its mark.
 - `m`: mark the selected file as the main file, or remove the mark.
 - `q`: quit.
 
