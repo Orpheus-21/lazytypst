@@ -47,7 +47,7 @@ The program is the file `target/release/lazytypst`.
 
 ## Usage
 
-Run the program with a folder as the argument. If you give no argument, the program uses the current folder. `lazytypst --help` prints the usage and the keys. `lazytypst --version` prints the version. A folder name that starts with a dash needs `./` in front.
+Run the program with a folder as the argument. If you give no argument, the program uses the current folder. `lazytypst --help` prints the usage and the keys. `lazytypst --version` prints two lines: the version of lazytypst, and the version line of the `typst` command. If `typst` does not run, the second line says why, for example `typst: not found in PATH`. Put both lines in a bug report. A folder name that starts with a dash needs `./` in front.
 
 ```
 target/release/lazytypst ~/Documents
