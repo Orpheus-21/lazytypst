@@ -37,6 +37,20 @@ impl Report {
         Self::new(false, vec![message.into()])
     }
 
+    /// The number of lines that are errors with a position. See `Diagnostic::parse`.
+    pub fn error_count(&self) -> usize {
+        self.count(Severity::Error)
+    }
+
+    /// The number of lines that are warnings with a position. See `Diagnostic::parse`.
+    pub fn warning_count(&self) -> usize {
+        self.count(Severity::Warning)
+    }
+
+    fn count(&self, severity: Severity) -> usize {
+        self.diagnostics.iter().filter(|diagnostic| diagnostic.severity == severity).count()
+    }
+
     /// The first error that has a position in a file.
     pub fn first_error(&self) -> Option<&Diagnostic> {
         self.diagnostics
@@ -449,6 +463,23 @@ mod tests {
         assert_eq!(report.diagnostics[0].severity, Severity::Error);
         assert_eq!(report.diagnostics[1].severity, Severity::Other);
         assert_eq!(Report::failed("Cannot run typst").diagnostics[0].severity, Severity::Other);
+    }
+
+    #[test]
+    fn a_report_counts_its_errors_and_its_warnings() {
+        let report = Report::new(
+            false,
+            vec![
+                "a.typ:1:1: error: e1".into(),
+                "hint: a hint".into(),
+                "b.typ:2:2: warning: w1".into(),
+                "c.typ:3:3: error: e2".into(),
+                "error: no position".into(),
+                "Cannot run typst".into(),
+            ],
+        );
+        assert_eq!((report.error_count(), report.warning_count()), (2, 1));
+        assert_eq!((Report::new(true, vec![]).error_count(), Report::new(true, vec![]).warning_count()), (0, 0));
     }
 
     #[test]

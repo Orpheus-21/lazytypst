@@ -38,6 +38,18 @@ fn debounce_done(last_edit: Option<Instant>, now: Instant) -> bool {
     last_edit.is_some_and(|edit| now.saturating_duration_since(edit) >= DEBOUNCE)
 }
 
+/// The words for the number of errors and warnings, for the title of the compile pane:
+/// `2 errors, 1 warning`. `None` if there are none.
+fn counts_text(errors: usize, warnings: usize) -> Option<String> {
+    let part = |count: usize, word: &str| match count {
+        0 => None,
+        1 => Some(format!("1 {word}")),
+        _ => Some(format!("{count} {word}s")),
+    };
+    let parts: Vec<String> = [part(errors, "error"), part(warnings, "warning")].into_iter().flatten().collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 pub enum Action {
     Stay,
     Close,
@@ -336,11 +348,15 @@ impl Editor {
             }
             None => (Color::Reset, vec!["Press Ctrl-B to compile.".to_string()]),
         };
+        // The title: the counts of errors and warnings, and for a failed compile also its time.
         let mut title = "Compile".to_string();
-        if let Some(report) = self.report.as_ref().filter(|report| !report.ok)
-            && let Some(elapsed) = report.elapsed
-        {
-            title = format!("Compile ({} ms)", elapsed.as_millis());
+        if let Some(report) = &self.report {
+            if let Some(counts) = counts_text(report.error_count(), report.warning_count()) {
+                title = format!("{title}: {counts}");
+            }
+            if let Some(elapsed) = report.elapsed.filter(|_| !report.ok) {
+                title = format!("{title} ({} ms)", elapsed.as_millis());
+            }
         }
         if self.job.is_some() {
             // The last report stays on screen until the new report replaces it.
@@ -1135,6 +1151,79 @@ mod tests {
         compile_and_wait(&mut editor);
         let rows = pane_rows(&mut editor);
         assert!(rows[1].starts_with("│OK in ") && rows[1].contains(" ms"), "{rows:?}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_counts_use_the_right_words() {
+        assert_eq!(counts_text(0, 0), None);
+        assert_eq!(counts_text(1, 0).as_deref(), Some("1 error"));
+        assert_eq!(counts_text(2, 0).as_deref(), Some("2 errors"));
+        assert_eq!(counts_text(0, 1).as_deref(), Some("1 warning"));
+        assert_eq!(counts_text(0, 5).as_deref(), Some("5 warnings"));
+        assert_eq!(counts_text(2, 1).as_deref(), Some("2 errors, 1 warning"));
+        assert_eq!(counts_text(1, 3).as_deref(), Some("1 error, 3 warnings"));
+    }
+
+    fn report_with(ok: bool, lines: &[&str]) -> Option<Report> {
+        Some(Report::new(ok, lines.iter().map(|line| line.to_string()).collect()))
+    }
+
+    #[test]
+    fn the_title_shows_the_number_of_errors_and_warnings() {
+        let path = temp_file("counts", "text\n");
+        let mut editor = open(&path);
+        editor.report = report_with(false, &["a.typ:1:1: error: e1", "a.typ:2:1: error: e2", "a.typ:3:1: warning: w"]);
+        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 2 errors, 1 warning"), "{:?}", pane_rows(&mut editor));
+
+        editor.report = report_with(false, &["a.typ:1:1: error: e1"]);
+        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 1 error─"), "{:?}", pane_rows(&mut editor));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_title_has_the_counts_and_the_time() {
+        let path = temp_file("countstime", "text\n");
+        let mut editor = open(&path);
+        editor.report = Some(Report::new(false, vec!["a.typ:1:1: error: e".into()]).with_elapsed(Duration::from_millis(310)));
+        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 1 error (310 ms)"), "{:?}", pane_rows(&mut editor));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_warning_without_an_error_shows_the_count_and_the_pane_is_not_red() {
+        let path = temp_file("warnonly", "text\n");
+        let mut editor = open(&path);
+        editor.report = report_with(true, &["a.typ:1:1: warning: unknown font family: x"]);
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let title: String = (0..50).map(|column| buffer[(column, 17)].symbol()).collect();
+        assert!(title.starts_with("┌Compile: 1 warning"), "{title:?}");
+        let border = buffer[(0, 17)].fg;
+        assert_ne!(border, Color::Red, "a compile with warnings only is not red");
+        assert_eq!(border, Color::Green);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn without_errors_and_warnings_the_title_stays_compile() {
+        let path = temp_file("nocounts", "text\n");
+        let mut editor = open(&path);
+        editor.report = report_with(true, &[]);
+        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile─"), "{:?}", pane_rows(&mut editor));
+        editor.report = report_with(false, &["Cannot run typst: not found"]);
+        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile─"), "{:?}", pane_rows(&mut editor));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_real_compile_with_a_warning_shows_the_warning_count() {
+        let path = temp_file("realwarn", "#set text(font: \"NoSuchFontAtAll\")\nHello\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        assert!(editor.report.as_ref().unwrap().ok);
+        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 1 warning"), "{:?}", pane_rows(&mut editor));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
