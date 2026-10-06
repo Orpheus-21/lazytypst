@@ -27,6 +27,39 @@ The folder that you give to the program is the Typst project root. A file in a s
 
 ## Install
 
+There are two ways to install lazytypst: download a release, or build the program from the source.
+
+### Download a release
+
+This way needs no Rust. The first release is not published yet.
+
+1. Download these two files from the page of the release, https://github.com/Orpheus-21/lazytypst/releases:
+
+   - `lazytypst-<version>-x86_64-linux.tar.gz`
+   - `lazytypst-<version>-x86_64-linux.tar.gz.sha256`
+
+2. Check the archive against its checksum file.
+
+   ```
+   sha256sum --check lazytypst-<version>-x86_64-linux.tar.gz.sha256
+   ```
+
+3. Unpack the archive.
+
+   ```
+   tar -xzf lazytypst-<version>-x86_64-linux.tar.gz
+   ```
+
+4. Copy the program into a folder that is in `PATH`.
+
+   ```
+   install -m 755 lazytypst-<version>-x86_64-linux/lazytypst ~/.local/bin/
+   ```
+
+The program in the archive is a static binary. It runs on any x86_64 Linux system, and it does not depend on the C library of the system. It still needs the `typst` command in `PATH`.
+
+### Build from the source
+
 1. Clone the repository.
 
    ```
@@ -104,6 +137,12 @@ Save rules:
 ## Changes
 
 The file `CHANGELOG.md` lists the changes that a user can see, for each version. Each change that a user can see adds one line under `Unreleased` there.
+
+## Releases
+
+A tag that starts with `v`, for example `v0.1.0`, starts the workflow `.github/workflows/release.yml`. The workflow stops with an error if the tag and the version in `Cargo.toml` differ, or if `CHANGELOG.md` has no entry for the version, or if that entry still says that the version is not yet released. Then the workflow runs the tests, builds a static binary for x86_64 Linux, and checks the archive that it packs. At last, it makes a GitHub release with the archive, its checksum file, and the changelog entry as the text of the release.
+
+A manual run of the workflow is a dry run. It builds and checks the archive and keeps it as an artifact for 7 days. It makes no release.
 
 ## Tests
 
