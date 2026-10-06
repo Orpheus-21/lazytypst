@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::{Constraint, Layout},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     widgets::{Block, Paragraph, Wrap},
 };
 use ratatui_image::picker::Picker;
@@ -84,6 +84,8 @@ impl Editor {
         textarea.set_cursor_line_style(Style::default());
         // A long line wraps on screen, at a word if possible. The file keeps the line as one line.
         textarea.set_wrap_mode(WrapMode::WordOrGlyph);
+        // Line numbers help with the error lines of Typst. A dim style keeps them from competing with the text.
+        textarea.set_line_number_style(Style::new().add_modifier(Modifier::DIM));
         Ok(Self {
             disk_time: disk_time(&path),
             conflict: false,
@@ -913,6 +915,62 @@ mod tests {
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(ctrl('s'));
         assert_eq!(fs::read_to_string(&path).unwrap(), format!("X{long}\n"));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// The rows of the screen as text, one string for each row. The editor draws on 100 columns and 24 rows.
+    fn screen_rows(editor: &mut Editor) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..24)
+            .map(|row| (0..100).map(|column| buffer[(column, row)].symbol()).collect())
+            .collect()
+    }
+
+    /// The first 50 columns of the rows that belong to the text area: the left half, without the border.
+    fn text_area_rows(editor: &mut Editor) -> Vec<String> {
+        screen_rows(editor).iter().skip(1).map(|row| row.chars().skip(1).take(48).collect()).collect()
+    }
+
+    #[test]
+    fn each_line_shows_its_number_at_the_left_edge() {
+        let path = temp_file("numbers", "alpha\nbeta\ngamma\n");
+        let mut editor = open(&path);
+        let rows = text_area_rows(&mut editor);
+        assert!(rows[0].trim_start().starts_with("1 alpha"), "{:?}", &rows[..4]);
+        assert!(rows[1].trim_start().starts_with("2 beta"), "{:?}", &rows[..4]);
+        assert!(rows[2].trim_start().starts_with("3 gamma"), "{:?}", &rows[..4]);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_line_that_wraps_shows_its_number_on_the_first_row_only() {
+        let long = format!("{}end", "word ".repeat(30));
+        let path = temp_file("wrapnumbers", &format!("{long}\nnext\n"));
+        let mut editor = open(&path);
+        let rows = text_area_rows(&mut editor);
+        let with_number: Vec<_> = rows.iter().filter(|row| row.chars().any(|c| c.is_ascii_digit())).collect();
+        assert_eq!(with_number.len(), 2, "one number for each line, not for each row: {:?}", &rows[..8]);
+        assert!(rows[0].trim_start().starts_with("1 word"), "{:?}", &rows[..8]);
+        let wrapped = rows.iter().filter(|row| row.contains("word") || row.contains("end")).count();
+        assert!(wrapped >= 3, "the long line must wrap on several rows: {:?}", &rows[..8]);
+        let next = rows.iter().find(|row| row.contains("next")).unwrap();
+        assert!(next.trim_start().starts_with("2 next"), "{next:?}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_line_numbers_are_dim() {
+        let path = temp_file("dimnumbers", "alpha\n");
+        let mut editor = open(&path);
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let number = (1..8).map(|column| &buffer[(column, 1)]).find(|cell| cell.symbol() == "1").unwrap();
+        assert!(number.modifier.contains(ratatui::style::Modifier::DIM), "the number must be dim");
+        let letter = (1..12).map(|column| &buffer[(column, 1)]).find(|cell| cell.symbol() == "a").unwrap();
+        assert!(!letter.modifier.contains(ratatui::style::Modifier::DIM), "the text must not be dim");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
