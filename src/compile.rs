@@ -212,6 +212,12 @@ impl Job {
         Job::spawn(command, pdf)
     }
 
+    /// A job that ends at once with success and writes nothing. For tests only.
+    #[cfg(test)]
+    pub fn ended_with_success(output: PathBuf) -> Job {
+        Job::spawn(Command::new("true"), output)
+    }
+
     /// What the command writes: the page folder of `start`, or the PDF file of `start_pdf`.
     pub fn output(&self) -> &Path {
         &self.output

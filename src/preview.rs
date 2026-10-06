@@ -40,6 +40,16 @@ impl Preview {
         self.wanted
     }
 
+    /// The number of pages of the document, as the last loaded page file named it.
+    pub fn page_count(&self) -> usize {
+        self.count
+    }
+
+    /// Sets the page that the next compile must render.
+    pub fn want(&mut self, page: usize) {
+        self.wanted = page;
+    }
+
     /// Shows the page in the new folder and deletes the old folder.
     /// If the folder has no page or the page does not load, the new folder is deleted, the old page
     /// stays, and the error text comes back.

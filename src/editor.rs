@@ -17,7 +17,7 @@ use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use crate::{
     compile::{self, Job, Report},
     fsutil,
-    preview::Preview,
+    preview::{Preview, page_in},
 };
 
 /// The height of the compile pane, with its border.
@@ -71,6 +71,9 @@ pub struct Editor {
     exported: Option<PathBuf>,
     /// The report of the last finished compile.
     report: Option<Report>,
+    /// Set while the editor looks for the right page after the document got shorter than the wanted page.
+    /// It holds the page that the user wanted. See `poll_compile`.
+    recover: Option<usize>,
     preview: Preview,
 }
 
@@ -97,6 +100,7 @@ impl Editor {
             export: None,
             exported: None,
             report: None,
+            recover: None,
             preview: Preview::new(picker),
         })
     }
@@ -161,6 +165,7 @@ impl Editor {
             // what the compile reads, and a refused save (a file that another program changed) must not
             // stop the turn. The old page stays on screen until the new page is ready.
             if self.preview.turn(key.code == KeyCode::Down) {
+                self.recover = None; // the user's choice wins
                 self.start_compile();
             }
         } else if key.code == KeyCode::Esc {
@@ -242,6 +247,14 @@ impl Editor {
     }
 
     /// Takes the report of a finished compile. Returns true when the screen must redraw.
+    ///
+    /// Typst exits with success and writes no page when the document has fewer pages than the wanted page,
+    /// for example after the user deleted pages while the preview showed the last page. Then the editor
+    /// recovers in two steps, so that the user lands on the last page:
+    /// 1. It compiles page 1 and learns the page count from the file name.
+    /// 2. It compiles the last page (see `after_load`).
+    ///
+    /// `recover` is set between the steps, so a second "no page" result is an error and cannot loop.
     fn poll_compile(&mut self) -> bool {
         let Some(job) = &mut self.job else {
             return false;
@@ -252,12 +265,38 @@ impl Editor {
         let dir = job.output().to_path_buf();
         self.job = None;
         if !report.ok {
+            self.recover = None;
             let _ = fs::remove_dir_all(dir);
-        } else if let Err(err) = self.preview.load(dir) {
-            report = Report::failed(err);
+        } else if page_in(&dir).is_none() && self.recover.is_none() && self.preview.wanted_page() > 1 {
+            let _ = fs::remove_dir_all(dir);
+            self.recover = Some(self.preview.wanted_page());
+            self.preview.want(1);
+            self.start_compile();
+            return true; // the old report stays on screen until the recovery ends
+        } else {
+            match self.preview.load(dir) {
+                Ok(()) => self.after_load(),
+                Err(err) => {
+                    self.recover = None;
+                    report = Report::failed(err);
+                }
+            }
         }
         self.report = Some(report);
         true
+    }
+
+    /// The second step of the recovery: if the page that the user wanted is beyond the end of the
+    /// document, ask for the last page.
+    fn after_load(&mut self) {
+        let Some(wanted) = self.recover.take() else {
+            return;
+        };
+        let count = self.preview.page_count();
+        if wanted > count {
+            self.preview.want(count);
+            self.start_compile();
+        }
     }
 
     /// Takes the report of a finished export. The pane shows the path of the PDF, or the errors.
@@ -961,6 +1000,95 @@ mod tests {
         wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 2/3"));
         assert!(!editor.dirty, "the page keys must not change the text");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// Waits up to 30 seconds until no compile runs. A recovery compile starts the next compile at once.
+    fn wait_for_idle(editor: &mut Editor) {
+        let start = Instant::now();
+        while editor.job.is_some() {
+            editor.tick(Instant::now());
+            assert!(start.elapsed() < Duration::from_secs(30), "the compiles did not end");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Shows page 3 of a document of 3 pages. Then another program makes the document `new_text`, and Ctrl-B compiles it.
+    fn shrink_from_page_3(name: &str, new_text: &str) -> (PathBuf, Editor) {
+        let path = temp_file(name, "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('b'));
+        wait_for_idle(&mut editor);
+        editor.handle_key(alt(KeyCode::Down));
+        editor.handle_key(alt(KeyCode::Down));
+        wait_for_idle(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 3/3"));
+
+        fs::write(&path, new_text).unwrap();
+        editor.handle_key(ctrl('b')); // the buffer is clean, so this compiles the new text from the disk
+        wait_for_idle(&mut editor);
+        (path, editor)
+    }
+
+    #[test]
+    fn a_document_that_gets_shorter_than_the_wanted_page_shows_the_last_page() {
+        let (path, mut editor) = shrink_from_page_3("shrink2", "= One\n#pagebreak()\n= Two\n");
+        let text = screen_text(&mut editor);
+        assert!(text.contains("Preview 2/2"), "{text}");
+        assert!(editor.report.as_ref().unwrap().ok);
+        assert_eq!(editor.preview.wanted_page(), 2);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_document_that_gets_down_to_one_page_shows_that_page() {
+        let (path, mut editor) = shrink_from_page_3("shrink1", "= Only\n");
+        let text = screen_text(&mut editor);
+        assert!(text.contains("Preview 1/1"), "{text}");
+        assert!(editor.report.as_ref().unwrap().ok);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_compile_that_gives_success_and_no_page_for_page_1_is_an_error_and_never_loops() {
+        let path = temp_file("nopage", "= One\n");
+        let mut editor = open(&path);
+        let dir = path.parent().unwrap().join("empty-dir");
+        fs::create_dir_all(&dir).unwrap();
+        editor.job = Some(Job::ended_with_success(dir));
+        wait_for_report(&mut editor);
+        assert!(editor.job.is_none(), "a new compile started");
+        let report = editor.report.as_ref().unwrap();
+        assert!(!report.ok && report.lines[0].contains("no page file"), "{:?}", report.lines);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_recovery_that_finds_no_page_stops_with_an_error() {
+        let (path, mut editor) = shrink_from_page_3("noloop", "= One\n#pagebreak()\n= Two\n");
+        editor.preview.want(9);
+        editor.recover = Some(9); // a recovery is under way, and now the compile of page 1 gives no file
+        let dir = path.parent().unwrap().join("empty-dir2");
+        fs::create_dir_all(&dir).unwrap();
+        editor.job = Some(Job::ended_with_success(dir));
+        wait_for_report(&mut editor);
+        assert!(editor.job.is_none(), "the recovery looped");
+        assert!(editor.recover.is_none());
+        assert!(!editor.report.as_ref().unwrap().ok);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_page_turn_ends_a_recovery() {
+        let path = temp_file("turnrecover", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('b'));
+        wait_for_idle(&mut editor);
+        editor.recover = Some(9);
+        editor.handle_key(alt(KeyCode::Down));
+        assert!(editor.recover.is_none(), "the recovery must end when the user turns a page");
+        wait_for_idle(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 2/3"), "the user's page turn must win");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
