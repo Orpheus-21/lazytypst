@@ -7,10 +7,10 @@ use std::{
 use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    layout::{Alignment, Constraint, Layout},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
-    widgets::{Block, Paragraph, Wrap},
+    text::{Line, Span},
+    widgets::{Block, Paragraph},
 };
 use ratatui_image::picker::Picker;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -37,6 +37,59 @@ fn disk_time(path: &Path) -> Option<SystemTime> {
 /// True when the user edited the text and then typed nothing for `DEBOUNCE`.
 fn debounce_done(last_edit: Option<Instant>, now: Instant) -> bool {
     last_edit.is_some_and(|edit| now.saturating_duration_since(edit) >= DEBOUNCE)
+}
+
+/// The width of the text on the screen, in cells. A wide character, such as a Chinese character, takes 2.
+fn display_width(text: &str) -> usize {
+    Span::raw(text).width()
+}
+
+/// Breaks `text` into rows of at most `width` cells. A row breaks at a space when it can. A word that is
+/// wider than a row is split. A text with no characters gives one empty row. No width gives no rows.
+fn wrap_rows(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    for word in text.split(' ') {
+        let space = usize::from(!row.is_empty());
+        if display_width(&row) + space + display_width(word) <= width {
+            if space == 1 {
+                row.push(' ');
+            }
+            row.push_str(word);
+            continue;
+        }
+        if !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
+        }
+        for letter in word.chars() {
+            let mut one = [0; 4];
+            if !row.is_empty() && display_width(&row) + display_width(letter.encode_utf8(&mut one)) > width {
+                rows.push(std::mem::take(&mut row));
+            }
+            row.push(letter);
+        }
+    }
+    rows.push(row);
+    rows
+}
+
+/// Wraps the styled lines into screen rows of `width` cells, and keeps `height` rows. If rows do not fit,
+/// the last kept row says how many rows are hidden, for example `+3 more`. The count is in screen rows.
+fn fit_rows(lines: Vec<(String, Style)>, width: usize, height: usize) -> Vec<Line<'static>> {
+    let mut rows: Vec<Line<'static>> = lines
+        .into_iter()
+        .flat_map(|(text, style)| wrap_rows(&text, width).into_iter().map(move |row| Line::styled(row, style)))
+        .collect();
+    if rows.len() > height {
+        let shown = height.saturating_sub(1);
+        let hidden = rows.len() - shown;
+        rows.truncate(shown);
+        rows.push(Line::styled(format!("+{hidden} more"), Style::new().add_modifier(Modifier::DIM)));
+    }
+    rows
 }
 
 /// The style of a line of the compile report. The colors are the colors of the terminal palette, so they
@@ -347,7 +400,7 @@ impl Editor {
         true
     }
 
-    fn compile_pane(&self) -> Paragraph<'static> {
+    fn compile_pane(&self, area: Rect) -> Paragraph<'static> {
         let plain = Style::default();
         let (mut color, mut lines): (Color, Vec<(String, Style)>) = match &self.report {
             Some(report) => {
@@ -387,10 +440,9 @@ impl Editor {
         if let Some(pdf) = &self.exported {
             lines.push((format!("Exported {}", pdf.display()), plain));
         }
-        let lines: Vec<Line> = lines.into_iter().map(|(text, style)| Line::styled(text, style)).collect();
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(Block::bordered().title(title).border_style(Style::new().fg(color)))
+        let block = Block::bordered().title(title).border_style(Style::new().fg(color));
+        let inner = block.inner(area);
+        Paragraph::new(fit_rows(lines, usize::from(inner.width), usize::from(inner.height))).block(block)
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
@@ -411,7 +463,7 @@ impl Editor {
         let inner = block.inner(body);
         frame.render_widget(block, body);
         frame.render_widget(&self.textarea, inner);
-        frame.render_widget(self.compile_pane(), pane);
+        frame.render_widget(self.compile_pane(pane), pane);
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
             "Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Ctrl-G error  Alt-Down/Alt-Up page  Esc back"
@@ -1301,6 +1353,128 @@ mod tests {
         editor.exported = Some(path.with_extension("pdf"));
         assert_eq!(pane_cell(&mut editor, "OK in").fg, Color::Reset);
         assert_eq!(pane_cell(&mut editor, "Exported").fg, Color::Reset);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn wrap_rows_keeps_a_short_line_in_one_row() {
+        assert_eq!(wrap_rows("short line", 20), ["short line"]);
+        assert_eq!(wrap_rows("", 20), [""], "an empty line keeps one row");
+        assert_eq!(wrap_rows("exactly ten", 11), ["exactly ten"]);
+    }
+
+    #[test]
+    fn wrap_rows_breaks_at_a_space_when_it_can() {
+        assert_eq!(wrap_rows("aaa bbb ccc", 7), ["aaa bbb", "ccc"]);
+        assert_eq!(wrap_rows("aaa bbb ccc", 8), ["aaa bbb", "ccc"]);
+        assert_eq!(wrap_rows("aaa bbb ccc", 3), ["aaa", "bbb", "ccc"]);
+    }
+
+    #[test]
+    fn wrap_rows_splits_a_word_that_is_wider_than_the_row() {
+        assert_eq!(wrap_rows("abcdefghij", 4), ["abcd", "efgh", "ij"]);
+        assert_eq!(wrap_rows("ab abcdefghij", 4), ["ab", "abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn wrap_rows_counts_the_display_width_of_wide_characters() {
+        assert_eq!(wrap_rows("中中中", 5), ["中中", "中"], "each of these characters is 2 cells wide");
+        assert_eq!(wrap_rows("é é é", 3), ["é é", "é"]);
+    }
+
+    #[test]
+    fn wrap_rows_with_no_width_gives_no_rows() {
+        assert!(wrap_rows("text", 0).is_empty());
+    }
+
+    /// A report of `count` lines `hint: line <n>`. Each line is short and takes one row.
+    fn hints(count: usize) -> Option<Report> {
+        Some(Report::new(false, (1..=count).map(|n| format!("hint: line {n}")).collect()))
+    }
+
+    #[test]
+    fn a_report_of_seven_short_lines_shows_three_lines_and_four_more() {
+        let path = temp_file("more7", "text\n");
+        let mut editor = open(&path);
+        editor.report = hints(7);
+        let rows = pane_rows(&mut editor);
+        assert!(rows[1].contains("hint: line 1") && rows[2].contains("hint: line 2") && rows[3].contains("hint: line 3"), "{rows:?}");
+        assert!(rows[4].contains("+4 more"), "{rows:?}");
+        assert!(!rows.iter().any(|row| row.contains("line 4")), "a hidden line shows: {rows:?}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_report_that_fits_shows_no_count() {
+        let path = temp_file("morefit", "text\n");
+        let mut editor = open(&path);
+        for count in [1, 3, 4] {
+            editor.report = hints(count);
+            let rows = pane_rows(&mut editor);
+            assert!(!rows.iter().any(|row| row.contains("more")), "{count} lines: {rows:?}");
+            assert!(rows[count].contains(&format!("hint: line {count}")), "{rows:?}");
+        }
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn five_rows_show_three_and_two_more() {
+        let path = temp_file("more5", "text\n");
+        let mut editor = open(&path);
+        editor.report = hints(5);
+        let rows = pane_rows(&mut editor);
+        assert!(rows[3].contains("hint: line 3") && rows[4].contains("+2 more"), "{rows:?}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_count_is_in_screen_rows_after_the_wrap_and_not_in_report_lines() {
+        let path = temp_file("morewrap", "text\n");
+        let mut editor = open(&path);
+        // One report line of 6 words. Each word has 40 characters, so at 48 columns each word takes one row.
+        let word = "w".repeat(40);
+        let long = [word.as_str(); 6].join(" ");
+        editor.report = Some(Report::new(false, vec![long]));
+        let rows = pane_rows(&mut editor);
+        assert!(rows[4].contains("+3 more"), "6 rows, 3 shown: {rows:?}");
+        assert!(rows[1].contains(&word) && rows[3].contains(&word), "{rows:?}");
+        // The same text on 2 report lines is also 6 rows, and the count is the same.
+        editor.report = Some(Report::new(false, vec![[word.as_str(); 3].join(" "), [word.as_str(); 3].join(" ")]));
+        assert!(pane_rows(&mut editor)[4].contains("+3 more"), "{:?}", pane_rows(&mut editor));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_ok_line_and_the_export_line_count_as_rows() {
+        let path = temp_file("morehead", "text\n");
+        let mut editor = open(&path);
+        editor.report = Some(Report::new(true, (1..=4).map(|n| format!("a.typ:{n}:1: warning: w{n}")).collect()).with_elapsed(Duration::from_millis(5)));
+        editor.exported = Some(path.with_extension("pdf"));
+        // OK line + 4 warnings + export line = 6 rows. 3 are shown.
+        let rows = pane_rows(&mut editor);
+        assert!(rows[1].contains("OK in 5 ms") && rows[4].contains("+3 more"), "{rows:?}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_count_is_dim() {
+        let path = temp_file("moredim", "text\n");
+        let mut editor = open(&path);
+        editor.report = hints(9);
+        let cell = pane_cell(&mut editor, "+6 more");
+        assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_very_narrow_screen_does_not_panic_and_keeps_the_count() {
+        let path = temp_file("morenarrow", "text\n");
+        let mut editor = open(&path);
+        editor.report = hints(9);
+        for width in [1, 2, 3, 6, 12] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 8)).unwrap();
+            terminal.draw(|frame| editor.draw(frame)).unwrap();
+        }
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
