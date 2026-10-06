@@ -101,6 +101,12 @@ Save rules:
 - `src/state.rs` reads and writes the state file with the main file of each project. `src/fsutil.rs` holds the safe write that the editor and the state file both use.
 - `src/main.rs` reads the arguments and runs the event loop. `App::handle_key` handles the keys of the file list. Every 50 ms without a key, the loop calls the editor. The editor then runs the autosave if it is due and checks if a compile has finished.
 
+## Tests
+
+`cargo test` runs the tests. Many tests run the real `typst` command, so `typst` must be in `PATH`. The tests run on Linux only, because some of them read `/proc`. `cargo clippy --all-targets -- -D warnings` must show no warning.
+
+GitHub Actions runs both on each push and on each pull request to `main`. The workflow is the file `.github/workflows/ci.yml`. It installs Typst 0.15.1 from the release page of Typst and checks the file against a fixed SHA-256 hash. It runs `cargo test` with the current stable version of Rust and with Rust 1.90. It runs clippy with the stable version only. The run with Rust 1.90 is the check for the minimum Rust version in the requirements above.
+
 ## Measuring
 
 `scripts/bench-pages.sh` compiles documents of 1, 50, 200, and 500 pages with the options of the program, once for all pages and once for one page. It prints the time and the disk use. Give other page counts as arguments. The script needs `typst` in `PATH`.
