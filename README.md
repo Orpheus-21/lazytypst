@@ -14,6 +14,8 @@ A project often has one main file, such as `main.typ`, that includes the other f
 
 The program remembers the main file of each project. It saves the choice in the file `$XDG_STATE_HOME/lazytypst/main-files`, or `~/.local/state/lazytypst/main-files` if the variable is not set. The program ignores a relative value of `XDG_STATE_HOME`. The project folder gets no new file. At the next start, the program marks the same file again, if the file still exists in the list. If the program cannot save the choice, the status line says so, and the mark still works in this run.
 
+The compile pane under the editor shows the result of the last compile. After a good compile, its first line says how long Typst needed, for example `OK in 310 ms`. The title shows how many errors and warnings the report has, for example `Compile: 2 errors, 1 warning`. After a failed compile, the title also shows the time, for example `Compile: 1 error (310 ms)`. A compile with warnings only is green. An error line is red, a warning line is yellow, and other lines, such as hints, are dim. The colors are the colors of the terminal palette, so they follow your theme. The pane has room for 4 rows, and long lines wrap. If the report needs more rows, the last row says how many are hidden, for example `+3 more`. The count is in screen rows after the wrap.
+
 The folder that you give to the program is the Typst project root. A file in a subfolder can import a file from a parent folder, such as `../lib.typ`, if that file is inside the root. Error lines and the editor title show paths relative to the root.
 
 ## Requirements
