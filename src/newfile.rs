@@ -27,17 +27,29 @@ pub fn create(root: &Path, name: &str, max_depth: usize) -> Result<PathBuf, Stri
         match part {
             Component::Normal(part) => parts.push(part.to_owned()),
             Component::CurDir => {}
-            _ => return Err("The name must stay inside the project. Do not use .. or a first /.".into()),
+            _ => {
+                return Err(
+                    "The name must stay inside the project. Do not use .. or a first /.".into(),
+                );
+            }
         }
     }
     let Some(file_name) = parts.pop() else {
         return Err("Type a file name.".into());
     };
-    if parts.iter().chain([&file_name]).any(|part| part.to_string_lossy().starts_with('.')) {
-        return Err("A name that starts with a dot is not shown in the list. Choose another name.".into());
+    if parts
+        .iter()
+        .chain([&file_name])
+        .any(|part| part.to_string_lossy().starts_with('.'))
+    {
+        return Err(
+            "A name that starts with a dot is not shown in the list. Choose another name.".into(),
+        );
     }
     if parts.len() + 1 > max_depth + 1 {
-        return Err(format!("The file would be deeper than the list reads ({max_depth} folders)."));
+        return Err(format!(
+            "The file would be deeper than the list reads ({max_depth} folders)."
+        ));
     }
     let mut file_name = file_name;
     match Path::new(&file_name).extension() {
@@ -53,20 +65,31 @@ pub fn create(root: &Path, name: &str, max_depth: usize) -> Result<PathBuf, Stri
         relative.push(part);
         match fs::symlink_metadata(&folder) {
             Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(format!("{} is a link. lazytypst does not make files through a link.", relative.display()));
+                return Err(format!(
+                    "{} is a link. lazytypst does not make files through a link.",
+                    relative.display()
+                ));
             }
             Ok(meta) if meta.is_dir() => {}
             Ok(_) => return Err(format!("{} is not a folder.", relative.display())),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                fs::create_dir(&folder).map_err(|err| format!("Cannot make the folder {}: {err}", relative.display()))?;
+                fs::create_dir(&folder).map_err(|err| {
+                    format!("Cannot make the folder {}: {err}", relative.display())
+                })?;
             }
             Err(err) => return Err(format!("Cannot read {}: {err}", relative.display())),
         }
     }
     relative.push(&file_name);
-    match fs::OpenOptions::new().write(true).create_new(true).open(root.join(&relative)) {
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(root.join(&relative))
+    {
         Ok(_) => Ok(relative),
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Err(format!("{} exists already.", relative.display())),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            Err(format!("{} exists already.", relative.display()))
+        }
         Err(err) => Err(format!("Cannot make {}: {err}", relative.display())),
     }
 }
@@ -77,7 +100,8 @@ mod tests {
     use crate::browser::MAX_DEPTH;
 
     fn temp_root(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("lazytypst-new-{name}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("lazytypst-new-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
@@ -86,16 +110,25 @@ mod tests {
     #[test]
     fn a_name_without_an_ending_gets_the_ending_typ() {
         let root = temp_root("ending");
-        assert_eq!(create(&root, "notes", MAX_DEPTH).unwrap(), PathBuf::from("notes.typ"));
+        assert_eq!(
+            create(&root, "notes", MAX_DEPTH).unwrap(),
+            PathBuf::from("notes.typ")
+        );
         assert_eq!(fs::read(root.join("notes.typ")).unwrap(), b"");
-        assert_eq!(create(&root, "other.typ", MAX_DEPTH).unwrap(), PathBuf::from("other.typ"));
+        assert_eq!(
+            create(&root, "other.typ", MAX_DEPTH).unwrap(),
+            PathBuf::from("other.typ")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn missing_folders_are_made() {
         let root = temp_root("folders");
-        assert_eq!(create(&root, "chapters/part/two", MAX_DEPTH).unwrap(), PathBuf::from("chapters/part/two.typ"));
+        assert_eq!(
+            create(&root, "chapters/part/two", MAX_DEPTH).unwrap(),
+            PathBuf::from("chapters/part/two.typ")
+        );
         assert!(root.join("chapters").join("part").join("two.typ").is_file());
         fs::remove_dir_all(root).unwrap();
     }
@@ -103,15 +136,25 @@ mod tests {
     #[test]
     fn spaces_around_the_name_and_a_leading_dot_slash_are_dropped() {
         let root = temp_root("trim");
-        assert_eq!(create(&root, "  ./a/b  ", MAX_DEPTH).unwrap(), PathBuf::from("a/b.typ"));
+        assert_eq!(
+            create(&root, "  ./a/b  ", MAX_DEPTH).unwrap(),
+            PathBuf::from("a/b.typ")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn two_dots_inside_a_name_are_fine_and_a_dot_makes_an_ending() {
         let root = temp_root("dots");
-        assert_eq!(create(&root, "a..b.typ", MAX_DEPTH).unwrap(), PathBuf::from("a..b.typ"));
-        assert!(create(&root, "a..b", MAX_DEPTH).unwrap_err().contains(".typ"));
+        assert_eq!(
+            create(&root, "a..b.typ", MAX_DEPTH).unwrap(),
+            PathBuf::from("a..b.typ")
+        );
+        assert!(
+            create(&root, "a..b", MAX_DEPTH)
+                .unwrap_err()
+                .contains(".typ")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -121,20 +164,30 @@ mod tests {
         fs::write(root.join("notes.typ"), "keep me").unwrap();
         let err = create(&root, "notes", MAX_DEPTH).unwrap_err();
         assert!(err.contains("exists already"), "{err}");
-        assert_eq!(fs::read_to_string(root.join("notes.typ")).unwrap(), "keep me");
+        assert_eq!(
+            fs::read_to_string(root.join("notes.typ")).unwrap(),
+            "keep me"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn a_path_that_leaves_the_project_is_refused() {
         let root = temp_root("leave");
-        let outside = root.parent().unwrap().join(format!("lazytypst-new-outside-{}.typ", std::process::id()));
+        let outside = root
+            .parent()
+            .unwrap()
+            .join(format!("lazytypst-new-outside-{}.typ", std::process::id()));
         for bad in ["../x", "a/../../x", "/tmp/x", "a/../b"] {
             let err = create(&root, bad, MAX_DEPTH).unwrap_err();
             assert!(err.contains("inside the project"), "{bad}: {err}");
         }
         assert!(!outside.exists());
-        assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "a folder or file was made");
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            0,
+            "a folder or file was made"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -189,7 +242,11 @@ mod tests {
             let err = create(&root, bad, MAX_DEPTH).unwrap_err();
             assert!(err.contains("link"), "{bad}: {err}");
         }
-        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0, "a file or folder was made through the link");
+        assert_eq!(
+            fs::read_dir(&elsewhere).unwrap().count(),
+            0,
+            "a file or folder was made through the link"
+        );
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(elsewhere).unwrap();
     }
@@ -200,7 +257,10 @@ mod tests {
         let elsewhere = temp_root("filelink-target");
         std::os::unix::fs::symlink(elsewhere.join("y.typ"), root.join("x.typ")).unwrap(); // a dangling link
         assert!(create(&root, "x", MAX_DEPTH).is_err());
-        assert!(!elsewhere.join("y.typ").exists(), "the link target was made");
+        assert!(
+            !elsewhere.join("y.typ").exists(),
+            "the link target was made"
+        );
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(elsewhere).unwrap();
     }

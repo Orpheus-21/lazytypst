@@ -135,12 +135,20 @@ fn write_to_terminal(text: &str) {
 /// control character becomes a question mark.
 fn window_title(root: &Path, open: Option<&Path>) -> String {
     let name = match open {
-        Some(file) => file.strip_prefix(root).unwrap_or(file).display().to_string(),
-        None => root
-            .file_name()
-            .map_or_else(|| root.display().to_string(), |name| name.to_string_lossy().into_owned()),
+        Some(file) => file
+            .strip_prefix(root)
+            .unwrap_or(file)
+            .display()
+            .to_string(),
+        None => root.file_name().map_or_else(
+            || root.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
     };
-    let name: String = name.chars().map(|letter| if letter.is_control() { '?' } else { letter }).collect();
+    let name: String = name
+        .chars()
+        .map(|letter| if letter.is_control() { '?' } else { letter })
+        .collect();
     format!("lazytypst: {name}")
 }
 
@@ -185,14 +193,29 @@ fn resolve_target(arg: &Path) -> Result<Target, (String, i32)> {
     let cannot_open = |err: std::io::Error| (format!("Cannot open {}: {err}", arg.display()), 1);
     // An absolute root keeps every derived path valid when typst runs inside the root.
     if std::fs::metadata(arg).map_err(cannot_open)?.is_dir() {
-        return Ok(Target { root: std::fs::canonicalize(arg).map_err(cannot_open)?, open: None });
+        return Ok(Target {
+            root: std::fs::canonicalize(arg).map_err(cannot_open)?,
+            open: None,
+        });
     }
     if arg.extension().is_none_or(|ending| ending != "typ") {
-        return Err((format!("{} is not a .typ file. Give a folder or a .typ file.", arg.display()), 2));
+        return Err((
+            format!(
+                "{} is not a .typ file. Give a folder or a .typ file.",
+                arg.display()
+            ),
+            2,
+        ));
     }
-    let folder = arg.parent().filter(|folder| !folder.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let folder = arg
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let root = std::fs::canonicalize(folder).map_err(cannot_open)?;
-    Ok(Target { root, open: arg.file_name().map(PathBuf::from) })
+    Ok(Target {
+        root,
+        open: arg.file_name().map(PathBuf::from),
+    })
 }
 
 /// Reads the arguments. `args_os` keeps a folder name that is not UTF-8. `args` would panic on it.
@@ -267,7 +290,11 @@ impl App {
         self.status = format!("Read the folder again: {} files", files.len());
         self.all_files = files;
         self.set_filter(self.filter.clone()); // keeps the filter and the selection
-        if self.main_file.as_ref().is_some_and(|main| !self.all_files.contains(main)) {
+        if self
+            .main_file
+            .as_ref()
+            .is_some_and(|main| !self.all_files.contains(main))
+        {
             self.main_file = None;
             self.save_main_choice();
         }
@@ -293,7 +320,12 @@ impl App {
     /// error in the list.
     fn open_file(&mut self, path: PathBuf) {
         let main = self.main_file.as_ref().map(|main| self.root.join(main));
-        let opened = Editor::open(self.root.join(&path), self.root.clone(), main, self.picker.clone());
+        let opened = Editor::open(
+            self.root.join(&path),
+            self.root.clone(),
+            main,
+            self.picker.clone(),
+        );
         self.status = match opened {
             Ok(mut editor) => {
                 if let Some(place) = self.cursors.get(editor.path()) {
@@ -317,8 +349,12 @@ impl App {
         input.move_cursor(CursorMove::End);
         self.prompt = Some(Prompt { kind, input });
         self.status = match kind {
-            PromptKind::NewFile => "Type a path such as chapters/two. Enter makes the file. Esc cancels.",
-            PromptKind::Filter => "Type to filter the list. Enter keeps the filter. Esc removes it.",
+            PromptKind::NewFile => {
+                "Type a path such as chapters/two. Enter makes the file. Esc cancels."
+            }
+            PromptKind::Filter => {
+                "Type to filter the list. Enter keeps the filter. Esc removes it."
+            }
         }
         .into();
     }
@@ -345,18 +381,20 @@ impl App {
                 self.prompt = None;
                 self.status.clear();
             }
-            (PromptKind::NewFile, KeyCode::Enter) => match newfile::create(&self.root, &text, browser::MAX_DEPTH) {
-                Ok(made) => {
-                    self.prompt = None;
-                    self.filter.clear(); // the new file must show in the list
-                    self.refresh();
-                    if let Some(index) = self.files.iter().position(|file| *file == made) {
-                        self.list.select(Some(index));
+            (PromptKind::NewFile, KeyCode::Enter) => {
+                match newfile::create(&self.root, &text, browser::MAX_DEPTH) {
+                    Ok(made) => {
+                        self.prompt = None;
+                        self.filter.clear(); // the new file must show in the list
+                        self.refresh();
+                        if let Some(index) = self.files.iter().position(|file| *file == made) {
+                            self.list.select(Some(index));
+                        }
+                        self.open_selected();
                     }
-                    self.open_selected();
+                    Err(message) => self.status = message,
                 }
-                Err(message) => self.status = message,
-            },
+            }
             (PromptKind::Filter, _) => {
                 prompt.input.input(key);
                 // The list follows the text at once, while the user types.
@@ -378,18 +416,22 @@ impl App {
         self.files = self
             .all_files
             .iter()
-            .filter(|path| needle.is_empty() || path.to_string_lossy().to_lowercase().contains(&needle))
+            .filter(|path| {
+                needle.is_empty() || path.to_string_lossy().to_lowercase().contains(&needle)
+            })
             .cloned()
             .collect();
         let index = selected.and_then(|path| self.files.iter().position(|file| *file == path));
-        self.list.select((!self.files.is_empty()).then_some(index.unwrap_or(0)));
+        self.list
+            .select((!self.files.is_empty()).then_some(index.unwrap_or(0)));
     }
 
     /// Selects the file at `index`. `None`, or an index beyond the list, selects nothing in an empty list
     /// and the last file otherwise. The index is set at once, so a key that follows needs no redraw.
     fn select_index(&mut self, index: Option<usize>) {
         let last = self.files.len().checked_sub(1);
-        self.list.select(index.zip(last).map(|(index, last)| index.min(last)));
+        self.list
+            .select(index.zip(last).map(|(index, last)| index.min(last)));
     }
 
     /// The file that the selection is on.
@@ -416,7 +458,8 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         if let Some(editor) = &mut self.editor {
             if matches!(editor.handle_key(key), Action::Close) {
-                self.cursors.insert(editor.path().to_path_buf(), editor.cursor_position());
+                self.cursors
+                    .insert(editor.path().to_path_buf(), editor.cursor_position());
                 self.editor = None;
             }
             return false;
@@ -428,7 +471,9 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return true,
             KeyCode::Char('j') | KeyCode::Down if !self.files.is_empty() => self.list.select_next(),
-            KeyCode::Char('k') | KeyCode::Up if !self.files.is_empty() => self.list.select_previous(),
+            KeyCode::Char('k') | KeyCode::Up if !self.files.is_empty() => {
+                self.list.select_previous()
+            }
             KeyCode::Char('g') | KeyCode::Home => self.select_index(Some(0)),
             KeyCode::Char('G') | KeyCode::End => self.select_index(self.files.len().checked_sub(1)),
             KeyCode::Char('m') => self.toggle_main(),
@@ -451,7 +496,10 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
         Ok(Args::Version) => {
-            print!("{}", version_text(env!("CARGO_PKG_VERSION"), compile::typst_version()));
+            print!(
+                "{}",
+                version_text(env!("CARGO_PKG_VERSION"), compile::typst_version())
+            );
             return Ok(());
         }
         Err(message) => {
@@ -473,7 +521,10 @@ fn main() -> std::io::Result<()> {
     }
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
     compile::make_out_dir().map_err(|err| {
-        let message = format!("Cannot make the folder {}: {err}", compile::out_dir().display());
+        let message = format!(
+            "Cannot make the folder {}: {err}",
+            compile::out_dir().display()
+        );
         std::io::Error::new(err.kind(), message)
     })?;
     compile::remove_stale_dirs();
@@ -509,7 +560,10 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
         // The title changes when the editor opens or closes. It is sent only when it changes.
         let wanted = window_title(&app.root, app.editor.as_ref().map(Editor::path));
         if wanted != title {
-            let _ = ratatui::crossterm::execute!(std::io::stdout(), ratatui::crossterm::terminal::SetTitle(&wanted));
+            let _ = ratatui::crossterm::execute!(
+                std::io::stdout(),
+                ratatui::crossterm::terminal::SetTitle(&wanted)
+            );
             title = wanted;
         }
         if redraw {
@@ -517,11 +571,16 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
         }
         // While no key arrives, every 50 ms the editor checks its autosave and its compile.
         if !event::poll(Duration::from_millis(50))? {
-            redraw = app.editor.as_mut().is_some_and(|editor| editor.tick(Instant::now()));
+            redraw = app
+                .editor
+                .as_mut()
+                .is_some_and(|editor| editor.tick(Instant::now()));
             continue;
         }
         redraw = true;
-        let Event::Key(key) = event::read()? else { continue };
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
         if app.handle_key(key) {
             return Ok(());
         }
@@ -540,7 +599,11 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Length(prompt_height),
     ])
     .areas(frame.area());
-    let title = if app.filter.is_empty() { "lazytypst".to_string() } else { format!("lazytypst /{}", app.filter) };
+    let title = if app.filter.is_empty() {
+        "lazytypst".to_string()
+    } else {
+        format!("lazytypst /{}", app.filter)
+    };
     let block = Block::bordered().title(title);
     if app.all_files.is_empty() {
         frame.render_widget(Paragraph::new("No .typ files").block(block), body);
@@ -548,7 +611,11 @@ fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new("No match").block(block), body);
     } else {
         let items = app.files.iter().map(|path| {
-            let mark = if app.main_file.as_ref() == Some(path) { " [main]" } else { "" };
+            let mark = if app.main_file.as_ref() == Some(path) {
+                " [main]"
+            } else {
+                ""
+            };
             format!("{}{mark}", path.display())
         });
         let list = List::new(items)
@@ -562,7 +629,8 @@ fn draw(frame: &mut Frame, app: &mut App) {
         let label_text = prompt.kind.label();
         let label_width = u16::try_from(label_text.len()).unwrap_or(u16::MAX);
         let [label, input] =
-            Layout::horizontal([Constraint::Length(label_width), Constraint::Min(1)]).areas(prompt_row);
+            Layout::horizontal([Constraint::Length(label_width), Constraint::Min(1)])
+                .areas(prompt_row);
         frame.render_widget(Paragraph::new(label_text), label);
         frame.render_widget(&prompt.input, input);
     }
@@ -578,7 +646,8 @@ mod tests {
 
     /// Makes a folder with the files `a.typ`, `sub/b.typ`, and `notes.txt`. Returns the app for it.
     fn app(name: &str) -> App {
-        let root = std::env::temp_dir().join(format!("lazytypst-main-{name}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("lazytypst-main-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("sub")).unwrap();
         fs::write(root.join("a.typ"), "text of a\n").unwrap();
@@ -596,14 +665,23 @@ mod tests {
     fn screen(app: &mut App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| draw(frame, app)).unwrap();
-        terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect()
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
     }
 
     #[test]
     fn the_list_shows_the_typ_files_only() {
         let mut app = app("list");
         let text = screen(&mut app);
-        assert!(text.contains("a.typ") && text.contains("sub/b.typ"), "{text}");
+        assert!(
+            text.contains("a.typ") && text.contains("sub/b.typ"),
+            "{text}"
+        );
         assert!(!text.contains("notes.txt"));
         fs::remove_dir_all(&app.root).unwrap();
     }
@@ -661,7 +739,10 @@ mod tests {
         press(&mut app, KeyCode::Char('m'));
         assert_eq!(app.main_file, Some(PathBuf::from("sub/b.typ")));
         let text = screen(&mut app);
-        assert!(text.contains("sub/b.typ [main]") && !text.contains("a.typ [main]"), "{text}");
+        assert!(
+            text.contains("sub/b.typ [main]") && !text.contains("a.typ [main]"),
+            "{text}"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -678,7 +759,10 @@ mod tests {
 
     /// A state file path in a new temporary folder.
     fn state_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lazytypst-main-state-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "lazytypst-main-state-{name}-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         dir.join("lazytypst").join("main-files")
     }
@@ -691,14 +775,22 @@ mod tests {
         press(&mut first, KeyCode::Char('j'));
         press(&mut first, KeyCode::Char('m')); // sub/b.typ
 
-        let mut second = App::new(first.root.clone(), first.files.clone(), Picker::halfblocks());
+        let mut second = App::new(
+            first.root.clone(),
+            first.files.clone(),
+            Picker::halfblocks(),
+        );
         second.load_state(Some(state.clone()));
         assert_eq!(second.main_file, Some(PathBuf::from("sub/b.typ")));
         assert!(screen(&mut second).contains("sub/b.typ [main]"));
 
         press(&mut second, KeyCode::Char('j'));
         press(&mut second, KeyCode::Char('m')); // sub/b.typ again: removes the mark
-        let mut third = App::new(first.root.clone(), first.files.clone(), Picker::halfblocks());
+        let mut third = App::new(
+            first.root.clone(),
+            first.files.clone(),
+            Picker::halfblocks(),
+        );
         third.load_state(Some(state.clone()));
         assert_eq!(third.main_file, None);
         fs::remove_dir_all(&first.root).unwrap();
@@ -717,7 +809,11 @@ mod tests {
         let mut second = App::new(first.root.clone(), files, Picker::halfblocks());
         second.load_state(Some(state.clone()));
         assert_eq!(second.main_file, None);
-        assert!(second.status.is_empty(), "no error for a missing main file: {}", second.status);
+        assert!(
+            second.status.is_empty(),
+            "no error for a missing main file: {}",
+            second.status
+        );
         fs::remove_dir_all(&first.root).unwrap();
         fs::remove_dir_all(state.parent().unwrap().parent().unwrap()).unwrap();
     }
@@ -729,8 +825,16 @@ mod tests {
         let blocker = app.root.join("a.typ");
         app.load_state(Some(blocker.join("lazytypst").join("main-files")));
         press(&mut app, KeyCode::Char('m'));
-        assert_eq!(app.main_file, Some(PathBuf::from("a.typ")), "the mark must work without the state file");
-        assert!(app.status.contains("Cannot save the main file"), "{}", app.status);
+        assert_eq!(
+            app.main_file,
+            Some(PathBuf::from("a.typ")),
+            "the mark must work without the state file"
+        );
+        assert!(
+            app.status.contains("Cannot save the main file"),
+            "{}",
+            app.status
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -772,7 +876,10 @@ mod tests {
         press(&mut app, KeyCode::Char('r'));
         screen(&mut app);
         press(&mut app, KeyCode::Enter);
-        assert!(screen(&mut app).contains("text of b"), "the selection moved to another file");
+        assert!(
+            screen(&mut app).contains("text of b"),
+            "the selection moved to another file"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -798,7 +905,10 @@ mod tests {
         fs::remove_file(app.root.join("a.typ")).unwrap();
         press(&mut app, KeyCode::Char('r'));
         assert_eq!(app.main_file, None);
-        assert!(!fs::read_to_string(&state).unwrap().contains("a.typ"), "the saved choice stays");
+        assert!(
+            !fs::read_to_string(&state).unwrap().contains("a.typ"),
+            "the saved choice stays"
+        );
         fs::remove_dir_all(&app.root).unwrap();
         fs::remove_dir_all(state.parent().unwrap().parent().unwrap()).unwrap();
     }
@@ -859,7 +969,10 @@ mod tests {
         type_text(&mut app, "draft");
         press(&mut app, KeyCode::Esc);
         let text = screen(&mut app);
-        assert!(!text.contains("New file:") && text.contains("a.typ"), "{text}");
+        assert!(
+            !text.contains("New file:") && text.contains("a.typ"),
+            "{text}"
+        );
         assert!(!app.root.join("draft.typ").exists());
         fs::remove_dir_all(&app.root).unwrap();
     }
@@ -869,7 +982,10 @@ mod tests {
         let mut app = app("new-keys");
         press(&mut app, KeyCode::Char('n'));
         for letter in "qjkmrn".chars() {
-            assert!(!press(&mut app, KeyCode::Char(letter)), "{letter} quit the program");
+            assert!(
+                !press(&mut app, KeyCode::Char(letter)),
+                "{letter} quit the program"
+            );
         }
         assert!(screen(&mut app).contains("New file: qjkmrn"));
         assert_eq!(app.main_file, None, "m marked a file");
@@ -885,10 +1001,16 @@ mod tests {
         press(&mut app, KeyCode::Enter);
 
         assert!(app.root.join("chapters").join("two.typ").is_file());
-        assert!(screen(&mut app).contains("chapters/two.typ"), "the editor must show the new file");
+        assert!(
+            screen(&mut app).contains("chapters/two.typ"),
+            "the editor must show the new file"
+        );
         press(&mut app, KeyCode::Esc);
         let text = screen(&mut app);
-        assert!(text.contains("chapters/two.typ") && !text.contains("New file:"), "{text}");
+        assert!(
+            text.contains("chapters/two.typ") && !text.contains("New file:"),
+            "{text}"
+        );
         // The new file is selected: Enter opens it again.
         press(&mut app, KeyCode::Enter);
         assert!(screen(&mut app).contains("chapters/two.typ"));
@@ -902,7 +1024,10 @@ mod tests {
         type_text(&mut app, "../x");
         press(&mut app, KeyCode::Enter);
         let text = screen(&mut app);
-        assert!(text.contains("inside the project") && text.contains("New file: ../x"), "{text}");
+        assert!(
+            text.contains("inside the project") && text.contains("New file: ../x"),
+            "{text}"
+        );
         assert!(app.editor.is_none());
         press(&mut app, KeyCode::Esc);
         assert!(!app.root.parent().unwrap().join("x.typ").exists());
@@ -916,7 +1041,10 @@ mod tests {
         type_text(&mut app, "a");
         press(&mut app, KeyCode::Enter);
         assert!(screen(&mut app).contains("a.typ exists already"));
-        assert_eq!(fs::read_to_string(app.root.join("a.typ")).unwrap(), "text of a\n");
+        assert_eq!(
+            fs::read_to_string(app.root.join("a.typ")).unwrap(),
+            "text of a\n"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -934,7 +1062,8 @@ mod tests {
 
     #[test]
     fn n_makes_the_first_file_in_an_empty_folder() {
-        let root = std::env::temp_dir().join(format!("lazytypst-main-new-empty-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("lazytypst-main-new-empty-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let mut app = App::new(root.clone(), Vec::new(), Picker::halfblocks());
@@ -952,17 +1081,27 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('n'));
         let text = screen(&mut app);
-        assert!(text.contains("ntext of a") && !text.contains("New file:"), "{text}");
+        assert!(
+            text.contains("ntext of a") && !text.contains("New file:"),
+            "{text}"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
     /// An app with three files: `a.typ`, `b.typ`, and `c.typ`. Each file holds `text of <name>`.
     fn app_with_three_files(name: &str) -> App {
-        let root = std::env::temp_dir().join(format!("lazytypst-main-three-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "lazytypst-main-three-{name}-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         for file in ["a", "b", "c"] {
-            fs::write(root.join(format!("{file}.typ")), format!("text of {file}\n")).unwrap();
+            fs::write(
+                root.join(format!("{file}.typ")),
+                format!("text of {file}\n"),
+            )
+            .unwrap();
         }
         let files = browser::find_typ_files(&root, browser::MAX_DEPTH).unwrap();
         App::new(root, files, Picker::halfblocks())
@@ -973,12 +1112,18 @@ mod tests {
         let mut app = app_with_three_files("g");
         press(&mut app, KeyCode::Char('G'));
         press(&mut app, KeyCode::Enter); // no draw between the keys
-        assert!(screen(&mut app).contains("text of c"), "G must select the last file");
+        assert!(
+            screen(&mut app).contains("text of c"),
+            "G must select the last file"
+        );
         press(&mut app, KeyCode::Esc);
 
         press(&mut app, KeyCode::Char('g'));
         press(&mut app, KeyCode::Enter);
-        assert!(screen(&mut app).contains("text of a"), "g must select the first file");
+        assert!(
+            screen(&mut app).contains("text of a"),
+            "g must select the first file"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1009,9 +1154,16 @@ mod tests {
 
     #[test]
     fn g_and_capital_g_in_an_empty_list_do_nothing() {
-        let root = std::env::temp_dir().join(format!("lazytypst-main-g-empty-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("lazytypst-main-g-empty-{}", std::process::id()));
         let mut app = App::new(root, Vec::new(), Picker::halfblocks());
-        for code in [KeyCode::Char('g'), KeyCode::Char('G'), KeyCode::Home, KeyCode::End, KeyCode::Enter] {
+        for code in [
+            KeyCode::Char('g'),
+            KeyCode::Char('G'),
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::Enter,
+        ] {
             assert!(!press(&mut app, code));
         }
         assert_eq!(app.list.selected(), None);
@@ -1037,12 +1189,17 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
-        (0..100).map(|column| buffer[(column, 23)].symbol()).collect()
+        (0..100)
+            .map(|column| buffer[(column, 23)].symbol())
+            .collect()
     }
 
     /// An app with the files `long.typ` (10 lines) and `other.typ` (2 lines).
     fn app_with_long_file(name: &str) -> App {
-        let root = std::env::temp_dir().join(format!("lazytypst-main-cursor-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "lazytypst-main-cursor-{name}-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let long: String = (1..=10).map(|n| format!("line number {n}\n")).collect();
@@ -1062,11 +1219,19 @@ mod tests {
         for _ in 0..5 {
             press(&mut app, KeyCode::Right);
         }
-        assert!(status_row(&mut app).trim_end().ends_with("10:6"), "{:?}", status_row(&mut app));
+        assert!(
+            status_row(&mut app).trim_end().ends_with("10:6"),
+            "{:?}",
+            status_row(&mut app)
+        );
         press(&mut app, KeyCode::Esc);
 
         press(&mut app, KeyCode::Enter); // the same file again
-        assert!(status_row(&mut app).trim_end().ends_with("10:6"), "{:?}", status_row(&mut app));
+        assert!(
+            status_row(&mut app).trim_end().ends_with("10:6"),
+            "{:?}",
+            status_row(&mut app)
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1081,7 +1246,11 @@ mod tests {
 
         press(&mut app, KeyCode::Down); // other.typ
         press(&mut app, KeyCode::Enter);
-        assert!(status_row(&mut app).trim_end().ends_with("1:1"), "{:?}", status_row(&mut app));
+        assert!(
+            status_row(&mut app).trim_end().ends_with("1:1"),
+            "{:?}",
+            status_row(&mut app)
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1100,11 +1269,19 @@ mod tests {
 
         press(&mut app, KeyCode::Up);
         press(&mut app, KeyCode::Enter);
-        assert!(status_row(&mut app).trim_end().ends_with("4:1"), "{:?}", status_row(&mut app));
+        assert!(
+            status_row(&mut app).trim_end().ends_with("4:1"),
+            "{:?}",
+            status_row(&mut app)
+        );
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
-        assert!(status_row(&mut app).trim_end().ends_with("2:1"), "{:?}", status_row(&mut app));
+        assert!(
+            status_row(&mut app).trim_end().ends_with("2:1"),
+            "{:?}",
+            status_row(&mut app)
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1123,7 +1300,11 @@ mod tests {
 
         press(&mut app, KeyCode::Enter);
         // The text has 3 lines and the last line has 5 characters. The old column 8 is cut to the end.
-        assert!(status_row(&mut app).trim_end().ends_with("3:6"), "{:?}", status_row(&mut app));
+        assert!(
+            status_row(&mut app).trim_end().ends_with("3:6"),
+            "{:?}",
+            status_row(&mut app)
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1136,17 +1317,33 @@ mod tests {
         }
         press(&mut first, KeyCode::Esc);
 
-        let mut second = App::new(first.root.clone(), first.files.clone(), Picker::halfblocks());
+        let mut second = App::new(
+            first.root.clone(),
+            first.files.clone(),
+            Picker::halfblocks(),
+        );
         press(&mut second, KeyCode::Enter);
-        assert!(status_row(&mut second).trim_end().ends_with("1:1"), "a new start begins at line 1");
+        assert!(
+            status_row(&mut second).trim_end().ends_with("1:1"),
+            "a new start begins at line 1"
+        );
         fs::remove_dir_all(&first.root).unwrap();
     }
 
     /// An app with four files: `README.typ`, `chapters/one.typ`, `chapters/two.typ`, and `notes/draft.typ`.
     fn app_for_filter(name: &str) -> App {
-        let root = std::env::temp_dir().join(format!("lazytypst-main-filter-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "lazytypst-main-filter-{name}-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
-        for file in ["README.typ", "chapters/one.typ", "chapters/two.typ", "notes/draft.typ", "Épilogue.typ"] {
+        for file in [
+            "README.typ",
+            "chapters/one.typ",
+            "chapters/two.typ",
+            "notes/draft.typ",
+            "Épilogue.typ",
+        ] {
             let path = root.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, format!("text of {file}\n")).unwrap();
@@ -1161,7 +1358,11 @@ mod tests {
         terminal.draw(|frame| draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
         (1..20)
-            .map(|row| (1..99).map(|column| buffer[(column, row)].symbol()).collect::<String>())
+            .map(|row| {
+                (1..99)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
             .map(|row| row.trim().trim_start_matches('>').trim().to_string())
             .filter(|row| row.ends_with(".typ") || row.contains(".typ ["))
             .collect()
@@ -1209,7 +1410,10 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert_eq!(listed(&mut app).len(), 5);
         let text = screen(&mut app);
-        assert!(!text.contains("Filter:") && !text.contains("lazytypst /"), "{text}");
+        assert!(
+            !text.contains("Filter:") && !text.contains("lazytypst /"),
+            "{text}"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1235,7 +1439,10 @@ mod tests {
         press(&mut app, KeyCode::Enter); // opens the first match
         assert!(screen(&mut app).contains("text of chapters/two.typ"));
         press(&mut app, KeyCode::Esc);
-        assert!(screen(&mut app).contains("lazytypst /two"), "the filter stays after the editor closes");
+        assert!(
+            screen(&mut app).contains("lazytypst /two"),
+            "the filter stays after the editor closes"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1245,9 +1452,18 @@ mod tests {
         press(&mut app, KeyCode::Char('/'));
         type_text(&mut app, "zzz");
         let text = screen(&mut app);
-        assert!(text.contains("No match") && !text.contains("No .typ files"), "{text}");
+        assert!(
+            text.contains("No match") && !text.contains("No .typ files"),
+            "{text}"
+        );
         press(&mut app, KeyCode::Enter);
-        for code in [KeyCode::Enter, KeyCode::Char('g'), KeyCode::Char('G'), KeyCode::Down, KeyCode::Char('m')] {
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Char('g'),
+            KeyCode::Char('G'),
+            KeyCode::Down,
+            KeyCode::Char('m'),
+        ] {
             assert!(!press(&mut app, code));
         }
         assert!(app.editor.is_none());
@@ -1261,7 +1477,10 @@ mod tests {
         let mut app = app_for_filter("keys");
         press(&mut app, KeyCode::Char('/'));
         for letter in "qjkgGmrn".chars() {
-            assert!(!press(&mut app, KeyCode::Char(letter)), "{letter} quit the program");
+            assert!(
+                !press(&mut app, KeyCode::Char(letter)),
+                "{letter} quit the program"
+            );
         }
         assert!(screen(&mut app).contains("Filter: qjkgGmrn"));
         assert_eq!(app.main_file, None);
@@ -1275,7 +1494,11 @@ mod tests {
         let last = app.selected_file().cloned().unwrap();
         press(&mut app, KeyCode::Char('/'));
         type_text(&mut app, &last.to_string_lossy()[..3].to_lowercase());
-        assert_eq!(app.selected_file(), Some(&last), "the selection moved to another file");
+        assert_eq!(
+            app.selected_file(),
+            Some(&last),
+            "the selection moved to another file"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1286,9 +1509,16 @@ mod tests {
         type_text(&mut app, "chap");
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('/'));
-        assert!(screen(&mut app).contains("Filter: chap"), "the prompt must start with the filter");
+        assert!(
+            screen(&mut app).contains("Filter: chap"),
+            "the prompt must start with the filter"
+        );
         press(&mut app, KeyCode::Char('s'));
-        assert_eq!(listed(&mut app), Vec::<String>::new(), "chaps matches nothing");
+        assert_eq!(
+            listed(&mut app),
+            Vec::<String>::new(),
+            "chaps matches nothing"
+        );
         press(&mut app, KeyCode::Esc);
         assert_eq!(listed(&mut app).len(), 5, "Esc removes the whole filter");
         fs::remove_dir_all(&app.root).unwrap();
@@ -1303,7 +1533,10 @@ mod tests {
         assert_eq!(listed(&mut app).len(), 2);
         assert!(!press(&mut app, KeyCode::Esc));
         assert_eq!(listed(&mut app).len(), 5);
-        assert!(!press(&mut app, KeyCode::Esc), "Esc with no filter does nothing");
+        assert!(
+            !press(&mut app, KeyCode::Esc),
+            "Esc with no filter does nothing"
+        );
         assert_eq!(listed(&mut app).len(), 5);
         fs::remove_dir_all(&app.root).unwrap();
     }
@@ -1317,7 +1550,10 @@ mod tests {
         fs::write(app.root.join("chapters").join("three.typ"), "").unwrap();
         fs::write(app.root.join("other.typ"), "").unwrap();
         press(&mut app, KeyCode::Char('r'));
-        assert_eq!(listed(&mut app), ["chapters/one.typ", "chapters/three.typ", "chapters/two.typ"]);
+        assert_eq!(
+            listed(&mut app),
+            ["chapters/one.typ", "chapters/three.typ", "chapters/two.typ"]
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1334,7 +1570,10 @@ mod tests {
         assert!(app.editor.is_some(), "the new file must open");
         press(&mut app, KeyCode::Esc);
         let names = listed(&mut app);
-        assert!(names.contains(&"brand-new.typ".to_string()) && names.len() == 6, "{names:?}");
+        assert!(
+            names.contains(&"brand-new.typ".to_string()) && names.len() == 6,
+            "{names:?}"
+        );
         assert_eq!(app.selected_file(), Some(&PathBuf::from("brand-new.typ")));
         fs::remove_dir_all(&app.root).unwrap();
     }
@@ -1354,7 +1593,11 @@ mod tests {
         }
         type_text(&mut app, "chap");
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.main_file, Some(PathBuf::from("README.typ")), "a hidden main file is still the main file");
+        assert_eq!(
+            app.main_file,
+            Some(PathBuf::from("README.typ")),
+            "a hidden main file is still the main file"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1367,23 +1610,38 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('/'));
-        assert!(screen(&mut app).contains("/text of"), "the editor must type the slash");
+        assert!(
+            screen(&mut app).contains("/text of"),
+            "the editor must type the slash"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[test]
     fn the_title_in_the_list_names_the_folder() {
-        assert_eq!(window_title(Path::new("/home/me/books/novel"), None), "lazytypst: novel");
+        assert_eq!(
+            window_title(Path::new("/home/me/books/novel"), None),
+            "lazytypst: novel"
+        );
         assert_eq!(window_title(Path::new("/"), None), "lazytypst: /");
     }
 
     #[test]
     fn the_title_in_the_editor_names_the_file_relative_to_the_root() {
         let root = Path::new("/home/me/books/novel");
-        assert_eq!(window_title(root, Some(&root.join("report.typ"))), "lazytypst: report.typ");
-        assert_eq!(window_title(root, Some(&root.join("chapters/one.typ"))), "lazytypst: chapters/one.typ");
+        assert_eq!(
+            window_title(root, Some(&root.join("report.typ"))),
+            "lazytypst: report.typ"
+        );
+        assert_eq!(
+            window_title(root, Some(&root.join("chapters/one.typ"))),
+            "lazytypst: chapters/one.typ"
+        );
         // A file outside the root keeps its whole path.
-        assert_eq!(window_title(root, Some(Path::new("/elsewhere/x.typ"))), "lazytypst: /elsewhere/x.typ");
+        assert_eq!(
+            window_title(root, Some(Path::new("/elsewhere/x.typ"))),
+            "lazytypst: /elsewhere/x.typ"
+        );
     }
 
     #[test]
@@ -1400,15 +1658,23 @@ mod tests {
 
     #[test]
     fn a_name_with_letters_that_are_not_ascii_stays_as_it_is() {
-        assert_eq!(window_title(Path::new("/books/संस्कृतम्"), None), "lazytypst: संस्कृतम्");
-        assert_eq!(window_title(Path::new("/books/é"), Some(Path::new("/books/é/中文.typ"))), "lazytypst: 中文.typ");
+        assert_eq!(
+            window_title(Path::new("/books/संस्कृतम्"), None),
+            "lazytypst: संस्कृतम्"
+        );
+        assert_eq!(
+            window_title(Path::new("/books/é"), Some(Path::new("/books/é/中文.typ"))),
+            "lazytypst: 中文.typ"
+        );
     }
 
     #[test]
     fn the_title_is_sent_as_osc_0_and_the_title_stack_commands_are_the_xterm_ones() {
         use ratatui::crossterm::Command;
         let mut bytes = String::new();
-        ratatui::crossterm::terminal::SetTitle("lazytypst: a").write_ansi(&mut bytes).unwrap();
+        ratatui::crossterm::terminal::SetTitle("lazytypst: a")
+            .write_ansi(&mut bytes)
+            .unwrap();
         assert_eq!(bytes, "\x1b]0;lazytypst: a\x07");
         assert_eq!(SAVE_TITLE, "\x1b[22;0t");
         assert_eq!(RESTORE_TITLE, "\x1b[23;0t");
@@ -1417,17 +1683,23 @@ mod tests {
     #[test]
     fn the_changelog_has_an_unreleased_entry_first_and_an_entry_for_the_current_version() {
         let changelog = include_str!("../CHANGELOG.md");
-        let unreleased = changelog.find("\n## [Unreleased]\n").expect("no Unreleased entry");
+        let unreleased = changelog
+            .find("\n## [Unreleased]\n")
+            .expect("no Unreleased entry");
         let version = env!("CARGO_PKG_VERSION");
         let current = changelog
             .find(&format!("\n## [{version}]"))
             .unwrap_or_else(|| panic!("no entry for the version {version} in CHANGELOG.md"));
-        assert!(unreleased < current, "the Unreleased entry must come before the entry for {version}");
+        assert!(
+            unreleased < current,
+            "the Unreleased entry must come before the entry for {version}"
+        );
     }
 
     #[test]
     fn m_in_an_empty_list_does_nothing() {
-        let root = std::env::temp_dir().join(format!("lazytypst-main-emptymark-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("lazytypst-main-emptymark-{}", std::process::id()));
         let mut app = App::new(root, Vec::new(), Picker::halfblocks());
         press(&mut app, KeyCode::Char('m'));
         assert_eq!(app.main_file, None);
@@ -1437,7 +1709,10 @@ mod tests {
     fn q_quits_in_the_list_but_types_in_the_editor() {
         let mut app = app("quit");
         press(&mut app, KeyCode::Enter);
-        assert!(!press(&mut app, KeyCode::Char('q')), "q in the editor must not quit");
+        assert!(
+            !press(&mut app, KeyCode::Char('q')),
+            "q in the editor must not quit"
+        );
         assert!(screen(&mut app).contains("qtext of a"));
         press(&mut app, KeyCode::Esc);
         assert!(app.editor.is_none(), "Esc must save and close");
@@ -1457,7 +1732,8 @@ mod tests {
 
     #[test]
     fn an_empty_folder_shows_a_message_and_enter_does_nothing() {
-        let root = std::env::temp_dir().join(format!("lazytypst-main-empty-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("lazytypst-main-empty-{}", std::process::id()));
         let mut app = App::new(root, Vec::new(), Picker::halfblocks());
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
@@ -1470,7 +1746,10 @@ mod tests {
         let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
         assert_eq!(typst_problem(&missing), "not found in PATH");
         let other = std::io::Error::other("typst --version failed: exit status: 3");
-        assert_eq!(typst_problem(&other), "typst --version failed: exit status: 3");
+        assert_eq!(
+            typst_problem(&other),
+            "typst --version failed: exit status: 3"
+        );
     }
 
     #[test]
@@ -1481,14 +1760,25 @@ mod tests {
 
     #[test]
     fn the_version_text_says_that_typst_is_missing() {
-        let text = version_text("0.1.0", Err(std::io::Error::from(std::io::ErrorKind::NotFound)));
+        let text = version_text(
+            "0.1.0",
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        );
         assert_eq!(text, "lazytypst 0.1.0\ntypst: not found in PATH\n");
     }
 
     #[test]
     fn the_version_text_gives_the_reason_when_typst_fails() {
-        let text = version_text("0.1.0", Err(std::io::Error::other("typst --version failed: exit status: 3")));
-        assert_eq!(text, "lazytypst 0.1.0\ntypst: typst --version failed: exit status: 3\n");
+        let text = version_text(
+            "0.1.0",
+            Err(std::io::Error::other(
+                "typst --version failed: exit status: 3",
+            )),
+        );
+        assert_eq!(
+            text,
+            "lazytypst 0.1.0\ntypst: typst --version failed: exit status: 3\n"
+        );
     }
 
     #[test]
@@ -1496,13 +1786,17 @@ mod tests {
         let message = missing_typst_message(&std::io::Error::from(std::io::ErrorKind::NotFound));
         assert!(message.contains("typst"), "{message}");
         assert!(message.contains("not found in PATH"), "{message}");
-        assert!(message.contains("https://github.com/typst/typst#installation"), "{message}");
+        assert!(
+            message.contains("https://github.com/typst/typst#installation"),
+            "{message}"
+        );
         assert!(message.ends_with('\n'));
     }
 
     /// A new folder for the tests of `resolve_target`.
     fn target_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lazytypst-target-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lazytypst-target-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         fs::canonicalize(&dir).unwrap()
@@ -1512,7 +1806,13 @@ mod tests {
     fn a_folder_argument_is_the_root_and_opens_no_file() {
         let dir = target_dir("folder");
         let target = resolve_target(&dir).unwrap();
-        assert_eq!(target, Target { root: dir.clone(), open: None });
+        assert_eq!(
+            target,
+            Target {
+                root: dir.clone(),
+                open: None
+            }
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1522,7 +1822,13 @@ mod tests {
         fs::create_dir_all(dir.join("chapters")).unwrap();
         fs::write(dir.join("chapters").join("one.typ"), "= One\n").unwrap();
         let target = resolve_target(&dir.join("chapters").join("one.typ")).unwrap();
-        assert_eq!(target, Target { root: dir.join("chapters"), open: Some(PathBuf::from("one.typ")) });
+        assert_eq!(
+            target,
+            Target {
+                root: dir.join("chapters"),
+                open: Some(PathBuf::from("one.typ"))
+            }
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1531,9 +1837,16 @@ mod tests {
         let dir = target_dir("link");
         fs::create_dir_all(dir.join("real")).unwrap();
         fs::write(dir.join("real").join("real.typ"), "").unwrap();
-        std::os::unix::fs::symlink(dir.join("real").join("real.typ"), dir.join("link.typ")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real").join("real.typ"), dir.join("link.typ"))
+            .unwrap();
         let target = resolve_target(&dir.join("link.typ")).unwrap();
-        assert_eq!(target, Target { root: dir.clone(), open: Some(PathBuf::from("link.typ")) });
+        assert_eq!(
+            target,
+            Target {
+                root: dir.clone(),
+                open: Some(PathBuf::from("link.typ"))
+            }
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1542,9 +1855,18 @@ mod tests {
         let dir = target_dir("odd");
         fs::write(dir.join(".draft.typ"), "").unwrap();
         fs::create_dir_all(dir.join("book.typ")).unwrap();
-        assert_eq!(resolve_target(&dir.join(".draft.typ")).unwrap().open, Some(PathBuf::from(".draft.typ")));
+        assert_eq!(
+            resolve_target(&dir.join(".draft.typ")).unwrap().open,
+            Some(PathBuf::from(".draft.typ"))
+        );
         let folder = resolve_target(&dir.join("book.typ")).unwrap();
-        assert_eq!(folder, Target { root: dir.join("book.typ"), open: None });
+        assert_eq!(
+            folder,
+            Target {
+                root: dir.join("book.typ"),
+                open: None
+            }
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1555,7 +1877,10 @@ mod tests {
             fs::write(dir.join(name), "").unwrap();
             let (message, code) = resolve_target(&dir.join(name)).unwrap_err();
             assert_eq!(code, 2, "{name}");
-            assert!(message.contains(name) && message.contains(".typ"), "{message}");
+            assert!(
+                message.contains(name) && message.contains(".typ"),
+                "{message}"
+            );
         }
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1564,7 +1889,10 @@ mod tests {
     fn a_path_that_does_not_exist_gives_exit_code_1() {
         let (message, code) = resolve_target(Path::new("/no/such/path.typ")).unwrap_err();
         assert_eq!(code, 1);
-        assert!(message.contains("Cannot open /no/such/path.typ"), "{message}");
+        assert!(
+            message.contains("Cannot open /no/such/path.typ"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -1583,12 +1911,19 @@ mod tests {
         let mut app = app_with_three_files("target");
         app.open_target(PathBuf::from("b.typ"));
         let text = screen(&mut app);
-        assert!(text.contains("b.typ") && text.contains("text of b") && text.contains("Ctrl-S save"), "{text}");
+        assert!(
+            text.contains("b.typ") && text.contains("text of b") && text.contains("Ctrl-S save"),
+            "{text}"
+        );
 
         press(&mut app, KeyCode::Esc);
         let text = screen(&mut app);
         assert!(text.contains("a.typ") && text.contains("c.typ"), "{text}");
-        assert_eq!(app.list.selected(), Some(1), "the opened file must be selected in the list");
+        assert_eq!(
+            app.list.selected(),
+            Some(1),
+            "the opened file must be selected in the list"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1599,7 +1934,11 @@ mod tests {
         app.open_target(PathBuf::from(".draft.typ"));
         assert!(screen(&mut app).contains("text of draft"));
         press(&mut app, KeyCode::Esc);
-        assert_eq!(app.list.selected(), Some(0), "the selection stays when the file is not in the list");
+        assert_eq!(
+            app.list.selected(),
+            Some(0),
+            "the selection stays when the file is not in the list"
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
@@ -1621,7 +1960,10 @@ mod tests {
     fn the_root_comes_from_the_first_argument_even_if_it_is_not_utf8() {
         let name = OsString::from_vec(b"dir-\xff".to_vec());
         let list = [OsString::from("lazytypst"), name.clone()];
-        assert_eq!(parse_args(list.into_iter()), Ok(Args::Run(PathBuf::from(name))));
+        assert_eq!(
+            parse_args(list.into_iter()),
+            Ok(Args::Run(PathBuf::from(name)))
+        );
     }
 
     #[test]
@@ -1639,12 +1981,23 @@ mod tests {
 
     #[test]
     fn an_unknown_option_and_a_second_folder_are_errors() {
-        assert!(args(&["lazytypst", "--frobnicate"]).unwrap_err().contains("--frobnicate"));
-        assert!(args(&["lazytypst", "a", "b"]).unwrap_err().contains("one folder"));
+        assert!(
+            args(&["lazytypst", "--frobnicate"])
+                .unwrap_err()
+                .contains("--frobnicate")
+        );
+        assert!(
+            args(&["lazytypst", "a", "b"])
+                .unwrap_err()
+                .contains("one folder")
+        );
     }
 
     #[test]
     fn a_folder_that_starts_with_a_dash_works_with_a_dot_slash() {
-        assert_eq!(args(&["lazytypst", "./-notes"]), Ok(Args::Run(PathBuf::from("./-notes"))));
+        assert_eq!(
+            args(&["lazytypst", "./-notes"]),
+            Ok(Args::Run(PathBuf::from("./-notes")))
+        );
     }
 }

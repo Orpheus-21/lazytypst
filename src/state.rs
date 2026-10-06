@@ -12,8 +12,10 @@ use std::{
 /// The location follows the XDG rules: `$XDG_STATE_HOME`, or else `$HOME/.local/state`.
 /// A relative value is ignored, as the XDG rules say.
 pub fn state_file(xdg_state_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
-    let absolute = |value: Option<OsString>| value.map(PathBuf::from).filter(|path| path.is_absolute());
-    let base = absolute(xdg_state_home).or_else(|| absolute(home).map(|home| home.join(".local").join("state")))?;
+    let absolute =
+        |value: Option<OsString>| value.map(PathBuf::from).filter(|path| path.is_absolute());
+    let base = absolute(xdg_state_home)
+        .or_else(|| absolute(home).map(|home| home.join(".local").join("state")))?;
     Some(base.join("lazytypst").join("main-files"))
 }
 
@@ -28,11 +30,15 @@ pub fn load_main(file: &Path, root: &Path) -> Option<PathBuf> {
     let bytes = fs::read(file).ok()?;
     let main = bytes
         .split(|byte| *byte == b'\n')
-        .filter_map(|line| split_line(line).filter(|(saved_root, _)| *saved_root == root.as_os_str().as_bytes()))
+        .filter_map(|line| {
+            split_line(line).filter(|(saved_root, _)| *saved_root == root.as_os_str().as_bytes())
+        })
         .map(|(_, main)| PathBuf::from(OsStr::from_bytes(main)))
         .next_back()?;
     // The file is edited by hand sometimes. Trust only a plain relative path.
-    let plain = main.components().all(|part| matches!(part, Component::Normal(_)));
+    let plain = main
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)));
     (plain && root.join(&main).is_file()).then_some(main)
 }
 
@@ -55,7 +61,10 @@ pub fn save_main(file: &Path, root: &Path, main: Option<&Path>) -> io::Result<()
         Err(err) => return Err(err),
     };
     let mut new = Vec::new();
-    for line in old.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
+    for line in old
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
         if split_line(line).is_none_or(|(saved_root, _)| saved_root != root_bytes) {
             new.extend_from_slice(line);
             new.push(b'\n');
@@ -89,7 +98,8 @@ mod tests {
     use std::os::unix::ffi::OsStringExt;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lazytypst-state-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lazytypst-state-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -149,12 +159,21 @@ mod tests {
         save_main(&file, &one, Some(Path::new("main.typ"))).unwrap();
         save_main(&file, &two, Some(Path::new("chapters/one.typ"))).unwrap();
         assert_eq!(load_main(&file, &one), Some(PathBuf::from("main.typ")));
-        assert_eq!(load_main(&file, &two), Some(PathBuf::from("chapters/one.typ")));
+        assert_eq!(
+            load_main(&file, &two),
+            Some(PathBuf::from("chapters/one.typ"))
+        );
 
         // A new choice replaces the old choice of the same project only.
         save_main(&file, &one, Some(Path::new("chapters/one.typ"))).unwrap();
-        assert_eq!(load_main(&file, &one), Some(PathBuf::from("chapters/one.typ")));
-        assert_eq!(load_main(&file, &two), Some(PathBuf::from("chapters/one.typ")));
+        assert_eq!(
+            load_main(&file, &one),
+            Some(PathBuf::from("chapters/one.typ"))
+        );
+        assert_eq!(
+            load_main(&file, &two),
+            Some(PathBuf::from("chapters/one.typ"))
+        );
         assert_eq!(fs::read_to_string(&file).unwrap().lines().count(), 2);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -211,7 +230,11 @@ mod tests {
         let root = project(&dir, "book");
         fs::write(dir.join("outside.typ"), "").unwrap();
         let file = dir.join("main-files");
-        for bad in ["../outside.typ", "/etc/passwd", "chapters/../../outside.typ"] {
+        for bad in [
+            "../outside.typ",
+            "/etc/passwd",
+            "chapters/../../outside.typ",
+        ] {
             fs::write(&file, format!("{}\t{bad}\n", root.display())).unwrap();
             assert_eq!(load_main(&file, &root), None, "{bad}");
         }

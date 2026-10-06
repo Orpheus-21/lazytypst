@@ -32,7 +32,14 @@ pub struct Preview {
 
 impl Preview {
     pub fn new(picker: Picker) -> Self {
-        Self { picker, dir: None, count: 0, shown: 1, wanted: 1, page: None }
+        Self {
+            picker,
+            dir: None,
+            count: 0,
+            shown: 1,
+            wanted: 1,
+            page: None,
+        }
     }
 
     /// The page that the next compile must render, counted from 1.
@@ -133,7 +140,10 @@ pub fn page_in(dir: &Path) -> Option<(usize, usize)> {
         .flatten()
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
-            let (number, count) = name.strip_prefix("page-")?.strip_suffix(".png")?.split_once("-of-")?;
+            let (number, count) = name
+                .strip_prefix("page-")?
+                .strip_suffix(".png")?
+                .split_once("-of-")?;
             let (number, count) = (number.parse::<usize>().ok()?, count.parse::<usize>().ok()?);
             (1 <= number && number <= count).then_some((number, count))
         })
@@ -151,7 +161,8 @@ mod tests {
     /// Makes a folder with the one file that a compile of page `number` writes: `page-<number>-of-<count>.png`.
     /// The image is 40 by 40 pixels. Page 1 is red, page 2 is green, and all other pages are blue.
     fn page(name: &str, number: usize, count: usize) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lazytypst-preview-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lazytypst-preview-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let rgb = match number {
@@ -172,14 +183,22 @@ mod tests {
     /// Draws the pane on a 30 by 10 screen. Returns the text and a flag for each color.
     fn draw(preview: &mut Preview) -> (String, bool, bool) {
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
-        terminal.draw(|frame| preview.draw(frame, frame.area())).unwrap();
+        terminal
+            .draw(|frame| preview.draw(frame, frame.area()))
+            .unwrap();
         let cells = terminal.backend().buffer().content();
         let has = |color| cells.iter().any(|cell| cell.bg == color);
         (screen_text(&terminal), has(RED), has(GREEN))
     }
 
     fn screen_text(terminal: &Terminal<TestBackend>) -> String {
-        terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect()
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
     }
 
     #[test]
@@ -234,13 +253,17 @@ mod tests {
         let mut preview = Preview::new(Picker::halfblocks());
         preview.load(good.clone()).unwrap();
 
-        let empty = std::env::temp_dir().join(format!("lazytypst-preview-empty-{}", std::process::id()));
+        let empty =
+            std::env::temp_dir().join(format!("lazytypst-preview-empty-{}", std::process::id()));
         fs::create_dir_all(&empty).unwrap();
         let err = preview.load(empty.clone()).unwrap_err();
         assert!(err.contains("no page file"), "{err}");
         assert!(preview.has_page());
         assert!(good.exists(), "the folder of the shown page was deleted");
-        assert!(!empty.exists(), "the folder of the failed load is still there");
+        assert!(
+            !empty.exists(),
+            "the folder of the failed load is still there"
+        );
         assert!(draw(&mut preview).0.contains("Preview 1/1"));
         fs::remove_dir_all(good).unwrap();
     }
@@ -250,7 +273,12 @@ mod tests {
         let dir = red_page("bad");
         fs::write(dir.join("page-1-of-1.png"), "not a png").unwrap();
         let mut preview = Preview::new(Picker::halfblocks());
-        assert!(preview.load(dir.clone()).unwrap_err().contains("Cannot load"));
+        assert!(
+            preview
+                .load(dir.clone())
+                .unwrap_err()
+                .contains("Cannot load")
+        );
         assert!(!preview.has_page());
         assert!(!dir.exists());
     }
@@ -259,7 +287,9 @@ mod tests {
     fn the_pane_shows_a_text_before_the_first_page() {
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
         let mut preview = Preview::new(Picker::halfblocks());
-        terminal.draw(|frame| preview.draw(frame, frame.area())).unwrap();
+        terminal
+            .draw(|frame| preview.draw(frame, frame.area()))
+            .unwrap();
         assert!(screen_text(&terminal).contains("No preview yet."));
     }
 
@@ -267,7 +297,10 @@ mod tests {
     fn turn_changes_the_wanted_page_and_stops_at_the_first_and_the_last_page() {
         let dir = page("turn", 1, 3);
         let mut preview = Preview::new(Picker::halfblocks());
-        assert!(!preview.turn(true), "no page count is known before the first load");
+        assert!(
+            !preview.turn(true),
+            "no page count is known before the first load"
+        );
         preview.load(dir.clone()).unwrap();
 
         assert!(!preview.turn(false), "page 1 has no previous page");
@@ -323,7 +356,10 @@ mod tests {
         preview.load(first).unwrap();
         assert!(preview.turn(true));
         let (text, red, green) = draw(&mut preview);
-        assert!(text.contains("Preview 1/3") && red && !green, "the old page must stay: {text}");
+        assert!(
+            text.contains("Preview 1/3") && red && !green,
+            "the old page must stay: {text}"
+        );
 
         preview.load(second.clone()).unwrap();
         assert!(draw(&mut preview).0.contains("Preview 2/3"));
@@ -339,15 +375,16 @@ mod tests {
 
     #[test]
     fn page_in_ignores_names_that_are_not_a_page_file() {
-        let dir = std::env::temp_dir().join(format!("lazytypst-preview-names-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lazytypst-preview-names-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         for name in [
-            "page-1.png",           // the old name
-            "page-x-of-3.png",      // not a number
-            "page-0-of-3.png",      // pages count from 1
-            "page-4-of-3.png",      // beyond the end
-            "page-1-of-3.png.tmp",  // another ending
+            "page-1.png",          // the old name
+            "page-x-of-3.png",     // not a number
+            "page-0-of-3.png",     // pages count from 1
+            "page-4-of-3.png",     // beyond the end
+            "page-1-of-3.png.tmp", // another ending
             "notes.txt",
         ] {
             fs::write(dir.join(name), "").unwrap();
@@ -365,12 +402,17 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
         let mut preview = Preview::new(Picker::halfblocks());
         preview.load(dir.clone()).unwrap();
-        terminal.draw(|frame| preview.draw(frame, frame.area())).unwrap();
+        terminal
+            .draw(|frame| preview.draw(frame, frame.area()))
+            .unwrap();
 
         let screen = screen_text(&terminal);
         let red = Color::Rgb(255, 0, 0);
         let cells = terminal.backend().buffer().content();
-        assert!(cells.iter().any(|cell| cell.bg == red), "no red cell on screen");
+        assert!(
+            cells.iter().any(|cell| cell.bg == red),
+            "no red cell on screen"
+        );
         assert!(!screen.contains("No preview yet."));
         fs::remove_dir_all(dir).unwrap();
     }

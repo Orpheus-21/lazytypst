@@ -25,7 +25,12 @@ pub struct Report {
 impl Report {
     pub fn new(ok: bool, lines: Vec<String>) -> Self {
         let diagnostics = lines.iter().map(|line| Diagnostic::parse(line)).collect();
-        Self { ok, lines, diagnostics, elapsed: None }
+        Self {
+            ok,
+            lines,
+            diagnostics,
+            elapsed: None,
+        }
     }
 
     pub fn with_elapsed(mut self, elapsed: Duration) -> Self {
@@ -48,7 +53,10 @@ impl Report {
     }
 
     fn count(&self, severity: Severity) -> usize {
-        self.diagnostics.iter().filter(|diagnostic| diagnostic.severity == severity).count()
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == severity)
+            .count()
     }
 
     /// The first error that has a position in a file.
@@ -94,10 +102,13 @@ impl Diagnostic {
             column: 0,
             message: line.to_string(),
         };
-        let found = [(": error: ", Severity::Error), (": warning: ", Severity::Warning)]
-            .into_iter()
-            .filter_map(|(marker, severity)| line.find(marker).map(|at| (at, marker, severity)))
-            .min_by_key(|(at, _, _)| *at);
+        let found = [
+            (": error: ", Severity::Error),
+            (": warning: ", Severity::Warning),
+        ]
+        .into_iter()
+        .filter_map(|(marker, severity)| line.find(marker).map(|at| (at, marker, severity)))
+        .min_by_key(|(at, _, _)| *at);
         let Some((at, marker, severity)) = found else {
             return other();
         };
@@ -189,7 +200,10 @@ fn remove_stale_dirs_in(tmp: &Path, uid: u32) {
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(pid) = name.to_str().and_then(|name| name.strip_prefix("lazytypst-")) else {
+        let Some(pid) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("lazytypst-"))
+        else {
             continue;
         };
         if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -218,7 +232,10 @@ pub fn version_of(program: &str) -> io::Result<String> {
         .stderr(Stdio::null())
         .output()?;
     if !output.status.success() {
-        return Err(io::Error::other(format!("{program} --version failed: {}", output.status)));
+        return Err(io::Error::other(format!(
+            "{program} --version failed: {}",
+            output.status
+        )));
     }
     String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -244,7 +261,10 @@ enum State {
     /// The command did not start. The report waits here until `try_report` takes it.
     Failed(Option<Report>),
     /// The command runs. A thread reads its stderr and sends the bytes when the process closes stderr.
-    Running { child: Child, stderr: Receiver<(Vec<u8>, Duration)> },
+    Running {
+        child: Child,
+        stderr: Receiver<(Vec<u8>, Duration)>,
+    },
 }
 
 impl Job {
@@ -261,7 +281,14 @@ impl Job {
         let mut command = Command::new("typst");
         command
             .current_dir(root)
-            .args(["compile", "--format", "png", "--diagnostic-format", "short", "--root"])
+            .args([
+                "compile",
+                "--format",
+                "png",
+                "--diagnostic-format",
+                "short",
+                "--root",
+            ])
             .arg(root)
             .arg("--pages")
             .arg(page.to_string())
@@ -276,7 +303,14 @@ impl Job {
         let mut command = Command::new("typst");
         command
             .current_dir(root)
-            .args(["compile", "--format", "pdf", "--diagnostic-format", "short", "--root"])
+            .args([
+                "compile",
+                "--format",
+                "pdf",
+                "--diagnostic-format",
+                "short",
+                "--root",
+            ])
             .arg(root)
             .arg(file)
             .arg(&pdf);
@@ -295,12 +329,18 @@ impl Job {
     }
 
     fn failed(message: String, output: PathBuf) -> Job {
-        Job { state: State::Failed(Some(Report::failed(message))), output }
+        Job {
+            state: State::Failed(Some(Report::failed(message))),
+            output,
+        }
     }
 
     /// Starts the command. The lines it prints on stderr become the report.
     fn spawn(mut command: Command, output: PathBuf) -> Job {
-        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
         let started = Instant::now();
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -320,7 +360,10 @@ impl Job {
             // The receiver is gone when the job was dropped. Then nobody needs the bytes.
             let _ = tx.send((bytes, elapsed));
         });
-        Job { state: State::Running { child, stderr }, output }
+        Job {
+            state: State::Running { child, stderr },
+            output,
+        }
     }
 
     /// Returns the report if the command has ended. Never waits.
@@ -355,7 +398,10 @@ impl Drop for Job {
 }
 
 fn report(status: io::Result<ExitStatus>, stderr: &[u8]) -> Report {
-    let mut lines: Vec<String> = String::from_utf8_lossy(stderr).lines().map(String::from).collect();
+    let mut lines: Vec<String> = String::from_utf8_lossy(stderr)
+        .lines()
+        .map(String::from)
+        .collect();
     match status {
         Ok(status) => {
             let ok = status.success();
@@ -379,14 +425,18 @@ mod tests {
             if let Some(report) = job.try_report() {
                 return report;
             }
-            assert!(start.elapsed() < Duration::from_secs(10), "the job did not end");
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "the job did not end"
+            );
             thread::sleep(Duration::from_millis(10));
         }
     }
 
     /// Makes a `doc.typ` with `content` in a new temporary folder. Returns the file and a page folder.
     fn project(name: &str, content: &str) -> (PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("lazytypst-compile-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lazytypst-compile-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let file = dir.join("doc.typ");
@@ -399,7 +449,13 @@ mod tests {
     }
 
     fn at(file: &str, line: usize, column: usize, severity: Severity, message: &str) -> Diagnostic {
-        Diagnostic { severity, file: Some(PathBuf::from(file)), line, column, message: message.into() }
+        Diagnostic {
+            severity,
+            file: Some(PathBuf::from(file)),
+            line,
+            column,
+            message: message.into(),
+        }
     }
 
     #[test]
@@ -414,7 +470,13 @@ mod tests {
     fn a_warning_line_is_parsed() {
         assert_eq!(
             parse("w.typ:1:16: warning: unknown font family: nosuchfont"),
-            at("w.typ", 1, 16, Severity::Warning, "unknown font family: nosuchfont")
+            at(
+                "w.typ",
+                1,
+                16,
+                Severity::Warning,
+                "unknown font family: nosuchfont"
+            )
         );
     }
 
@@ -422,7 +484,13 @@ mod tests {
     fn a_path_with_spaces_or_a_colon_is_parsed() {
         assert_eq!(
             parse("sp ace/a b.typ:1:1: error: unknown variable: nope"),
-            at("sp ace/a b.typ", 1, 1, Severity::Error, "unknown variable: nope")
+            at(
+                "sp ace/a b.typ",
+                1,
+                1,
+                Severity::Error,
+                "unknown variable: nope"
+            )
         );
         assert_eq!(
             parse("co:lon/x.typ:3:2: error: boom"),
@@ -434,7 +502,13 @@ mod tests {
     fn a_message_with_colons_and_markers_stays_whole() {
         assert_eq!(
             parse("a.typ:2:3: error: expected: error: found: warning: x"),
-            at("a.typ", 2, 3, Severity::Error, "expected: error: found: warning: x")
+            at(
+                "a.typ",
+                2,
+                3,
+                Severity::Error,
+                "expected: error: found: warning: x"
+            )
         );
     }
 
@@ -457,12 +531,18 @@ mod tests {
 
     #[test]
     fn a_report_parses_each_line_once_and_keeps_the_text() {
-        let report = Report::new(false, vec!["a.typ:1:2: error: boom".into(), "hint: x".into()]);
+        let report = Report::new(
+            false,
+            vec!["a.typ:1:2: error: boom".into(), "hint: x".into()],
+        );
         assert_eq!(report.lines, ["a.typ:1:2: error: boom", "hint: x"]);
         assert_eq!(report.diagnostics.len(), 2);
         assert_eq!(report.diagnostics[0].severity, Severity::Error);
         assert_eq!(report.diagnostics[1].severity, Severity::Other);
-        assert_eq!(Report::failed("Cannot run typst").diagnostics[0].severity, Severity::Other);
+        assert_eq!(
+            Report::failed("Cannot run typst").diagnostics[0].severity,
+            Severity::Other
+        );
     }
 
     #[test]
@@ -479,7 +559,13 @@ mod tests {
             ],
         );
         assert_eq!((report.error_count(), report.warning_count()), (2, 1));
-        assert_eq!((Report::new(true, vec![]).error_count(), Report::new(true, vec![]).warning_count()), (0, 0));
+        assert_eq!(
+            (
+                Report::new(true, vec![]).error_count(),
+                Report::new(true, vec![]).warning_count()
+            ),
+            (0, 0)
+        );
     }
 
     #[test]
@@ -493,15 +579,26 @@ mod tests {
                 "c.typ:9:9: error: e2".into(),
             ],
         );
-        assert_eq!(report.first_error(), Some(&at("b.typ", 4, 7, Severity::Error, "e1")));
-        assert_eq!(Report::new(true, vec!["a.typ:1:1: warning: w".into()]).first_error(), None);
+        assert_eq!(
+            report.first_error(),
+            Some(&at("b.typ", 4, 7, Severity::Error, "e1"))
+        );
+        assert_eq!(
+            Report::new(true, vec!["a.typ:1:1: warning: w".into()]).first_error(),
+            None
+        );
         assert_eq!(Report::new(true, vec![]).first_error(), None);
     }
 
     #[test]
     fn a_real_typst_error_gets_a_position() {
         let (file, pages) = project("diag", "= Title\n#nope()\n");
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
+        let report = wait(&mut Job::start(
+            &file,
+            file.parent().unwrap(),
+            pages.clone(),
+            1,
+        ));
         let first = report.first_error().expect("an error with a position");
         assert_eq!((first.line, first.column), (2, 1), "{first:?}");
         assert!(first.message.contains("unknown variable"), "{first:?}");
@@ -510,9 +607,18 @@ mod tests {
 
     #[test]
     fn typst_counts_the_column_in_characters_from_1() {
-        for (text, column) in [("é #nope()", 3), ("संस्कृतम् #nope()", 11), ("👨\u{200d}👩\u{200d}👧\u{200d}👦 #nope()", 9)] {
+        for (text, column) in [
+            ("é #nope()", 3),
+            ("संस्कृतम् #nope()", 11),
+            ("👨\u{200d}👩\u{200d}👧\u{200d}👦 #nope()", 9),
+        ] {
             let (file, pages) = project("column", &format!("{text}\n"));
-            let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
+            let report = wait(&mut Job::start(
+                &file,
+                file.parent().unwrap(),
+                pages.clone(),
+                1,
+            ));
             let first = report.first_error().expect("an error with a position");
             assert_eq!(first.column, column, "{text}");
             fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -522,7 +628,12 @@ mod tests {
     #[test]
     fn a_valid_file_makes_a_png_page() {
         let (file, pages) = project("ok", "= Title\nSome text.\n");
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
+        let report = wait(&mut Job::start(
+            &file,
+            file.parent().unwrap(),
+            pages.clone(),
+            1,
+        ));
         assert!(report.ok, "{:?}", report.lines);
         assert!(report.lines.is_empty());
         let png = fs::read(pages.join("page-1-of-1.png")).unwrap();
@@ -555,18 +666,37 @@ mod tests {
         fs::write(&chapter, "#nope()\n").unwrap();
 
         let report = wait(&mut Job::start(&chapter, root, pages.clone(), 1));
-        assert!(report.lines[0].starts_with("chapters/c.typ:1:"), "{:?}", report.lines);
+        assert!(
+            report.lines[0].starts_with("chapters/c.typ:1:"),
+            "{:?}",
+            report.lines
+        );
         let report = wait(&mut Job::start_pdf(&chapter, root, root.join("c.pdf")));
-        assert!(report.lines[0].starts_with("chapters/c.typ:1:"), "{:?}", report.lines);
+        assert!(
+            report.lines[0].starts_with("chapters/c.typ:1:"),
+            "{:?}",
+            report.lines
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn a_compile_of_one_page_writes_exactly_one_png_named_with_the_page_count() {
-        let (file, pages) = project("onepage", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 2));
+        let (file, pages) = project(
+            "onepage",
+            "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n",
+        );
+        let report = wait(&mut Job::start(
+            &file,
+            file.parent().unwrap(),
+            pages.clone(),
+            2,
+        ));
         assert!(report.ok, "{:?}", report.lines);
-        let names: Vec<_> = fs::read_dir(&pages).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = fs::read_dir(&pages)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, ["page-2-of-3.png"]);
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
@@ -574,9 +704,18 @@ mod tests {
     #[test]
     fn a_page_beyond_the_end_gives_success_and_no_file() {
         let (file, pages) = project("beyond", "= One\n#pagebreak()\n= Two\n");
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 5));
+        let report = wait(&mut Job::start(
+            &file,
+            file.parent().unwrap(),
+            pages.clone(),
+            5,
+        ));
         assert!(report.ok, "{:?}", report.lines);
-        assert_eq!(fs::read_dir(&pages).unwrap().count(), 0, "typst wrote a file");
+        assert_eq!(
+            fs::read_dir(&pages).unwrap().count(),
+            0,
+            "typst wrote a file"
+        );
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
 
@@ -596,9 +735,17 @@ mod tests {
     fn a_pdf_job_with_an_error_writes_no_file() {
         let (file, pages) = project("pdf-bad", "#nope()\n");
         let pdf = pages.with_file_name("out.pdf");
-        let report = wait(&mut Job::start_pdf(&file, file.parent().unwrap(), pdf.clone()));
+        let report = wait(&mut Job::start_pdf(
+            &file,
+            file.parent().unwrap(),
+            pdf.clone(),
+        ));
         assert!(!report.ok);
-        assert!(report.lines.iter().any(|l| l.contains(":1:")), "{:?}", report.lines);
+        assert!(
+            report.lines.iter().any(|l| l.contains(":1:")),
+            "{:?}",
+            report.lines
+        );
         assert!(!pdf.exists());
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
@@ -606,10 +753,18 @@ mod tests {
     #[test]
     fn an_error_report_names_the_line() {
         let (file, pages) = project("bad", "= Title\n#nope()\n");
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
+        let report = wait(&mut Job::start(
+            &file,
+            file.parent().unwrap(),
+            pages.clone(),
+            1,
+        ));
         assert!(!report.ok);
         assert!(
-            report.lines.iter().any(|l| l.contains(":2:") && l.contains("error")),
+            report
+                .lines
+                .iter()
+                .any(|l| l.contains(":2:") && l.contains("error")),
             "{:?}",
             report.lines
         );
@@ -618,7 +773,8 @@ mod tests {
 
     /// A new empty folder for a test, and the user id of its owner.
     fn test_dir(name: &str) -> (PathBuf, u32) {
-        let dir = std::env::temp_dir().join(format!("lazytypst-ownpid-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lazytypst-ownpid-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let uid = uid_of(&dir);
@@ -628,7 +784,8 @@ mod tests {
     /// A program for a test: a shell script in a new folder. Returns the path of the script and its folder.
     fn fake_program(name: &str, script: &str) -> (PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("lazytypst-fake-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lazytypst-fake-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let program = dir.join("typst");
@@ -655,14 +812,20 @@ mod tests {
 
     #[test]
     fn the_version_is_the_first_line_that_the_program_prints() {
-        let (program, dir) = fake_program("version", "echo 'typst 9.9.9 (abc123)'; echo 'a second line'");
+        let (program, dir) = fake_program(
+            "version",
+            "echo 'typst 9.9.9 (abc123)'; echo 'a second line'",
+        );
         assert_eq!(version_of_script(&program).unwrap(), "typst 9.9.9 (abc123)");
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn the_program_gets_the_argument_version() {
-        let (program, dir) = fake_program("arg", r#"[ "$1" = "--version" ] && echo "got the argument" || echo "wrong: $*""#);
+        let (program, dir) = fake_program(
+            "arg",
+            r#"[ "$1" = "--version" ] && echo "got the argument" || echo "wrong: $*""#,
+        );
         assert_eq!(version_of_script(&program).unwrap(), "got the argument");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -707,12 +870,18 @@ mod tests {
         let job = &mut Job::ended_with_success(PathBuf::new());
         thread::sleep(Duration::from_millis(600)); // nobody polls for a while
         let elapsed = wait(job).elapsed.unwrap();
-        assert!(elapsed < Duration::from_millis(400), "the time includes the wait for the poll: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "the time includes the wait for the poll: {elapsed:?}"
+        );
     }
 
     #[test]
     fn a_report_of_a_command_that_did_not_start_has_no_time() {
-        let report = wait(&mut Job::spawn(Command::new("no-such-program-xyz"), PathBuf::new()));
+        let report = wait(&mut Job::spawn(
+            Command::new("no-such-program-xyz"),
+            PathBuf::new(),
+        ));
         assert_eq!(report.elapsed, None);
         assert_eq!(Report::failed("x").elapsed, None);
         assert_eq!(Report::new(true, vec![]).elapsed, None);
@@ -728,8 +897,15 @@ mod tests {
         fs::write(path.join("old-file"), "old").unwrap();
 
         make_out_dir_for(&path, uid).unwrap();
-        assert_eq!(fs::read_dir(&path).unwrap().count(), 0, "the folder must be new and empty");
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            fs::read_dir(&path).unwrap().count(),
+            0,
+            "the folder must be new and empty"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -754,7 +930,13 @@ mod tests {
         let err = make_out_dir_for(&path, uid).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(target.join("keep")).unwrap(), "keep");
-        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink(), "the link was removed");
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link was removed"
+        );
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -763,7 +945,10 @@ mod tests {
         let (base, uid) = test_dir("dangling");
         let path = base.join("lazytypst-123");
         std::os::unix::fs::symlink(base.join("nowhere"), &path).unwrap();
-        assert_eq!(make_out_dir_for(&path, uid).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            make_out_dir_for(&path, uid).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
         assert!(!base.join("nowhere").exists(), "the link target was made");
         fs::remove_dir_all(base).unwrap();
     }
@@ -773,7 +958,10 @@ mod tests {
         let (base, uid) = test_dir("file");
         let path = base.join("lazytypst-123");
         fs::write(&path, "keep").unwrap();
-        assert_eq!(make_out_dir_for(&path, uid).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            make_out_dir_for(&path, uid).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), "keep");
         fs::remove_dir_all(base).unwrap();
     }
@@ -785,7 +973,10 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("keep"), "keep").unwrap();
         // The folder belongs to `uid`. For the process, the current user is another one.
-        assert_eq!(make_out_dir_for(&path, uid + 1).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            make_out_dir_for(&path, uid + 1).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
         assert_eq!(fs::read_to_string(path.join("keep")).unwrap(), "keep");
         fs::remove_dir_all(base).unwrap();
     }
@@ -796,8 +987,14 @@ mod tests {
         let path = std::env::temp_dir().join(format!("lazytypst-private-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         make_private_dir(&path).unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(make_private_dir(&path).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            make_private_dir(&path).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
         fs::remove_dir(&path).unwrap();
     }
 
@@ -820,7 +1017,8 @@ mod tests {
 
     /// A new folder that stands for the temporary directory in the stale folder tests.
     fn fake_tmp(name: &str) -> PathBuf {
-        let tmp = std::env::temp_dir().join(format!("lazytypst-stale-{name}-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("lazytypst-stale-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         tmp
@@ -873,8 +1071,14 @@ mod tests {
         fs::create_dir_all(&plus).unwrap();
 
         remove_stale_dirs_in(&tmp, uid_of(&tmp));
-        assert!(fs::symlink_metadata(&link).is_ok(), "the symlink was deleted");
-        assert!(tmp.join("target").join("keep").exists(), "the symlink target was emptied");
+        assert!(
+            fs::symlink_metadata(&link).is_ok(),
+            "the symlink was deleted"
+        );
+        assert!(
+            tmp.join("target").join("keep").exists(),
+            "the symlink target was emptied"
+        );
         assert!(other.exists() && plus.exists());
         fs::remove_dir_all(&tmp).unwrap();
     }
@@ -891,7 +1095,12 @@ mod tests {
     fn a_missing_input_file_is_a_failure() {
         let (file, pages) = project("missing", "");
         fs::remove_file(&file).unwrap();
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
+        let report = wait(&mut Job::start(
+            &file,
+            file.parent().unwrap(),
+            pages.clone(),
+            1,
+        ));
         assert!(!report.ok);
         assert!(!report.lines.is_empty());
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -908,9 +1117,16 @@ mod tests {
 
     #[test]
     fn a_missing_program_is_a_failure() {
-        let report = wait(&mut Job::spawn(Command::new("no-such-program-xyz"), PathBuf::new()));
+        let report = wait(&mut Job::spawn(
+            Command::new("no-such-program-xyz"),
+            PathBuf::new(),
+        ));
         assert!(!report.ok);
-        assert!(report.lines[0].contains("Cannot run no-such-program-xyz"), "{:?}", report.lines);
+        assert!(
+            report.lines[0].contains("Cannot run no-such-program-xyz"),
+            "{:?}",
+            report.lines
+        );
     }
 
     #[test]
@@ -927,6 +1143,9 @@ mod tests {
 
         drop(job);
         // The process is killed and reaped, so the kernel has removed its entry.
-        assert!(!proc_dir.exists(), "the process is still in the process table");
+        assert!(
+            !proc_dir.exists(),
+            "the process is still in the process table"
+        );
     }
 }

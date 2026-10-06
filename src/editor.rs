@@ -66,7 +66,9 @@ fn wrap_rows(text: &str, width: usize) -> Vec<String> {
         }
         for letter in word.chars() {
             let mut one = [0; 4];
-            if !row.is_empty() && display_width(&row) + display_width(letter.encode_utf8(&mut one)) > width {
+            if !row.is_empty()
+                && display_width(&row) + display_width(letter.encode_utf8(&mut one)) > width
+            {
                 rows.push(std::mem::take(&mut row));
             }
             row.push(letter);
@@ -81,13 +83,20 @@ fn wrap_rows(text: &str, width: usize) -> Vec<String> {
 fn fit_rows(lines: Vec<(String, Style)>, width: usize, height: usize) -> Vec<Line<'static>> {
     let mut rows: Vec<Line<'static>> = lines
         .into_iter()
-        .flat_map(|(text, style)| wrap_rows(&text, width).into_iter().map(move |row| Line::styled(row, style)))
+        .flat_map(|(text, style)| {
+            wrap_rows(&text, width)
+                .into_iter()
+                .map(move |row| Line::styled(row, style))
+        })
         .collect();
     if rows.len() > height {
         let shown = height.saturating_sub(1);
         let hidden = rows.len() - shown;
         rows.truncate(shown);
-        rows.push(Line::styled(format!("+{hidden} more"), Style::new().add_modifier(Modifier::DIM)));
+        rows.push(Line::styled(
+            format!("+{hidden} more"),
+            Style::new().add_modifier(Modifier::DIM),
+        ));
     }
     rows
 }
@@ -110,7 +119,10 @@ fn counts_text(errors: usize, warnings: usize) -> Option<String> {
         1 => Some(format!("1 {word}")),
         _ => Some(format!("{count} {word}s")),
     };
-    let parts: Vec<String> = [part(errors, "error"), part(warnings, "warning")].into_iter().flatten().collect();
+    let parts: Vec<String> = [part(errors, "error"), part(warnings, "warning")]
+        .into_iter()
+        .flatten()
+        .collect();
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
@@ -154,7 +166,12 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn open(path: PathBuf, root: PathBuf, main: Option<PathBuf>, picker: Picker) -> io::Result<Self> {
+    pub fn open(
+        path: PathBuf,
+        root: PathBuf,
+        main: Option<PathBuf>,
+        picker: Picker,
+    ) -> io::Result<Self> {
         let text = fs::read_to_string(&path)?;
         let mut textarea = TextArea::new(text.lines().map(String::from).collect());
         textarea.set_cursor_line_style(Style::default());
@@ -234,11 +251,17 @@ impl Editor {
             if self.save(false) {
                 // The new export replaces the old export. Dropping the old export kills its process.
                 let target = self.compile_target().to_path_buf();
-                self.export = Some(Job::start_pdf(&target, &self.root, target.with_extension("pdf")));
+                self.export = Some(Job::start_pdf(
+                    &target,
+                    &self.root,
+                    target.with_extension("pdf"),
+                ));
                 self.exported = None;
                 self.message = "Exporting the PDF...".into();
             }
-        } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Down | KeyCode::Up) {
+        } else if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Down | KeyCode::Up)
+        {
             // Alt with an arrow key arrives as one escape sequence. Alt with a letter arrives as Esc and
             // the letter, so a fast Esc and n looked like Alt-n.
             // A page turn renders the new page with a new compile. It does not save: the file on disk is
@@ -248,7 +271,9 @@ impl Editor {
                 self.recover = None; // the user's choice wins
                 self.start_compile();
             }
-        } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Home | KeyCode::End) {
+        } else if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Home | KeyCode::End)
+        {
             // The same rules as for a page turn: no save, and the user's choice ends a recovery.
             if self.preview.turn_to(key.code == KeyCode::End) {
                 self.recover = None;
@@ -283,7 +308,8 @@ impl Editor {
     /// last line, and a column beyond the end of a line goes to the end of that line.
     pub fn set_cursor_position(&mut self, (row, column): (usize, usize)) {
         let to_u16 = |number: usize| u16::try_from(number).unwrap_or(u16::MAX);
-        self.textarea.move_cursor(CursorMove::Jump(to_u16(row), to_u16(column)));
+        self.textarea
+            .move_cursor(CursorMove::Jump(to_u16(row), to_u16(column)));
     }
 
     /// Moves the cursor to the first error of the last report, if that error is in the open file.
@@ -303,7 +329,8 @@ impl Editor {
         // Typst counts from 1. The text area counts from 0, in characters, and it stops at the end of the text.
         let to_index = |number: usize| u16::try_from(number.saturating_sub(1)).unwrap_or(u16::MAX);
         let (line, column) = (error.line, error.column);
-        self.textarea.move_cursor(CursorMove::Jump(to_index(line), to_index(column)));
+        self.textarea
+            .move_cursor(CursorMove::Jump(to_index(line), to_index(column)));
         self.message = format!("Error at {line}:{column}: {}", error.message);
     }
 
@@ -318,7 +345,12 @@ impl Editor {
         self.stop_compile();
         let target = self.compile_target().to_path_buf();
         let dir = compile::next_dir(&self.pages_root);
-        self.job = Some(Job::start(&target, &self.root, dir, self.preview.wanted_page()));
+        self.job = Some(Job::start(
+            &target,
+            &self.root,
+            dir,
+            self.preview.wanted_page(),
+        ));
     }
 
     /// The file that the compile and the export use: the main file, or else the open file.
@@ -371,7 +403,10 @@ impl Editor {
         if !report.ok {
             self.recover = None;
             let _ = fs::remove_dir_all(dir);
-        } else if page_in(&dir).is_none() && self.recover.is_none() && self.preview.wanted_page() > 1 {
+        } else if page_in(&dir).is_none()
+            && self.recover.is_none()
+            && self.preview.wanted_page() > 1
+        {
             let _ = fs::remove_dir_all(dir);
             self.recover = Some(self.preview.wanted_page());
             self.preview.want(1);
@@ -441,7 +476,10 @@ impl Editor {
                     .map(|(line, diagnostic)| (line.clone(), severity_style(diagnostic.severity)));
                 (color, head.into_iter().chain(body).collect())
             }
-            None => (Color::Reset, vec![("Press Ctrl-B to compile.".to_string(), plain)]),
+            None => (
+                Color::Reset,
+                vec![("Press Ctrl-B to compile.".to_string(), plain)],
+            ),
         };
         // The title: the counts of errors and warnings, and for a failed compile also its time.
         let mut title = "Compile".to_string();
@@ -464,16 +502,24 @@ impl Editor {
         if let Some(pdf) = &self.exported {
             lines.push((format!("Exported {}", pdf.display()), plain));
         }
-        let block = Block::bordered().title(title).border_style(Style::new().fg(color));
+        let block = Block::bordered()
+            .title(title)
+            .border_style(Style::new().fg(color));
         let inner = block.inner(area);
-        Paragraph::new(fit_rows(lines, usize::from(inner.width), usize::from(inner.height))).block(block)
+        Paragraph::new(fit_rows(
+            lines,
+            usize::from(inner.width),
+            usize::from(inner.height),
+        ))
+        .block(block)
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
         let [main, status] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
         let [left, right] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(main);
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(main);
         let [body, pane] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(PANE_HEIGHT)]).areas(left);
         let marker = if self.dirty { " [+]" } else { "" };
@@ -502,7 +548,10 @@ impl Editor {
         let [hint_area, position_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(status);
         frame.render_widget(Paragraph::new(hint), hint_area);
-        frame.render_widget(Paragraph::new(position).alignment(Alignment::Right), position_area);
+        frame.render_widget(
+            Paragraph::new(position).alignment(Alignment::Right),
+            position_area,
+        );
     }
 }
 
@@ -521,11 +570,17 @@ mod tests {
     /// that holds `main`. Without a main file, the root is the folder of the file.
     fn open_with_main(path: &std::path::Path, main: Option<&str>) -> Editor {
         let root = match main {
-            Some(name) => path.ancestors().skip(1).find(|dir| dir.join(name).exists()).unwrap().to_path_buf(),
+            Some(name) => path
+                .ancestors()
+                .skip(1)
+                .find(|dir| dir.join(name).exists())
+                .unwrap()
+                .to_path_buf(),
             None => path.parent().unwrap().to_path_buf(),
         };
         let main = main.map(|name| root.join(name));
-        let mut editor = Editor::open(path.to_path_buf(), root.clone(), main, Picker::halfblocks()).unwrap();
+        let mut editor =
+            Editor::open(path.to_path_buf(), root.clone(), main, Picker::halfblocks()).unwrap();
         editor.pages_root = root.join("pages");
         editor
     }
@@ -552,7 +607,10 @@ mod tests {
     fn wait_for_report(editor: &mut Editor) {
         let start = Instant::now();
         while !editor.poll_compile() {
-            assert!(start.elapsed() < Duration::from_secs(20), "compile did not finish");
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "compile did not finish"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -579,7 +637,12 @@ mod tests {
         let mut editor = open(&link);
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(ctrl('s'));
-        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(fs::read_to_string(&real).unwrap(), "Xtext\n");
         fs::remove_dir_all(real.parent().unwrap()).unwrap();
     }
@@ -592,7 +655,10 @@ mod tests {
         let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(ctrl('s'));
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
         let names: Vec<_> = fs::read_dir(path.parent().unwrap())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
@@ -613,8 +679,18 @@ mod tests {
         let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(ctrl('s'));
-        assert_eq!(fs::read_to_string(&victim).unwrap(), "IMPORTANT\n", "the save wrote through the link");
-        assert!(!fs::symlink_metadata(&path).unwrap().file_type().is_symlink(), "doc.typ became a link");
+        assert_eq!(
+            fs::read_to_string(&victim).unwrap(),
+            "IMPORTANT\n",
+            "the save wrote through the link"
+        );
+        assert!(
+            !fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "doc.typ became a link"
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), "X= Hi\n");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -629,7 +705,10 @@ mod tests {
         std::os::unix::fs::symlink(dir.join("elsewhere.txt"), &path).unwrap();
 
         editor.handle_key(ctrl('s'));
-        assert!(!dir.join("elsewhere.txt").exists(), "the save created the link target");
+        assert!(
+            !dir.join("elsewhere.txt").exists(),
+            "the save created the link target"
+        );
         assert!(editor.message.contains("Save failed"), "{}", editor.message);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -653,7 +732,10 @@ mod tests {
         wait_for_export(&mut editor);
 
         assert!(dir.join("main.pdf").exists(), "main.pdf is missing");
-        assert!(!dir.join("chapters").join("one.pdf").exists(), "the chapter was exported");
+        assert!(
+            !dir.join("chapters").join("one.pdf").exists(),
+            "the chapter was exported"
+        );
         assert!(editor.exported.as_ref().unwrap().ends_with("main.pdf"));
         fs::remove_dir_all(dir).unwrap();
     }
@@ -670,7 +752,14 @@ mod tests {
 
         let report = editor.report.as_ref().unwrap();
         assert!(!report.ok);
-        assert!(report.lines.iter().any(|l| l.starts_with("chapters/one.typ:1:")), "{:?}", report.lines);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|l| l.starts_with("chapters/one.typ:1:")),
+            "{:?}",
+            report.lines
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -682,8 +771,15 @@ mod tests {
         editor.handle_key(key(KeyCode::Char('X')));
         assert!(editor.tick(Instant::now() + Duration::from_millis(400)));
 
-        assert_eq!(fs::read_to_string(&chapter).unwrap(), "X= One\n", "the chapter must be saved");
-        assert_eq!(fs::read_to_string(dir.join("main.typ")).unwrap(), "#include \"chapters/one.typ\"\n");
+        assert_eq!(
+            fs::read_to_string(&chapter).unwrap(),
+            "X= One\n",
+            "the chapter must be saved"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("main.typ")).unwrap(),
+            "#include \"chapters/one.typ\"\n"
+        );
         wait_for_report(&mut editor);
         assert!(editor.report.as_ref().unwrap().ok);
         assert!(editor.preview.has_page());
@@ -700,7 +796,10 @@ mod tests {
 
         let mut editor = open_with_main(&dir.join("main.typ"), Some("main.typ"));
         let text = screen_text(&mut editor);
-        assert!(text.contains("main.typ") && !text.contains("(main:"), "{text}");
+        assert!(
+            text.contains("main.typ") && !text.contains("(main:"),
+            "{text}"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -740,20 +839,32 @@ mod tests {
         let mut editor = open(&path);
         compile_and_wait(&mut editor);
         editor.handle_key(ctrl('g'));
-        assert_eq!(editor.textarea.cursor(), (0, 3), "the cursor must stand on the #");
+        assert_eq!(
+            editor.textarea.cursor(),
+            (0, 3),
+            "the cursor must stand on the #"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn ctrl_g_counts_the_column_in_characters_not_bytes() {
-        for text in ["é #nope()", "संस्कृतम् #nope()", "👨\u{200d}👩\u{200d}👧\u{200d}👦 #nope()"] {
+        for text in [
+            "é #nope()",
+            "संस्कृतम् #nope()",
+            "👨\u{200d}👩\u{200d}👧\u{200d}👦 #nope()",
+        ] {
             let path = temp_file("gotounicode", &format!("{text}\n"));
             let mut editor = open(&path);
             compile_and_wait(&mut editor);
             editor.handle_key(ctrl('g'));
             let cursor = editor.textarea.cursor();
             let (row, column) = (cursor.0, cursor.1);
-            assert_eq!(editor.textarea.lines()[row].chars().nth(column), Some('#'), "{text}");
+            assert_eq!(
+                editor.textarea.lines()[row].chars().nth(column),
+                Some('#'),
+                "{text}"
+            );
             fs::remove_dir_all(path.parent().unwrap()).unwrap();
         }
     }
@@ -762,7 +873,11 @@ mod tests {
     fn ctrl_g_with_an_error_in_another_file_names_the_file_and_keeps_the_cursor() {
         let chapter = book("gotoother", "= One\n");
         let dir = chapter.parent().unwrap().parent().unwrap().to_path_buf();
-        fs::write(dir.join("main.typ"), "#nope()\n#include \"chapters/one.typ\"\n").unwrap();
+        fs::write(
+            dir.join("main.typ"),
+            "#nope()\n#include \"chapters/one.typ\"\n",
+        )
+        .unwrap();
         let mut editor = open_with_main(&chapter, Some("main.typ"));
         editor.handle_key(key(KeyCode::Right));
         editor.handle_key(key(KeyCode::Right));
@@ -796,7 +911,15 @@ mod tests {
         let path = temp_file("gotowarning", "#set text(font: \"NoSuchFont\")\nHello\n");
         let mut editor = open(&path);
         compile_and_wait(&mut editor);
-        assert!(editor.report.as_ref().unwrap().lines.iter().any(|l| l.contains("warning")));
+        assert!(
+            editor
+                .report
+                .as_ref()
+                .unwrap()
+                .lines
+                .iter()
+                .any(|l| l.contains("warning"))
+        );
         editor.handle_key(ctrl('g'));
         assert_eq!(editor.textarea.cursor(), (0, 0));
         assert!(editor.message.contains("No error"), "{}", editor.message);
@@ -809,7 +932,11 @@ mod tests {
         let mut editor = open(&path);
         editor.report = Some(Report::new(false, vec!["doc.typ:50:90: error: x".into()]));
         editor.handle_key(ctrl('g'));
-        assert_eq!(editor.textarea.cursor(), (1, 3), "the cursor goes to the end of the last line");
+        assert_eq!(
+            editor.textarea.cursor(),
+            (1, 3),
+            "the cursor goes to the end of the last line"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -846,7 +973,10 @@ mod tests {
     fn esc_closes_a_clean_buffer_at_once() {
         let path = temp_file("clean", "text\n");
         let mut editor = open(&path);
-        assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Close));
+        assert!(matches!(
+            editor.handle_key(key(KeyCode::Esc)),
+            Action::Close
+        ));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -855,7 +985,10 @@ mod tests {
         let path = temp_file("escsave", "text\n");
         let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Char('X')));
-        assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Close));
+        assert!(matches!(
+            editor.handle_key(key(KeyCode::Esc)),
+            Action::Close
+        ));
         assert_eq!(fs::read_to_string(&path).unwrap(), "Xtext\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -868,9 +1001,16 @@ mod tests {
         fs::write(&path, "outside\n").unwrap();
 
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
-        assert!(editor.message.contains("changed on disk"), "{}", editor.message);
+        assert!(
+            editor.message.contains("changed on disk"),
+            "{}",
+            editor.message
+        );
         assert!(editor.message.contains("Esc again"), "{}", editor.message);
-        assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Close));
+        assert!(matches!(
+            editor.handle_key(key(KeyCode::Esc)),
+            Action::Close
+        ));
         assert_eq!(fs::read_to_string(&path).unwrap(), "outside\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -885,7 +1025,10 @@ mod tests {
 
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
         assert!(editor.message.contains("Save failed"), "{}", editor.message);
-        assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Close));
+        assert!(matches!(
+            editor.handle_key(key(KeyCode::Esc)),
+            Action::Close
+        ));
         assert_eq!(fs::read_to_string(&path).unwrap(), "text\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -922,8 +1065,15 @@ mod tests {
 
         editor.handle_key(ctrl('b'));
         assert_eq!(fs::read_to_string(&path).unwrap(), "= Changed outside\n");
-        assert!(editor.message.contains("changed on disk"), "{}", editor.message);
-        assert!(editor.job.is_none(), "no compile of a file that was not saved");
+        assert!(
+            editor.message.contains("changed on disk"),
+            "{}",
+            editor.message
+        );
+        assert!(
+            editor.job.is_none(),
+            "no compile of a file that was not saved"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1020,7 +1170,13 @@ mod tests {
     fn screen_text(editor: &mut Editor) -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| editor.draw(frame)).unwrap();
-        terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect()
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
     }
 
     #[test]
@@ -1029,7 +1185,10 @@ mod tests {
         let mut editor = open(&path);
         let text = screen_text(&mut editor);
         assert!(text.contains("doc.typ"), "{text}");
-        assert!(!text.contains(&path.parent().unwrap().display().to_string()), "{text}");
+        assert!(
+            !text.contains(&path.parent().unwrap().display().to_string()),
+            "{text}"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1039,7 +1198,10 @@ mod tests {
         let path = temp_file("wrap", &format!("{long}\n"));
         let mut editor = open(&path);
         // The editor pane is 48 cells wide inside its border, so the line needs 4 screen rows.
-        assert!(screen_text(&mut editor).contains("END"), "the end of the line is not on screen");
+        assert!(
+            screen_text(&mut editor).contains("END"),
+            "the end of the line is not on screen"
+        );
 
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(ctrl('s'));
@@ -1053,13 +1215,21 @@ mod tests {
         terminal.draw(|frame| editor.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..24)
-            .map(|row| (0..100).map(|column| buffer[(column, row)].symbol()).collect())
+            .map(|row| {
+                (0..100)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
             .collect()
     }
 
     /// The first 50 columns of the rows that belong to the text area: the left half, without the border.
     fn text_area_rows(editor: &mut Editor) -> Vec<String> {
-        screen_rows(editor).iter().skip(1).map(|row| row.chars().skip(1).take(48).collect()).collect()
+        screen_rows(editor)
+            .iter()
+            .skip(1)
+            .map(|row| row.chars().skip(1).take(48).collect())
+            .collect()
     }
 
     #[test]
@@ -1067,9 +1237,21 @@ mod tests {
         let path = temp_file("numbers", "alpha\nbeta\ngamma\n");
         let mut editor = open(&path);
         let rows = text_area_rows(&mut editor);
-        assert!(rows[0].trim_start().starts_with("1 alpha"), "{:?}", &rows[..4]);
-        assert!(rows[1].trim_start().starts_with("2 beta"), "{:?}", &rows[..4]);
-        assert!(rows[2].trim_start().starts_with("3 gamma"), "{:?}", &rows[..4]);
+        assert!(
+            rows[0].trim_start().starts_with("1 alpha"),
+            "{:?}",
+            &rows[..4]
+        );
+        assert!(
+            rows[1].trim_start().starts_with("2 beta"),
+            "{:?}",
+            &rows[..4]
+        );
+        assert!(
+            rows[2].trim_start().starts_with("3 gamma"),
+            "{:?}",
+            &rows[..4]
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1079,11 +1261,30 @@ mod tests {
         let path = temp_file("wrapnumbers", &format!("{long}\nnext\n"));
         let mut editor = open(&path);
         let rows = text_area_rows(&mut editor);
-        let with_number: Vec<_> = rows.iter().filter(|row| row.chars().any(|c| c.is_ascii_digit())).collect();
-        assert_eq!(with_number.len(), 2, "one number for each line, not for each row: {:?}", &rows[..8]);
-        assert!(rows[0].trim_start().starts_with("1 word"), "{:?}", &rows[..8]);
-        let wrapped = rows.iter().filter(|row| row.contains("word") || row.contains("end")).count();
-        assert!(wrapped >= 3, "the long line must wrap on several rows: {:?}", &rows[..8]);
+        let with_number: Vec<_> = rows
+            .iter()
+            .filter(|row| row.chars().any(|c| c.is_ascii_digit()))
+            .collect();
+        assert_eq!(
+            with_number.len(),
+            2,
+            "one number for each line, not for each row: {:?}",
+            &rows[..8]
+        );
+        assert!(
+            rows[0].trim_start().starts_with("1 word"),
+            "{:?}",
+            &rows[..8]
+        );
+        let wrapped = rows
+            .iter()
+            .filter(|row| row.contains("word") || row.contains("end"))
+            .count();
+        assert!(
+            wrapped >= 3,
+            "the long line must wrap on several rows: {:?}",
+            &rows[..8]
+        );
         let next = rows.iter().find(|row| row.contains("next")).unwrap();
         assert!(next.trim_start().starts_with("2 next"), "{next:?}");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -1096,10 +1297,22 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| editor.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        let number = (1..8).map(|column| &buffer[(column, 1)]).find(|cell| cell.symbol() == "1").unwrap();
-        assert!(number.modifier.contains(ratatui::style::Modifier::DIM), "the number must be dim");
-        let letter = (1..12).map(|column| &buffer[(column, 1)]).find(|cell| cell.symbol() == "a").unwrap();
-        assert!(!letter.modifier.contains(ratatui::style::Modifier::DIM), "the text must not be dim");
+        let number = (1..8)
+            .map(|column| &buffer[(column, 1)])
+            .find(|cell| cell.symbol() == "1")
+            .unwrap();
+        assert!(
+            number.modifier.contains(ratatui::style::Modifier::DIM),
+            "the number must be dim"
+        );
+        let letter = (1..12)
+            .map(|column| &buffer[(column, 1)])
+            .find(|cell| cell.symbol() == "a")
+            .unwrap();
+        assert!(
+            !letter.modifier.contains(ratatui::style::Modifier::DIM),
+            "the text must not be dim"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1112,14 +1325,22 @@ mod tests {
     fn the_status_line_shows_the_cursor_position_at_its_right_end() {
         let path = temp_file("position", "line one\nline two\nline three\n");
         let mut editor = open(&path);
-        assert!(status_row(&mut editor).trim_end().ends_with("1:1"), "{:?}", status_row(&mut editor));
+        assert!(
+            status_row(&mut editor).trim_end().ends_with("1:1"),
+            "{:?}",
+            status_row(&mut editor)
+        );
 
         editor.handle_key(key(KeyCode::Down));
         editor.handle_key(key(KeyCode::Down));
         for _ in 0..4 {
             editor.handle_key(key(KeyCode::Right));
         }
-        assert!(status_row(&mut editor).trim_end().ends_with("3:5"), "{:?}", status_row(&mut editor));
+        assert!(
+            status_row(&mut editor).trim_end().ends_with("3:5"),
+            "{:?}",
+            status_row(&mut editor)
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1129,7 +1350,10 @@ mod tests {
         let mut editor = open(&path);
         editor.message = "Saved".into();
         let row = status_row(&mut editor);
-        assert!(row.starts_with("Saved") && row.trim_end().ends_with("1:1"), "{row:?}");
+        assert!(
+            row.starts_with("Saved") && row.trim_end().ends_with("1:1"),
+            "{row:?}"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1138,13 +1362,21 @@ mod tests {
         let path = temp_file("positionunicode", "é #nope()\n");
         let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Right)); // over the é
-        assert!(status_row(&mut editor).trim_end().ends_with("1:2"), "{:?}", status_row(&mut editor));
+        assert!(
+            status_row(&mut editor).trim_end().ends_with("1:2"),
+            "{:?}",
+            status_row(&mut editor)
+        );
 
         // Ctrl-G moves to the position that Typst names, and the status line shows the same position.
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
         editor.handle_key(ctrl('g'));
-        assert!(status_row(&mut editor).trim_end().ends_with("1:3"), "{:?}", status_row(&mut editor));
+        assert!(
+            status_row(&mut editor).trim_end().ends_with("1:3"),
+            "{:?}",
+            status_row(&mut editor)
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1155,7 +1387,9 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
         terminal.draw(|frame| editor.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        let row: String = (0..40).map(|column| buffer[(column, 11)].symbol()).collect();
+        let row: String = (0..40)
+            .map(|column| buffer[(column, 11)].symbol())
+            .collect();
         assert!(row.trim_end().ends_with("1:1"), "{row:?}");
         assert!(row.starts_with("Ctrl-S save"), "{row:?}");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -1168,7 +1402,11 @@ mod tests {
         editor.handle_key(key(KeyCode::Tab));
         assert_eq!(editor.textarea.lines()[0], "  text");
         editor.handle_key(key(KeyCode::Tab));
-        assert_eq!(editor.textarea.lines()[0], "    text", "a second Tab adds two more spaces");
+        assert_eq!(
+            editor.textarea.lines()[0],
+            "    text",
+            "a second Tab adds two more spaces"
+        );
         assert!(editor.dirty);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -1179,7 +1417,11 @@ mod tests {
         let mut editor = open(&path);
         editor.handle_key(key(KeyCode::Right)); // column 1
         editor.handle_key(key(KeyCode::Tab));
-        assert_eq!(editor.textarea.lines()[0], "a b", "one space to reach the stop at column 2");
+        assert_eq!(
+            editor.textarea.lines()[0],
+            "a b",
+            "one space to reach the stop at column 2"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1209,7 +1451,10 @@ mod tests {
     fn pane_rows(editor: &mut Editor) -> Vec<String> {
         // The pane stands under the text area: the last 6 rows above the status line.
         let rows = screen_rows(editor);
-        rows[rows.len() - 7..rows.len() - 1].iter().map(|row| row.chars().take(50).collect()).collect()
+        rows[rows.len() - 7..rows.len() - 1]
+            .iter()
+            .map(|row| row.chars().take(50).collect())
+            .collect()
     }
 
     #[test]
@@ -1221,7 +1466,10 @@ mod tests {
         assert!(rows[1].contains("OK in 310 ms"), "{rows:?}");
 
         editor.report = Some(Report::new(true, vec![]));
-        assert!(pane_rows(&mut editor)[1].starts_with("│OK "), "OK without a time stays OK");
+        assert!(
+            pane_rows(&mut editor)[1].starts_with("│OK "),
+            "OK without a time stays OK"
+        );
         assert!(!pane_rows(&mut editor)[1].contains(" in "));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -1230,12 +1478,21 @@ mod tests {
     fn a_failed_compile_shows_its_time_in_the_title() {
         let path = temp_file("timefail", "text\n");
         let mut editor = open(&path);
-        editor.report = Some(Report::new(false, vec!["a.typ:1:1: error: x".into()]).with_elapsed(Duration::from_millis(1234)));
+        editor.report = Some(
+            Report::new(false, vec!["a.typ:1:1: error: x".into()])
+                .with_elapsed(Duration::from_millis(1234)),
+        );
         let rows = pane_rows(&mut editor);
-        assert!(rows[0].contains("Compile") && rows[0].contains("(1234 ms)"), "{rows:?}");
+        assert!(
+            rows[0].contains("Compile") && rows[0].contains("(1234 ms)"),
+            "{rows:?}"
+        );
 
         editor.report = Some(Report::failed("Cannot run typst"));
-        assert!(!pane_rows(&mut editor)[0].contains("ms"), "no time for a command that did not run");
+        assert!(
+            !pane_rows(&mut editor)[0].contains("ms"),
+            "no time for a command that did not run"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1245,7 +1502,10 @@ mod tests {
         let mut editor = open(&path);
         compile_and_wait(&mut editor);
         let rows = pane_rows(&mut editor);
-        assert!(rows[1].starts_with("│OK in ") && rows[1].contains(" ms"), "{rows:?}");
+        assert!(
+            rows[1].starts_with("│OK in ") && rows[1].contains(" ms"),
+            "{rows:?}"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1261,18 +1521,36 @@ mod tests {
     }
 
     fn report_with(ok: bool, lines: &[&str]) -> Option<Report> {
-        Some(Report::new(ok, lines.iter().map(|line| line.to_string()).collect()))
+        Some(Report::new(
+            ok,
+            lines.iter().map(|line| line.to_string()).collect(),
+        ))
     }
 
     #[test]
     fn the_title_shows_the_number_of_errors_and_warnings() {
         let path = temp_file("counts", "text\n");
         let mut editor = open(&path);
-        editor.report = report_with(false, &["a.typ:1:1: error: e1", "a.typ:2:1: error: e2", "a.typ:3:1: warning: w"]);
-        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 2 errors, 1 warning"), "{:?}", pane_rows(&mut editor));
+        editor.report = report_with(
+            false,
+            &[
+                "a.typ:1:1: error: e1",
+                "a.typ:2:1: error: e2",
+                "a.typ:3:1: warning: w",
+            ],
+        );
+        assert!(
+            pane_rows(&mut editor)[0].starts_with("┌Compile: 2 errors, 1 warning"),
+            "{:?}",
+            pane_rows(&mut editor)
+        );
 
         editor.report = report_with(false, &["a.typ:1:1: error: e1"]);
-        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 1 error─"), "{:?}", pane_rows(&mut editor));
+        assert!(
+            pane_rows(&mut editor)[0].starts_with("┌Compile: 1 error─"),
+            "{:?}",
+            pane_rows(&mut editor)
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1280,8 +1558,15 @@ mod tests {
     fn the_title_has_the_counts_and_the_time() {
         let path = temp_file("countstime", "text\n");
         let mut editor = open(&path);
-        editor.report = Some(Report::new(false, vec!["a.typ:1:1: error: e".into()]).with_elapsed(Duration::from_millis(310)));
-        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 1 error (310 ms)"), "{:?}", pane_rows(&mut editor));
+        editor.report = Some(
+            Report::new(false, vec!["a.typ:1:1: error: e".into()])
+                .with_elapsed(Duration::from_millis(310)),
+        );
+        assert!(
+            pane_rows(&mut editor)[0].starts_with("┌Compile: 1 error (310 ms)"),
+            "{:?}",
+            pane_rows(&mut editor)
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1293,10 +1578,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| editor.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        let title: String = (0..50).map(|column| buffer[(column, 17)].symbol()).collect();
+        let title: String = (0..50)
+            .map(|column| buffer[(column, 17)].symbol())
+            .collect();
         assert!(title.starts_with("┌Compile: 1 warning"), "{title:?}");
         let border = buffer[(0, 17)].fg;
-        assert_ne!(border, Color::Red, "a compile with warnings only is not red");
+        assert_ne!(
+            border,
+            Color::Red,
+            "a compile with warnings only is not red"
+        );
         assert_eq!(border, Color::Green);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -1306,9 +1597,17 @@ mod tests {
         let path = temp_file("nocounts", "text\n");
         let mut editor = open(&path);
         editor.report = report_with(true, &[]);
-        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile─"), "{:?}", pane_rows(&mut editor));
+        assert!(
+            pane_rows(&mut editor)[0].starts_with("┌Compile─"),
+            "{:?}",
+            pane_rows(&mut editor)
+        );
         editor.report = report_with(false, &["Cannot run typst: not found"]);
-        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile─"), "{:?}", pane_rows(&mut editor));
+        assert!(
+            pane_rows(&mut editor)[0].starts_with("┌Compile─"),
+            "{:?}",
+            pane_rows(&mut editor)
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1318,7 +1617,11 @@ mod tests {
         let mut editor = open(&path);
         compile_and_wait(&mut editor);
         assert!(editor.report.as_ref().unwrap().ok);
-        assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 1 warning"), "{:?}", pane_rows(&mut editor));
+        assert!(
+            pane_rows(&mut editor)[0].starts_with("┌Compile: 1 warning"),
+            "{:?}",
+            pane_rows(&mut editor)
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1328,7 +1631,9 @@ mod tests {
         terminal.draw(|frame| editor.draw(frame)).unwrap();
         let buffer = terminal.backend().buffer();
         for row in 17..24 {
-            let line: String = (0..50).map(|column| buffer[(column, row)].symbol()).collect();
+            let line: String = (0..50)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect();
             if let Some(at) = line.find(text) {
                 let column = line[..at].chars().count();
                 return buffer[(column as u16, row)].clone();
@@ -1343,7 +1648,11 @@ mod tests {
         let mut editor = open(&path);
         editor.report = report_with(
             false,
-            &["a.typ:1:1: error: boom", "a.typ:2:1: warning: careful", "hint: try a space"],
+            &[
+                "a.typ:1:1: error: boom",
+                "a.typ:2:1: warning: careful",
+                "hint: try a space",
+            ],
         );
         let error = pane_cell(&mut editor, "a.typ:1:1");
         let warning = pane_cell(&mut editor, "a.typ:2:1");
@@ -1351,7 +1660,10 @@ mod tests {
         assert_eq!(error.fg, Color::Red);
         assert_eq!(warning.fg, Color::Yellow);
         assert_ne!(error.fg, warning.fg);
-        assert!(hint.modifier.contains(ratatui::style::Modifier::DIM), "a hint must be dim");
+        assert!(
+            hint.modifier.contains(ratatui::style::Modifier::DIM),
+            "a hint must be dim"
+        );
         assert_eq!(hint.fg, Color::Reset, "a hint has no color of its own");
         assert!(!error.modifier.contains(ratatui::style::Modifier::DIM));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -1361,10 +1673,17 @@ mod tests {
     fn the_colors_are_palette_colors_so_that_they_follow_the_theme() {
         let path = temp_file("palette", "text\n");
         let mut editor = open(&path);
-        editor.report = report_with(false, &["a.typ:1:1: error: boom", "a.typ:2:1: warning: careful"]);
+        editor.report = report_with(
+            false,
+            &["a.typ:1:1: error: boom", "a.typ:2:1: warning: careful"],
+        );
         for text in ["a.typ:1:1", "a.typ:2:1"] {
             let cell = pane_cell(&mut editor, text);
-            assert!(!matches!(cell.fg, Color::Rgb(..) | Color::Indexed(..)), "{:?}", cell.fg);
+            assert!(
+                !matches!(cell.fg, Color::Rgb(..) | Color::Indexed(..)),
+                "{:?}",
+                cell.fg
+            );
         }
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -1402,7 +1721,11 @@ mod tests {
 
     #[test]
     fn wrap_rows_counts_the_display_width_of_wide_characters() {
-        assert_eq!(wrap_rows("中中中", 5), ["中中", "中"], "each of these characters is 2 cells wide");
+        assert_eq!(
+            wrap_rows("中中中", 5),
+            ["中中", "中"],
+            "each of these characters is 2 cells wide"
+        );
         assert_eq!(wrap_rows("é é é", 3), ["é é", "é"]);
     }
 
@@ -1413,7 +1736,10 @@ mod tests {
 
     /// A report of `count` lines `hint: line <n>`. Each line is short and takes one row.
     fn hints(count: usize) -> Option<Report> {
-        Some(Report::new(false, (1..=count).map(|n| format!("hint: line {n}")).collect()))
+        Some(Report::new(
+            false,
+            (1..=count).map(|n| format!("hint: line {n}")).collect(),
+        ))
     }
 
     #[test]
@@ -1422,9 +1748,17 @@ mod tests {
         let mut editor = open(&path);
         editor.report = hints(7);
         let rows = pane_rows(&mut editor);
-        assert!(rows[1].contains("hint: line 1") && rows[2].contains("hint: line 2") && rows[3].contains("hint: line 3"), "{rows:?}");
+        assert!(
+            rows[1].contains("hint: line 1")
+                && rows[2].contains("hint: line 2")
+                && rows[3].contains("hint: line 3"),
+            "{rows:?}"
+        );
         assert!(rows[4].contains("+4 more"), "{rows:?}");
-        assert!(!rows.iter().any(|row| row.contains("line 4")), "a hidden line shows: {rows:?}");
+        assert!(
+            !rows.iter().any(|row| row.contains("line 4")),
+            "a hidden line shows: {rows:?}"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1435,8 +1769,14 @@ mod tests {
         for count in [1, 3, 4] {
             editor.report = hints(count);
             let rows = pane_rows(&mut editor);
-            assert!(!rows.iter().any(|row| row.contains("more")), "{count} lines: {rows:?}");
-            assert!(rows[count].contains(&format!("hint: line {count}")), "{rows:?}");
+            assert!(
+                !rows.iter().any(|row| row.contains("more")),
+                "{count} lines: {rows:?}"
+            );
+            assert!(
+                rows[count].contains(&format!("hint: line {count}")),
+                "{rows:?}"
+            );
         }
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -1447,7 +1787,10 @@ mod tests {
         let mut editor = open(&path);
         editor.report = hints(5);
         let rows = pane_rows(&mut editor);
-        assert!(rows[3].contains("hint: line 3") && rows[4].contains("+2 more"), "{rows:?}");
+        assert!(
+            rows[3].contains("hint: line 3") && rows[4].contains("+2 more"),
+            "{rows:?}"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1461,10 +1804,20 @@ mod tests {
         editor.report = Some(Report::new(false, vec![long]));
         let rows = pane_rows(&mut editor);
         assert!(rows[4].contains("+3 more"), "6 rows, 3 shown: {rows:?}");
-        assert!(rows[1].contains(&word) && rows[3].contains(&word), "{rows:?}");
+        assert!(
+            rows[1].contains(&word) && rows[3].contains(&word),
+            "{rows:?}"
+        );
         // The same text on 2 report lines is also 6 rows, and the count is the same.
-        editor.report = Some(Report::new(false, vec![[word.as_str(); 3].join(" "), [word.as_str(); 3].join(" ")]));
-        assert!(pane_rows(&mut editor)[4].contains("+3 more"), "{:?}", pane_rows(&mut editor));
+        editor.report = Some(Report::new(
+            false,
+            vec![[word.as_str(); 3].join(" "), [word.as_str(); 3].join(" ")],
+        ));
+        assert!(
+            pane_rows(&mut editor)[4].contains("+3 more"),
+            "{:?}",
+            pane_rows(&mut editor)
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1472,11 +1825,22 @@ mod tests {
     fn the_ok_line_and_the_export_line_count_as_rows() {
         let path = temp_file("morehead", "text\n");
         let mut editor = open(&path);
-        editor.report = Some(Report::new(true, (1..=4).map(|n| format!("a.typ:{n}:1: warning: w{n}")).collect()).with_elapsed(Duration::from_millis(5)));
+        editor.report = Some(
+            Report::new(
+                true,
+                (1..=4)
+                    .map(|n| format!("a.typ:{n}:1: warning: w{n}"))
+                    .collect(),
+            )
+            .with_elapsed(Duration::from_millis(5)),
+        );
         editor.exported = Some(path.with_extension("pdf"));
         // OK line + 4 warnings + export line = 6 rows. 3 are shown.
         let rows = pane_rows(&mut editor);
-        assert!(rows[1].contains("OK in 5 ms") && rows[4].contains("+3 more"), "{rows:?}");
+        assert!(
+            rows[1].contains("OK in 5 ms") && rows[4].contains("+3 more"),
+            "{rows:?}"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1510,7 +1874,10 @@ mod tests {
 
         editor.handle_key(ctrl('b'));
         let text = screen_text(&mut editor);
-        assert!(text.contains("Compile (running)") && text.contains("Compiling..."), "{text}");
+        assert!(
+            text.contains("Compile (running)") && text.contains("Compiling..."),
+            "{text}"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1562,7 +1929,10 @@ mod tests {
 
     #[test]
     fn alt_down_and_alt_up_render_the_new_page_with_a_new_compile() {
-        let path = temp_file("pages", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let path = temp_file(
+            "pages",
+            "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n",
+        );
         let mut editor = open(&path);
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
@@ -1570,7 +1940,10 @@ mod tests {
 
         editor.handle_key(alt(KeyCode::Down));
         assert!(editor.job.is_some(), "a page turn must start a compile");
-        assert!(screen_text(&mut editor).contains("Preview 1/3"), "the old page must stay until the new page is ready");
+        assert!(
+            screen_text(&mut editor).contains("Preview 1/3"),
+            "the old page must stay until the new page is ready"
+        );
         wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 2/3"));
 
@@ -1581,7 +1954,10 @@ mod tests {
         assert!(screen_text(&mut editor).contains("Preview 3/3"));
 
         editor.handle_key(alt(KeyCode::Down));
-        assert!(editor.job.is_none(), "page 3 is the last page, so no compile starts");
+        assert!(
+            editor.job.is_none(),
+            "page 3 is the last page, so no compile starts"
+        );
         editor.handle_key(alt(KeyCode::Up));
         wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 2/3"));
@@ -1594,7 +1970,10 @@ mod tests {
         let start = Instant::now();
         while editor.job.is_some() {
             editor.tick(Instant::now());
-            assert!(start.elapsed() < Duration::from_secs(30), "the compiles did not end");
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "the compiles did not end"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -1645,7 +2024,11 @@ mod tests {
         wait_for_report(&mut editor);
         assert!(editor.job.is_none(), "a new compile started");
         let report = editor.report.as_ref().unwrap();
-        assert!(!report.ok && report.lines[0].contains("no page file"), "{:?}", report.lines);
+        assert!(
+            !report.ok && report.lines[0].contains("no page file"),
+            "{:?}",
+            report.lines
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1666,21 +2049,33 @@ mod tests {
 
     #[test]
     fn a_page_turn_ends_a_recovery() {
-        let path = temp_file("turnrecover", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let path = temp_file(
+            "turnrecover",
+            "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n",
+        );
         let mut editor = open(&path);
         editor.handle_key(ctrl('b'));
         wait_for_idle(&mut editor);
         editor.recover = Some(9);
         editor.handle_key(alt(KeyCode::Down));
-        assert!(editor.recover.is_none(), "the recovery must end when the user turns a page");
+        assert!(
+            editor.recover.is_none(),
+            "the recovery must end when the user turns a page"
+        );
         wait_for_idle(&mut editor);
-        assert!(screen_text(&mut editor).contains("Preview 2/3"), "the user's page turn must win");
+        assert!(
+            screen_text(&mut editor).contains("Preview 2/3"),
+            "the user's page turn must win"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn alt_end_and_alt_home_show_the_last_page_and_the_first_page() {
-        let path = temp_file("jump", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let path = temp_file(
+            "jump",
+            "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n",
+        );
         let mut editor = open(&path);
         editor.handle_key(ctrl('b'));
         wait_for_idle(&mut editor);
@@ -1688,7 +2083,10 @@ mod tests {
 
         editor.handle_key(alt(KeyCode::End));
         assert!(editor.job.is_some(), "the jump must start a compile");
-        assert!(screen_text(&mut editor).contains("Preview 1/3"), "the old page stays until the new page is ready");
+        assert!(
+            screen_text(&mut editor).contains("Preview 1/3"),
+            "the old page stays until the new page is ready"
+        );
         wait_for_idle(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 3/3"));
 
@@ -1750,7 +2148,10 @@ mod tests {
         editor.handle_key(alt(KeyCode::Down));
         assert!(editor.job.is_some(), "the turn must start a compile");
         assert!(editor.dirty, "the turn must not save");
-        assert_eq!(fs::read_to_string(&path).unwrap(), "= One\n#pagebreak()\n= Two\nchanged outside\n");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "= One\n#pagebreak()\n= Two\nchanged outside\n"
+        );
         wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 2/2"));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -1758,7 +2159,10 @@ mod tests {
 
     #[test]
     fn the_page_number_stays_after_an_edit() {
-        let path = temp_file("pageedit", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let path = temp_file(
+            "pageedit",
+            "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n",
+        );
         let mut editor = open(&path);
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
@@ -1769,35 +2173,54 @@ mod tests {
         editor.handle_key(key(KeyCode::Char('X')));
         assert!(editor.tick(Instant::now() + Duration::from_millis(400)));
         wait_for_report(&mut editor);
-        assert!(screen_text(&mut editor).contains("Preview 2/3"), "the live compile must render page 2");
+        assert!(
+            screen_text(&mut editor).contains("Preview 2/3"),
+            "the live compile must render page 2"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn each_compile_folder_holds_exactly_one_png() {
-        let path = temp_file("onepng", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let path = temp_file(
+            "onepng",
+            "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n",
+        );
         let mut editor = open(&path);
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
         editor.handle_key(alt(KeyCode::Down));
         wait_for_report(&mut editor);
 
-        let folders: Vec<_> = fs::read_dir(&editor.pages_root).unwrap().map(|e| e.unwrap().path()).collect();
+        let folders: Vec<_> = fs::read_dir(&editor.pages_root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
         assert_eq!(folders.len(), 1, "only the folder of the shown page stays");
-        let files: Vec<_> = fs::read_dir(&folders[0]).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let files: Vec<_> = fs::read_dir(&folders[0])
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(files, ["page-2-of-3.png"]);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn an_error_on_a_later_page_shows_while_page_1_is_wanted() {
-        let path = temp_file("laterror", "= One\n#pagebreak()\n= Two\n#pagebreak()\n#nope()\n");
+        let path = temp_file(
+            "laterror",
+            "= One\n#pagebreak()\n= Two\n#pagebreak()\n#nope()\n",
+        );
         let mut editor = open(&path);
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
         let report = editor.report.as_ref().unwrap();
         assert!(!report.ok);
-        assert!(report.lines.iter().any(|l| l.contains(":5:")), "{:?}", report.lines);
+        assert!(
+            report.lines.iter().any(|l| l.contains(":5:")),
+            "{:?}",
+            report.lines
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1806,7 +2229,10 @@ mod tests {
         let start = Instant::now();
         while editor.export.is_some() {
             editor.tick(Instant::now());
-            assert!(start.elapsed() < Duration::from_secs(20), "export did not finish");
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "export did not finish"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -1839,7 +2265,10 @@ mod tests {
         wait_for_report(&mut editor);
         let text = screen_text(&mut editor);
         assert!(text.contains("OK"), "{text}");
-        assert!(text.contains("Exported") && text.contains("doc.pdf"), "{text}");
+        assert!(
+            text.contains("Exported") && text.contains("doc.pdf"),
+            "{text}"
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -1869,7 +2298,11 @@ mod tests {
         wait_for_export(&mut editor);
         let report = editor.report.as_ref().unwrap();
         assert!(!report.ok);
-        assert!(report.lines.iter().any(|l| l.contains(":1:")), "{:?}", report.lines);
+        assert!(
+            report.lines.iter().any(|l| l.contains(":1:")),
+            "{:?}",
+            report.lines
+        );
         assert!(!path.with_extension("pdf").exists());
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -1910,7 +2343,11 @@ mod tests {
         wait_for_report(&mut editor);
         let report = editor.report.as_ref().unwrap();
         assert!(!report.ok);
-        assert!(report.lines.iter().any(|l| l.contains(":1:")), "{:?}", report.lines);
+        assert!(
+            report.lines.iter().any(|l| l.contains(":1:")),
+            "{:?}",
+            report.lines
+        );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

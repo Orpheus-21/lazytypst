@@ -15,7 +15,10 @@ pub fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
         Ok(target) => target,
         // The file is gone. `create_new` also refuses a dangling symlink at `path`.
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?;
             return file.write_all(bytes).and_then(|()| file.sync_all());
         }
         Err(err) => return Err(err),
@@ -47,13 +50,20 @@ fn create_temp_beside(target: &Path) -> io::Result<(fs::File, PathBuf)> {
             ".{name}.{}-{stamp}-{attempt}.lazytypst-tmp",
             std::process::id()
         ));
-        match fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
             Ok(file) => return Ok((file, temp)),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
         }
     }
-    Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free name for the temp file"))
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "no free name for the temp file",
+    ))
 }
 
 #[cfg(test)]
@@ -61,7 +71,8 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lazytypst-fsutil-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lazytypst-fsutil-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

@@ -21,7 +21,9 @@ fn walk(root: &Path, rel: &Path, depth_left: usize, found: &mut Vec<PathBuf>) ->
         if name.to_string_lossy().starts_with('.') {
             continue;
         }
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         let path = rel.join(&name);
         if kind.is_dir() {
             if depth_left > 0 {
