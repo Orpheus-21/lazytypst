@@ -115,8 +115,33 @@ pub fn next_dir(root: &Path) -> PathBuf {
 /// Makes the page folder of this run. Only the user can open it.
 /// The call fails if the path exists already, also as a symlink. So the program never writes
 /// into a folder that another user prepared, and the cleanup never deletes files of another user.
+/// One case is not a failure: see `make_out_dir_for`.
 pub fn make_out_dir() -> io::Result<()> {
-    make_private_dir(&out_dir())
+    use std::os::unix::fs::MetadataExt;
+    // The owner of /proc/self is the user of this process.
+    make_out_dir_for(&out_dir(), fs::metadata("/proc/self")?.uid())
+}
+
+/// Makes the folder `path` for the user `own_uid`. If `path` exists already, it is deleted and made again
+/// when it is a real folder of that user. The name of the folder holds the pid of this process, and no
+/// other process has this pid. So a folder that is already there was left by an earlier run whose pid the
+/// system has used again. A symlink, a file, and a folder of another user still stop the call with the
+/// error `AlreadyExists`. (This holds if the processes that share the temporary directory share one
+/// pid space.)
+fn make_out_dir_for(path: &Path, own_uid: u32) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let exists = match make_private_dir(path) {
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => err,
+        other => return other,
+    };
+    // `symlink_metadata` does not follow a link, so a link is never taken for a folder.
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() && meta.uid() == own_uid => {
+            fs::remove_dir_all(path)?;
+            make_private_dir(path)
+        }
+        _ => Err(exists),
+    }
 }
 
 fn make_private_dir(path: &Path) -> io::Result<()> {
@@ -523,6 +548,87 @@ mod tests {
             report.lines
         );
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    /// A new empty folder for a test, and the user id of its owner.
+    fn test_dir(name: &str) -> (PathBuf, u32) {
+        let dir = std::env::temp_dir().join(format!("lazytypst-ownpid-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let uid = uid_of(&dir);
+        (dir, uid)
+    }
+
+    #[test]
+    fn a_leftover_folder_of_the_user_is_replaced_by_a_new_empty_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let (base, uid) = test_dir("leftover");
+        let path = base.join("lazytypst-123");
+        fs::create_dir_all(path.join("0").join("deeper")).unwrap();
+        fs::write(path.join("0").join("page-1-of-1.png"), "old").unwrap();
+        fs::write(path.join("old-file"), "old").unwrap();
+
+        make_out_dir_for(&path, uid).unwrap();
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0, "the folder must be new and empty");
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_missing_folder_is_made() {
+        let (base, uid) = test_dir("missing");
+        let path = base.join("lazytypst-123");
+        make_out_dir_for(&path, uid).unwrap();
+        assert!(path.is_dir());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_at_the_path_still_stops_the_start_and_its_target_is_unchanged() {
+        let (base, uid) = test_dir("symlink");
+        let target = base.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep"), "keep").unwrap();
+        let path = base.join("lazytypst-123");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        let err = make_out_dir_for(&path, uid).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(target.join("keep")).unwrap(), "keep");
+        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink(), "the link was removed");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_dangling_symlink_at_the_path_stops_the_start_too() {
+        let (base, uid) = test_dir("dangling");
+        let path = base.join("lazytypst-123");
+        std::os::unix::fs::symlink(base.join("nowhere"), &path).unwrap();
+        assert_eq!(make_out_dir_for(&path, uid).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert!(!base.join("nowhere").exists(), "the link target was made");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_file_at_the_path_stops_the_start_and_stays() {
+        let (base, uid) = test_dir("file");
+        let path = base.join("lazytypst-123");
+        fs::write(&path, "keep").unwrap();
+        assert_eq!(make_out_dir_for(&path, uid).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "keep");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_folder_of_another_user_stops_the_start_and_stays() {
+        let (base, uid) = test_dir("other-user");
+        let path = base.join("lazytypst-123");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("keep"), "keep").unwrap();
+        // The folder belongs to `uid`. For the process, the current user is another one.
+        assert_eq!(make_out_dir_for(&path, uid + 1).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(path.join("keep")).unwrap(), "keep");
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
