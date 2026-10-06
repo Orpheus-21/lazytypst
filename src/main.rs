@@ -74,6 +74,8 @@ Keys in the editor:
   Ctrl-G         Go to the first error of the last compile.
   Alt-Down       Show the next page.
   Alt-Up         Show the previous page.
+  Alt-Home       Show the first page.
+  Alt-End        Show the last page.
   Esc            Save the file and go back to the file list.
 ";
 

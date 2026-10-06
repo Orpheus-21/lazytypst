@@ -92,6 +92,16 @@ impl Preview {
         std::mem::replace(&mut self.wanted, target) != target
     }
 
+    /// Asks for the last page (`last` is true) or the first page. Like `turn`, it returns true when the wanted
+    /// page changed, and the caller must then start a compile for it. It does nothing before the first load.
+    pub fn turn_to(&mut self, last: bool) -> bool {
+        if self.dir.is_none() {
+            return false;
+        }
+        let target = if last { self.count } else { 1 };
+        std::mem::replace(&mut self.wanted, target) != target
+    }
+
     #[cfg(test)]
     pub fn has_page(&self) -> bool {
         self.page.is_some()
@@ -269,6 +279,40 @@ mod tests {
         assert_eq!(preview.wanted_page(), 3);
         assert!(preview.turn(false));
         assert_eq!(preview.wanted_page(), 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn turn_to_asks_for_the_first_page_and_the_last_page() {
+        let dir = page("turnto", 2, 5);
+        let mut preview = Preview::new(Picker::halfblocks());
+        preview.load(dir.clone()).unwrap();
+
+        assert!(preview.turn_to(true));
+        assert_eq!(preview.wanted_page(), 5);
+        assert!(!preview.turn_to(true), "already on the last page");
+        assert!(preview.turn_to(false));
+        assert_eq!(preview.wanted_page(), 1);
+        assert!(!preview.turn_to(false), "already on the first page");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn turn_to_does_nothing_before_the_first_load() {
+        let mut preview = Preview::new(Picker::halfblocks());
+        assert!(!preview.turn_to(true));
+        assert!(!preview.turn_to(false));
+        assert_eq!(preview.wanted_page(), 1);
+    }
+
+    #[test]
+    fn turn_to_works_when_a_page_turn_is_already_pending() {
+        let dir = page("turnpending", 1, 5);
+        let mut preview = Preview::new(Picker::halfblocks());
+        preview.load(dir.clone()).unwrap();
+        assert!(preview.turn(true)); // wanted 2, not loaded yet
+        assert!(preview.turn_to(true));
+        assert_eq!(preview.wanted_page(), 5);
         fs::remove_dir_all(dir).unwrap();
     }
 

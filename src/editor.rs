@@ -248,6 +248,12 @@ impl Editor {
                 self.recover = None; // the user's choice wins
                 self.start_compile();
             }
+        } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Home | KeyCode::End) {
+            // The same rules as for a page turn: no save, and the user's choice ends a recovery.
+            if self.preview.turn_to(key.code == KeyCode::End) {
+                self.recover = None;
+                self.start_compile();
+            }
         } else if key.code == KeyCode::Esc {
             if armed || self.save(false) {
                 return Action::Close;
@@ -1669,6 +1675,66 @@ mod tests {
         assert!(editor.recover.is_none(), "the recovery must end when the user turns a page");
         wait_for_idle(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 2/3"), "the user's page turn must win");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn alt_end_and_alt_home_show_the_last_page_and_the_first_page() {
+        let path = temp_file("jump", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('b'));
+        wait_for_idle(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 1/3"));
+
+        editor.handle_key(alt(KeyCode::End));
+        assert!(editor.job.is_some(), "the jump must start a compile");
+        assert!(screen_text(&mut editor).contains("Preview 1/3"), "the old page stays until the new page is ready");
+        wait_for_idle(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 3/3"));
+
+        editor.handle_key(alt(KeyCode::End));
+        assert!(editor.job.is_none(), "already on the last page");
+        editor.handle_key(alt(KeyCode::Home));
+        wait_for_idle(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 1/3"));
+        assert!(!editor.dirty, "the jump keys must not change the text");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_page_jump_keys_do_nothing_before_the_first_compile() {
+        let path = temp_file("jumpearly", "= One\n");
+        let mut editor = open(&path);
+        editor.handle_key(alt(KeyCode::End));
+        editor.handle_key(alt(KeyCode::Home));
+        assert!(editor.job.is_none());
+        assert!(!editor.dirty);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn plain_home_and_end_still_move_the_cursor_in_the_text() {
+        let path = temp_file("homeend", "some text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::End));
+        assert_eq!(editor.cursor_position(), (0, 9));
+        editor.handle_key(key(KeyCode::Home));
+        assert_eq!(editor.cursor_position(), (0, 0));
+        assert!(editor.job.is_none());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_page_jump_ends_a_recovery() {
+        let path = temp_file("jumprecover", "= One\n#pagebreak()\n= Two\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('b'));
+        wait_for_idle(&mut editor);
+        editor.recover = Some(9);
+        editor.handle_key(alt(KeyCode::End));
+        assert!(editor.recover.is_none());
+        wait_for_idle(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 2/2"));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
