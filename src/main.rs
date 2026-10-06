@@ -1415,6 +1415,17 @@ mod tests {
     }
 
     #[test]
+    fn the_changelog_has_an_unreleased_entry_first_and_an_entry_for_the_current_version() {
+        let changelog = include_str!("../CHANGELOG.md");
+        let unreleased = changelog.find("\n## [Unreleased]\n").expect("no Unreleased entry");
+        let version = env!("CARGO_PKG_VERSION");
+        let current = changelog
+            .find(&format!("\n## [{version}]"))
+            .unwrap_or_else(|| panic!("no entry for the version {version} in CHANGELOG.md"));
+        assert!(unreleased < current, "the Unreleased entry must come before the entry for {version}");
+    }
+
+    #[test]
     fn m_in_an_empty_list_does_nothing() {
         let root = std::env::temp_dir().join(format!("lazytypst-main-emptymark-{}", std::process::id()));
         let mut app = App::new(root, Vec::new(), Picker::halfblocks());
