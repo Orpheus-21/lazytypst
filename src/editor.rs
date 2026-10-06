@@ -96,6 +96,8 @@ pub struct Editor {
     path: PathBuf,
     /// The project folder. Typst can read the files under it.
     root: PathBuf,
+    /// The main file of the project. The compile and the export use it instead of `path`.
+    main: Option<PathBuf>,
     textarea: TextArea<'static>,
     /// True when the buffer has text that is not on disk.
     dirty: bool,
@@ -122,7 +124,7 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn open(path: PathBuf, root: PathBuf, picker: Picker) -> io::Result<Self> {
+    pub fn open(path: PathBuf, root: PathBuf, main: Option<PathBuf>, picker: Picker) -> io::Result<Self> {
         let text = fs::read_to_string(&path)?;
         let mut textarea = TextArea::new(text.lines().map(String::from).collect());
         textarea.set_cursor_line_style(Style::default());
@@ -133,6 +135,7 @@ impl Editor {
             conflict: false,
             path,
             root,
+            main,
             textarea,
             dirty: false,
             last_edit: None,
@@ -193,7 +196,8 @@ impl Editor {
         } else if ctrl && key.code == KeyCode::Char('e') {
             if self.save(false) {
                 // The new export replaces the old export. Dropping the old export kills its process.
-                self.export = Some(Job::start_pdf(&self.path, &self.root, self.path.with_extension("pdf")));
+                let target = self.compile_target().to_path_buf();
+                self.export = Some(Job::start_pdf(&target, &self.root, target.with_extension("pdf")));
                 self.exported = None;
                 self.message = "Exporting the PDF...".into();
             }
@@ -220,8 +224,14 @@ impl Editor {
     fn save_and_compile(&mut self) {
         if self.save(false) {
             self.stop_compile();
-            self.job = Some(Job::start(&self.path, &self.root, compile::next_dir(&self.pages_root)));
+            let target = self.compile_target().to_path_buf();
+            self.job = Some(Job::start(&target, &self.root, compile::next_dir(&self.pages_root)));
         }
+    }
+
+    /// The file that the compile and the export use: the main file, or else the open file.
+    fn compile_target(&self) -> &Path {
+        self.main.as_deref().unwrap_or(&self.path)
     }
 
     /// Kills the running compile and deletes its page folder.
@@ -323,7 +333,12 @@ impl Editor {
             Layout::vertical([Constraint::Min(0), Constraint::Length(PANE_HEIGHT)]).areas(left);
         let marker = if self.dirty { " [+]" } else { "" };
         let name = self.path.strip_prefix(&self.root).unwrap_or(&self.path);
-        let block = Block::bordered().title(format!("{}{marker}", name.display()));
+        let mut title = format!("{}{marker}", name.display());
+        if let Some(main) = self.main.as_deref().filter(|main| *main != self.path) {
+            let main = main.strip_prefix(&self.root).unwrap_or(main);
+            title.push_str(&format!(" (main: {})", main.display()));
+        }
+        let block = Block::bordered().title(title);
         let inner = block.inner(body);
         frame.render_widget(block, body);
         frame.render_widget(&self.textarea, inner);
@@ -346,8 +361,18 @@ mod tests {
     /// Opens the file. The pages of each compile go to the folder `pages` next to the file,
     /// so no test writes into the temporary folder that the whole program shares.
     fn open(path: &std::path::Path) -> Editor {
-        let root = path.parent().unwrap().to_path_buf();
-        let mut editor = Editor::open(path.to_path_buf(), root.clone(), Picker::halfblocks()).unwrap();
+        open_with_main(path, None)
+    }
+
+    /// Opens the file with `main` as the main file. The root is the nearest folder above the file
+    /// that holds `main`. Without a main file, the root is the folder of the file.
+    fn open_with_main(path: &std::path::Path, main: Option<&str>) -> Editor {
+        let root = match main {
+            Some(name) => path.ancestors().skip(1).find(|dir| dir.join(name).exists()).unwrap().to_path_buf(),
+            None => path.parent().unwrap().to_path_buf(),
+        };
+        let main = main.map(|name| root.join(name));
+        let mut editor = Editor::open(path.to_path_buf(), root.clone(), main, Picker::halfblocks()).unwrap();
         editor.pages_root = root.join("pages");
         editor
     }
@@ -453,6 +478,88 @@ mod tests {
         editor.handle_key(ctrl('s'));
         assert!(!dir.join("elsewhere.txt").exists(), "the save created the link target");
         assert!(editor.message.contains("Save failed"), "{}", editor.message);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Makes `main.typ`, which includes `chapters/one.typ` with `chapter`. Returns the path of the chapter.
+    fn book(name: &str, chapter: &str) -> PathBuf {
+        let main = temp_file(name, "#include \"chapters/one.typ\"\n");
+        let dir = main.parent().unwrap().to_path_buf();
+        fs::rename(&main, dir.join("main.typ")).unwrap();
+        fs::create_dir_all(dir.join("chapters")).unwrap();
+        fs::write(dir.join("chapters").join("one.typ"), chapter).unwrap();
+        dir.join("chapters").join("one.typ")
+    }
+
+    #[test]
+    fn with_a_main_file_ctrl_e_exports_the_main_file() {
+        let chapter = book("main-export", "= One\n");
+        let dir = chapter.parent().unwrap().parent().unwrap().to_path_buf();
+        let mut editor = open_with_main(&chapter, Some("main.typ"));
+        editor.handle_key(ctrl('e'));
+        wait_for_export(&mut editor);
+
+        assert!(dir.join("main.pdf").exists(), "main.pdf is missing");
+        assert!(!dir.join("chapters").join("one.pdf").exists(), "the chapter was exported");
+        assert!(editor.exported.as_ref().unwrap().ends_with("main.pdf"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn with_a_main_file_ctrl_b_compiles_the_main_file_and_names_the_chapter_in_errors() {
+        let chapter = book("main-error", "#nope()\n");
+        let dir = chapter.parent().unwrap().parent().unwrap().to_path_buf();
+        let mut editor = open_with_main(&chapter, Some("main.typ"));
+        // The buffer is clean. Ctrl-B must still compile.
+        editor.handle_key(ctrl('b'));
+        assert!(editor.job.is_some());
+        wait_for_report(&mut editor);
+
+        let report = editor.report.as_ref().unwrap();
+        assert!(!report.ok);
+        assert!(report.lines.iter().any(|l| l.starts_with("chapters/one.typ:1:")), "{:?}", report.lines);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn with_a_main_file_the_autosave_of_a_chapter_updates_the_preview_of_the_main_file() {
+        let chapter = book("main-live", "= One\n");
+        let dir = chapter.parent().unwrap().parent().unwrap().to_path_buf();
+        let mut editor = open_with_main(&chapter, Some("main.typ"));
+        editor.handle_key(key(KeyCode::Char('X')));
+        assert!(editor.tick(Instant::now() + Duration::from_millis(400)));
+
+        assert_eq!(fs::read_to_string(&chapter).unwrap(), "X= One\n", "the chapter must be saved");
+        assert_eq!(fs::read_to_string(dir.join("main.typ")).unwrap(), "#include \"chapters/one.typ\"\n");
+        wait_for_report(&mut editor);
+        assert!(editor.report.as_ref().unwrap().ok);
+        assert!(editor.preview.has_page());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_title_names_the_main_file_when_it_is_not_the_open_file() {
+        let chapter = book("main-title", "= One\n");
+        let dir = chapter.parent().unwrap().parent().unwrap().to_path_buf();
+        let mut editor = open_with_main(&chapter, Some("main.typ"));
+        let text = screen_text(&mut editor);
+        assert!(text.contains("chapters/one.typ (main: main.typ)"), "{text}");
+
+        let mut editor = open_with_main(&dir.join("main.typ"), Some("main.typ"));
+        let text = screen_text(&mut editor);
+        assert!(text.contains("main.typ") && !text.contains("(main:"), "{text}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn without_a_main_file_the_open_file_is_the_compile_target() {
+        let chapter = book("main-none", "= One\n");
+        let dir = chapter.parent().unwrap().parent().unwrap().to_path_buf();
+        let mut editor = open(&chapter);
+        editor.handle_key(ctrl('e'));
+        wait_for_export(&mut editor);
+        assert!(dir.join("chapters").join("one.pdf").exists());
+        assert!(!dir.join("main.pdf").exists());
         fs::remove_dir_all(dir).unwrap();
     }
 

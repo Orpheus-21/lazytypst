@@ -109,7 +109,7 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => self.list.select_previous(),
             KeyCode::Enter => {
                 if let Some(path) = self.list.selected().and_then(|i| self.files.get(i)) {
-                    let opened = Editor::open(self.root.join(path), self.root.clone(), self.picker.clone());
+                    let opened = Editor::open(self.root.join(path), self.root.clone(), None, self.picker.clone());
                     self.status = match opened {
                         Ok(editor) => {
                             self.editor = Some(editor);
