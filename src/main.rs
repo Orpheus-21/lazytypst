@@ -8,7 +8,7 @@ mod state;
 
 use std::{
     ffi::OsString,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -42,10 +42,11 @@ struct App {
 }
 
 const USAGE: &str = "\
-Usage: lazytypst [FOLDER]
+Usage: lazytypst [FOLDER | FILE.typ]
 
 lazytypst lists the .typ files in FOLDER and opens them in an editor with a live preview.
 Without FOLDER, lazytypst uses the current folder. FOLDER is also the Typst project root.
+With a .typ file, lazytypst opens the file at once. The folder of the file is the project root.
 
 Options:
   -h, --help     Show this help.
@@ -103,6 +104,32 @@ fn missing_typst_message(err: &std::io::Error) -> String {
 fn version_text(lazytypst: &str, typst: std::io::Result<String>) -> String {
     let typst = typst.unwrap_or_else(|err| format!("typst: {}", typst_problem(&err)));
     format!("lazytypst {lazytypst}\n{typst}\n")
+}
+
+/// What the first argument names: the project root, and a file to open at once if the argument is a file.
+#[derive(Debug, PartialEq)]
+struct Target {
+    root: PathBuf,
+    /// The file to open, as a path relative to `root`.
+    open: Option<PathBuf>,
+}
+
+/// Finds the root and the file to open. The argument is a folder, or a file with the ending `.typ`.
+/// The folder of a file is the root. A symlink keeps its own name and its own folder.
+/// The error has the message and the exit code: 1 if the path cannot be opened, and 2 if it is a file
+/// that does not end with `.typ`.
+fn resolve_target(arg: &Path) -> Result<Target, (String, i32)> {
+    let cannot_open = |err: std::io::Error| (format!("Cannot open {}: {err}", arg.display()), 1);
+    // An absolute root keeps every derived path valid when typst runs inside the root.
+    if std::fs::metadata(arg).map_err(cannot_open)?.is_dir() {
+        return Ok(Target { root: std::fs::canonicalize(arg).map_err(cannot_open)?, open: None });
+    }
+    if arg.extension().is_none_or(|ending| ending != "typ") {
+        return Err((format!("{} is not a .typ file. Give a folder or a .typ file.", arg.display()), 2));
+    }
+    let folder = arg.parent().filter(|folder| !folder.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let root = std::fs::canonicalize(folder).map_err(cannot_open)?;
+    Ok(Target { root, open: arg.file_name().map(PathBuf::from) })
 }
 
 /// Reads the arguments. `args_os` keeps a folder name that is not UTF-8. `args` would panic on it.
@@ -182,11 +209,25 @@ impl App {
         }
     }
 
-    /// Opens the selected file in the editor. A file that cannot be read shows an error in the list.
+    /// Opens the selected file in the editor.
     fn open_selected(&mut self) {
-        let Some(path) = self.selected_file().cloned() else {
-            return;
-        };
+        if let Some(path) = self.selected_file().cloned() {
+            self.open_file(path);
+        }
+    }
+
+    /// Opens the file that the command line named, and selects it in the list if the list shows it.
+    /// A file that the list does not show, for example a hidden file, opens too.
+    fn open_target(&mut self, relative: PathBuf) {
+        if let Some(index) = self.files.iter().position(|file| *file == relative) {
+            self.list.select(Some(index));
+        }
+        self.open_file(relative);
+    }
+
+    /// Opens the file `path`, relative to the root, in the editor. A file that cannot be read shows an
+    /// error in the list.
+    fn open_file(&mut self, path: PathBuf) {
         let main = self.main_file.as_ref().map(|main| self.root.join(main));
         let opened = Editor::open(self.root.join(&path), self.root.clone(), main, self.picker.clone());
         self.status = match opened {
@@ -292,8 +333,8 @@ impl App {
 }
 
 fn main() -> std::io::Result<()> {
-    let root = match parse_args(std::env::args_os()) {
-        Ok(Args::Run(root)) => root,
+    let arg = match parse_args(std::env::args_os()) {
+        Ok(Args::Run(arg)) => arg,
         Ok(Args::Help) => {
             print!("{USAGE}");
             return Ok(());
@@ -307,12 +348,11 @@ fn main() -> std::io::Result<()> {
             std::process::exit(2);
         }
     };
-    // An absolute root keeps every derived path valid when typst runs inside the root.
-    let root = match std::fs::canonicalize(&root) {
-        Ok(root) => root,
-        Err(err) => {
-            eprintln!("Cannot open the folder {}: {err}", root.display());
-            std::process::exit(1);
+    let Target { root, open } = match resolve_target(&arg) {
+        Ok(target) => target,
+        Err((message, code)) => {
+            eprintln!("{message}");
+            std::process::exit(code);
         }
     };
     // Check typst before anything else changes: no temporary folder is made, and the terminal is not touched.
@@ -339,6 +379,9 @@ fn main() -> std::io::Result<()> {
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     let mut app = App::new(root, files, picker);
     app.load_state(state::default_state_file());
+    if let Some(relative) = open {
+        app.open_target(relative);
+    }
     let result = run(&mut terminal, &mut app);
     ratatui::restore();
     compile::cleanup();
@@ -935,6 +978,119 @@ mod tests {
         assert!(message.contains("not found in PATH"), "{message}");
         assert!(message.contains("https://github.com/typst/typst#installation"), "{message}");
         assert!(message.ends_with('\n'));
+    }
+
+    /// A new folder for the tests of `resolve_target`.
+    fn target_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lazytypst-target-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::canonicalize(&dir).unwrap()
+    }
+
+    #[test]
+    fn a_folder_argument_is_the_root_and_opens_no_file() {
+        let dir = target_dir("folder");
+        let target = resolve_target(&dir).unwrap();
+        assert_eq!(target, Target { root: dir.clone(), open: None });
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_typ_file_argument_opens_the_file_and_its_folder_is_the_root() {
+        let dir = target_dir("file");
+        fs::create_dir_all(dir.join("chapters")).unwrap();
+        fs::write(dir.join("chapters").join("one.typ"), "= One\n").unwrap();
+        let target = resolve_target(&dir.join("chapters").join("one.typ")).unwrap();
+        assert_eq!(target, Target { root: dir.join("chapters"), open: Some(PathBuf::from("one.typ")) });
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_to_a_typ_file_uses_the_folder_of_the_link() {
+        let dir = target_dir("link");
+        fs::create_dir_all(dir.join("real")).unwrap();
+        fs::write(dir.join("real").join("real.typ"), "").unwrap();
+        std::os::unix::fs::symlink(dir.join("real").join("real.typ"), dir.join("link.typ")).unwrap();
+        let target = resolve_target(&dir.join("link.typ")).unwrap();
+        assert_eq!(target, Target { root: dir.clone(), open: Some(PathBuf::from("link.typ")) });
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_hidden_typ_file_and_a_folder_named_like_a_typ_file_work() {
+        let dir = target_dir("odd");
+        fs::write(dir.join(".draft.typ"), "").unwrap();
+        fs::create_dir_all(dir.join("book.typ")).unwrap();
+        assert_eq!(resolve_target(&dir.join(".draft.typ")).unwrap().open, Some(PathBuf::from(".draft.typ")));
+        let folder = resolve_target(&dir.join("book.typ")).unwrap();
+        assert_eq!(folder, Target { root: dir.join("book.typ"), open: None });
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_typ_file_gives_exit_code_2() {
+        let dir = target_dir("notes");
+        for name in ["notes.txt", "x.TYP", "typ", "x.typ.bak"] {
+            fs::write(dir.join(name), "").unwrap();
+            let (message, code) = resolve_target(&dir.join(name)).unwrap_err();
+            assert_eq!(code, 2, "{name}");
+            assert!(message.contains(name) && message.contains(".typ"), "{message}");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_path_that_does_not_exist_gives_exit_code_1() {
+        let (message, code) = resolve_target(Path::new("/no/such/path.typ")).unwrap_err();
+        assert_eq!(code, 1);
+        assert!(message.contains("Cannot open /no/such/path.typ"), "{message}");
+    }
+
+    #[test]
+    fn a_bare_file_name_has_the_current_folder_as_its_root() {
+        // The file is in the folder of the test run, so the test makes it there and removes it.
+        let name = format!("lazytypst-bare-{}.typ", std::process::id());
+        fs::write(&name, "").unwrap();
+        let target = resolve_target(Path::new(&name)).unwrap();
+        fs::remove_file(&name).unwrap();
+        assert_eq!(target.root, fs::canonicalize(".").unwrap());
+        assert_eq!(target.open, Some(PathBuf::from(&name)));
+    }
+
+    #[test]
+    fn the_program_starts_with_the_file_open_and_esc_shows_the_list_of_its_folder() {
+        let mut app = app_with_three_files("target");
+        app.open_target(PathBuf::from("b.typ"));
+        let text = screen(&mut app);
+        assert!(text.contains("b.typ") && text.contains("text of b") && text.contains("Ctrl-S save"), "{text}");
+
+        press(&mut app, KeyCode::Esc);
+        let text = screen(&mut app);
+        assert!(text.contains("a.typ") && text.contains("c.typ"), "{text}");
+        assert_eq!(app.list.selected(), Some(1), "the opened file must be selected in the list");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_the_list_does_not_show_still_opens() {
+        let mut app = app_with_three_files("hidden-target");
+        fs::write(app.root.join(".draft.typ"), "text of draft\n").unwrap();
+        app.open_target(PathBuf::from(".draft.typ"));
+        assert!(screen(&mut app).contains("text of draft"));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.list.selected(), Some(0), "the selection stays when the file is not in the list");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_shows_the_error_in_the_list() {
+        let mut app = app_with_three_files("target-bad");
+        fs::write(app.root.join("a.typ"), b"\xff\xfe").unwrap();
+        app.open_target(PathBuf::from("a.typ"));
+        assert!(app.editor.is_none());
+        assert!(screen(&mut app).contains("Cannot open a.typ"));
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     fn args(list: &[&str]) -> Result<Args, String> {
