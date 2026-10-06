@@ -47,7 +47,7 @@ The program is the file `target/release/lazytypst`.
 
 ## Usage
 
-Run the program with a folder as the argument. If you give no argument, the program uses the current folder. `lazytypst --help` prints the usage and the keys. `lazytypst --version` prints two lines: the version of lazytypst, and the version line of the `typst` command. If `typst` does not run, the second line says why, for example `typst: not found in PATH`. Put both lines in a bug report. A folder name that starts with a dash needs `./` in front.
+Run the program with a folder as the argument. If you give no argument, the program uses the current folder. If you give a file with the ending `.typ`, the program opens that file in the editor at once. The folder of the file is the project root and the folder of the file list, and `Esc` shows that list with the file selected. A file that does not end with `.typ` gives an error and exit code 2. A path that does not exist gives an error and exit code 1. `lazytypst --help` prints the usage and the keys. `lazytypst --version` prints two lines: the version of lazytypst, and the version line of the `typst` command. If `typst` does not run, the second line says why, for example `typst: not found in PATH`. Put both lines in a bug report. A folder name that starts with a dash needs `./` in front.
 
 ```
 target/release/lazytypst ~/Documents
@@ -64,6 +64,7 @@ Keys in the file list:
 - `Enter`: open the selected file in the editor.
 - `n`: make a new file. A prompt asks for a path, for example `chapters/two`. `Enter` makes the empty file, opens it in the editor, and selects it in the list. `Esc` cancels. The program adds `.typ` if the name has no ending, and it makes missing folders. The program refuses a name that leaves the project, that has an ending other than `.typ`, that starts with a dot, that is deeper than the list reads, that goes through a link, or that exists already. The prompt then stays open and the status line gives the reason.
 - `r`: read the folder again. New files appear and deleted files go. The selection stays on the same file if it is still there. A main file that is gone loses its mark.
+- `g` or `Home`: select the first file. `G` or `End`: select the last file.
 - `m`: mark the selected file as the main file, or remove the mark.
 - `q`: quit.
 
