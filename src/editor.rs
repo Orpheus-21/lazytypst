@@ -328,16 +328,24 @@ impl Editor {
         let (mut color, mut lines) = match &self.report {
             Some(report) => {
                 let color = if report.ok { Color::Green } else { Color::Red };
-                let head = report.ok.then(|| "OK".to_string());
+                let head = report.ok.then(|| match report.elapsed {
+                    Some(elapsed) => format!("OK in {} ms", elapsed.as_millis()),
+                    None => "OK".to_string(),
+                });
                 (color, head.into_iter().chain(report.lines.iter().cloned()).collect())
             }
             None => (Color::Reset, vec!["Press Ctrl-B to compile.".to_string()]),
         };
-        let mut title = "Compile";
+        let mut title = "Compile".to_string();
+        if let Some(report) = self.report.as_ref().filter(|report| !report.ok)
+            && let Some(elapsed) = report.elapsed
+        {
+            title = format!("Compile ({} ms)", elapsed.as_millis());
+        }
         if self.job.is_some() {
             // The last report stays on screen until the new report replaces it.
             color = Color::Yellow;
-            title = "Compile (running)";
+            title = "Compile (running)".to_string();
             if self.report.is_none() {
                 lines = vec!["Compiling...".to_string()];
             }
@@ -1083,6 +1091,50 @@ mod tests {
         editor.handle_key(key(KeyCode::Char('X')));
         editor.handle_key(ctrl('s'));
         assert_eq!(fs::read_to_string(&path).unwrap(), "X\tindented\n\tmore\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
+    fn pane_rows(editor: &mut Editor) -> Vec<String> {
+        // The pane stands under the text area: the last 6 rows above the status line.
+        let rows = screen_rows(editor);
+        rows[rows.len() - 7..rows.len() - 1].iter().map(|row| row.chars().take(50).collect()).collect()
+    }
+
+    #[test]
+    fn a_good_compile_shows_its_time_in_the_first_line() {
+        let path = temp_file("timeok", "text\n");
+        let mut editor = open(&path);
+        editor.report = Some(Report::new(true, vec![]).with_elapsed(Duration::from_millis(310)));
+        let rows = pane_rows(&mut editor);
+        assert!(rows[1].contains("OK in 310 ms"), "{rows:?}");
+
+        editor.report = Some(Report::new(true, vec![]));
+        assert!(pane_rows(&mut editor)[1].starts_with("│OK "), "OK without a time stays OK");
+        assert!(!pane_rows(&mut editor)[1].contains(" in "));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_failed_compile_shows_its_time_in_the_title() {
+        let path = temp_file("timefail", "text\n");
+        let mut editor = open(&path);
+        editor.report = Some(Report::new(false, vec!["a.typ:1:1: error: x".into()]).with_elapsed(Duration::from_millis(1234)));
+        let rows = pane_rows(&mut editor);
+        assert!(rows[0].contains("Compile") && rows[0].contains("(1234 ms)"), "{rows:?}");
+
+        editor.report = Some(Report::failed("Cannot run typst"));
+        assert!(!pane_rows(&mut editor)[0].contains("ms"), "no time for a command that did not run");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_real_compile_shows_its_time() {
+        let path = temp_file("timereal", "= Title\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        let rows = pane_rows(&mut editor);
+        assert!(rows[1].starts_with("│OK in ") && rows[1].contains(" ms"), "{rows:?}");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

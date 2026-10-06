@@ -8,6 +8,7 @@ use std::{
         mpsc::{self, Receiver, TryRecvError},
     },
     thread,
+    time::{Duration, Instant},
 };
 
 /// The result of one `typst compile` run.
@@ -17,12 +18,19 @@ pub struct Report {
     pub lines: Vec<String>,
     /// One entry for each line of `lines`, parsed once when the report is made.
     pub diagnostics: Vec<Diagnostic>,
+    /// How long the command ran. `None` if the command did not run.
+    pub elapsed: Option<Duration>,
 }
 
 impl Report {
     pub fn new(ok: bool, lines: Vec<String>) -> Self {
         let diagnostics = lines.iter().map(|line| Diagnostic::parse(line)).collect();
-        Self { ok, lines, diagnostics }
+        Self { ok, lines, diagnostics, elapsed: None }
+    }
+
+    pub fn with_elapsed(mut self, elapsed: Duration) -> Self {
+        self.elapsed = Some(elapsed);
+        self
     }
 
     pub fn failed(message: impl Into<String>) -> Self {
@@ -222,7 +230,7 @@ enum State {
     /// The command did not start. The report waits here until `try_report` takes it.
     Failed(Option<Report>),
     /// The command runs. A thread reads its stderr and sends the bytes when the process closes stderr.
-    Running { child: Child, stderr: Receiver<Vec<u8>> },
+    Running { child: Child, stderr: Receiver<(Vec<u8>, Duration)> },
 }
 
 impl Job {
@@ -279,6 +287,7 @@ impl Job {
     /// Starts the command. The lines it prints on stderr become the report.
     fn spawn(mut command: Command, output: PathBuf) -> Job {
         command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let started = Instant::now();
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {
@@ -291,8 +300,11 @@ impl Job {
         thread::spawn(move || {
             let mut bytes = Vec::new();
             let _ = pipe.read_to_end(&mut bytes);
+            // The read ends when the process ends. So this is the time of the command, and not the time
+            // until the main loop polls for the report.
+            let elapsed = started.elapsed();
             // The receiver is gone when the job was dropped. Then nobody needs the bytes.
-            let _ = tx.send(bytes);
+            let _ = tx.send((bytes, elapsed));
         });
         Job { state: State::Running { child, stderr }, output }
     }
@@ -309,7 +321,7 @@ impl Job {
             Err(err) => return Some(report(Err(err), &[])),
         };
         match stderr.try_recv() {
-            Ok(bytes) => Some(report(Ok(status), &bytes)),
+            Ok((bytes, elapsed)) => Some(report(Ok(status), &bytes).with_elapsed(elapsed)),
             // The process has ended, but the thread has not sent the bytes yet. The next call gets them.
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => Some(report(Ok(status), &[])),
@@ -345,7 +357,6 @@ fn report(status: io::Result<ExitStatus>, stderr: &[u8]) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
 
     /// Waits up to 10 seconds for the report of the job.
     fn wait(job: &mut Job) -> Report {
@@ -648,6 +659,32 @@ mod tests {
     fn the_real_typst_has_a_version() {
         let version = typst_version().expect("typst must be in PATH to run the tests");
         assert!(version.starts_with("typst "), "{version}");
+    }
+
+    #[test]
+    fn a_report_knows_how_long_the_command_ran() {
+        let mut command = Command::new("sleep");
+        command.arg("0.3");
+        let report = wait(&mut Job::spawn(command, PathBuf::new()));
+        let elapsed = report.elapsed.expect("a command that ran has a time");
+        assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    }
+
+    #[test]
+    fn the_time_is_the_time_of_the_command_and_not_the_time_until_the_poll() {
+        let job = &mut Job::ended_with_success(PathBuf::new());
+        thread::sleep(Duration::from_millis(600)); // nobody polls for a while
+        let elapsed = wait(job).elapsed.unwrap();
+        assert!(elapsed < Duration::from_millis(400), "the time includes the wait for the poll: {elapsed:?}");
+    }
+
+    #[test]
+    fn a_report_of_a_command_that_did_not_start_has_no_time() {
+        let report = wait(&mut Job::spawn(Command::new("no-such-program-xyz"), PathBuf::new()));
+        assert_eq!(report.elapsed, None);
+        assert_eq!(Report::failed("x").elapsed, None);
+        assert_eq!(Report::new(true, vec![]).elapsed, None);
     }
 
     #[test]
