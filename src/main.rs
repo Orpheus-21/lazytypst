@@ -22,9 +22,30 @@ use ratatui::{
 };
 
 use ratatui_image::picker::Picker;
-use ratatui_textarea::TextArea;
+use ratatui_textarea::{CursorMove, TextArea};
 
 use editor::{Action, Editor};
+
+/// What the prompt asks for.
+#[derive(Clone, Copy, PartialEq)]
+enum PromptKind {
+    NewFile,
+    Filter,
+}
+
+impl PromptKind {
+    fn label(self) -> &'static str {
+        match self {
+            PromptKind::NewFile => "New file: ",
+            PromptKind::Filter => "Filter: ",
+        }
+    }
+}
+
+struct Prompt {
+    kind: PromptKind,
+    input: TextArea<'static>,
+}
 
 struct App {
     root: PathBuf,
@@ -38,8 +59,12 @@ struct App {
     status: String,
     /// Where the cursor was in each file when the user closed it. The positions stay in memory for this run.
     cursors: HashMap<PathBuf, (usize, usize)>,
-    /// The prompt for the name of a new file. While it is open, it takes every key.
-    prompt: Option<TextArea<'static>>,
+    /// The prompt for a new file name, or for the filter. While it is open, it takes every key.
+    prompt: Option<Prompt>,
+    /// The part of a path that a file must have to show in the list. The match ignores case. Empty: no filter.
+    filter: String,
+    /// All the files that the folder has. `files` holds those that the filter lets through.
+    all_files: Vec<PathBuf>,
     /// The open file. The browser shows while this is `None`.
     editor: Option<Editor>,
 }
@@ -60,6 +85,7 @@ Keys in the file list:
   k or Up        Select the previous file.
   Enter          Open the selected file.
   n              Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
+  /              Filter the list. Type a part of a path. Enter keeps the filter, Esc removes it.
   r              Read the folder again, to show new files and to drop deleted files.
   g or Home      Select the first file.
   G or End       Select the last file.
@@ -162,7 +188,9 @@ impl App {
         App {
             root,
             picker,
+            all_files: files.clone(),
             files,
+            filter: String::new(),
             main_file: None,
             state_file: None,
             list: ListState::default().with_selected(first),
@@ -179,7 +207,7 @@ impl App {
         self.main_file = state_file
             .as_deref()
             .and_then(|file| state::load_main(file, &self.root))
-            .filter(|main| self.files.contains(main));
+            .filter(|main| self.all_files.contains(main));
         self.state_file = state_file;
     }
 
@@ -204,12 +232,10 @@ impl App {
                 return;
             }
         };
-        let selected = self.selected_file().cloned();
-        let index = selected.and_then(|path| files.iter().position(|file| *file == path));
-        self.list.select((!files.is_empty()).then_some(index.unwrap_or(0)));
         self.status = format!("Read the folder again: {} files", files.len());
-        self.files = files;
-        if self.main_file.as_ref().is_some_and(|main| !self.files.contains(main)) {
+        self.all_files = files;
+        self.set_filter(self.filter.clone()); // keeps the filter and the selection
+        if self.main_file.as_ref().is_some_and(|main| !self.all_files.contains(main)) {
             self.main_file = None;
             self.save_main_choice();
         }
@@ -248,11 +274,21 @@ impl App {
         };
     }
 
-    fn open_prompt(&mut self) {
-        let mut prompt = TextArea::default();
-        prompt.set_cursor_line_style(Style::default());
-        self.prompt = Some(prompt);
-        self.status = "Type a path such as chapters/two. Enter makes the file. Esc cancels.".into();
+    /// Opens the prompt for the name of a new file, or for the filter. The filter prompt starts with the
+    /// filter that is on, so the user can change it.
+    fn open_prompt(&mut self, kind: PromptKind) {
+        let mut input = match kind {
+            PromptKind::NewFile => TextArea::default(),
+            PromptKind::Filter => TextArea::new(vec![self.filter.clone()]),
+        };
+        input.set_cursor_line_style(Style::default());
+        input.move_cursor(CursorMove::End);
+        self.prompt = Some(Prompt { kind, input });
+        self.status = match kind {
+            PromptKind::NewFile => "Type a path such as chapters/two. Enter makes the file. Esc cancels.",
+            PromptKind::Filter => "Type to filter the list. Enter keeps the filter. Esc removes it.",
+        }
+        .into();
     }
 
     /// Handles a key while the prompt is open. Enter makes the file and opens it. If the name is not
@@ -261,29 +297,60 @@ impl App {
         let Some(prompt) = &mut self.prompt else {
             return;
         };
-        match key.code {
-            KeyCode::Esc => {
+        let kind = prompt.kind;
+        let text = prompt.input.lines().join("");
+        match (kind, key.code) {
+            (PromptKind::Filter, KeyCode::Esc) => {
+                self.prompt = None;
+                self.status.clear();
+                self.set_filter(String::new());
+            }
+            (PromptKind::NewFile, KeyCode::Esc) => {
                 self.prompt = None;
                 self.status.clear();
             }
-            KeyCode::Enter => {
-                let name = prompt.lines().join("");
-                match newfile::create(&self.root, &name, browser::MAX_DEPTH) {
-                    Ok(made) => {
-                        self.prompt = None;
-                        self.refresh();
-                        if let Some(index) = self.files.iter().position(|file| *file == made) {
-                            self.list.select(Some(index));
-                        }
-                        self.open_selected();
-                    }
-                    Err(message) => self.status = message,
-                }
+            (PromptKind::Filter, KeyCode::Enter) => {
+                self.prompt = None;
+                self.status.clear();
             }
-            _ => {
-                prompt.input(key);
+            (PromptKind::NewFile, KeyCode::Enter) => match newfile::create(&self.root, &text, browser::MAX_DEPTH) {
+                Ok(made) => {
+                    self.prompt = None;
+                    self.filter.clear(); // the new file must show in the list
+                    self.refresh();
+                    if let Some(index) = self.files.iter().position(|file| *file == made) {
+                        self.list.select(Some(index));
+                    }
+                    self.open_selected();
+                }
+                Err(message) => self.status = message,
+            },
+            (PromptKind::Filter, _) => {
+                prompt.input.input(key);
+                // The list follows the text at once, while the user types.
+                let text = prompt.input.lines().join("");
+                self.set_filter(text);
+            }
+            (PromptKind::NewFile, _) => {
+                prompt.input.input(key);
             }
         }
+    }
+
+    /// Sets the filter and shows the files that match. The selection stays on the same file if the filter
+    /// still shows it, and moves to the first file if not.
+    fn set_filter(&mut self, filter: String) {
+        self.filter = filter;
+        let selected = self.selected_file().cloned();
+        let needle = self.filter.to_lowercase();
+        self.files = self
+            .all_files
+            .iter()
+            .filter(|path| needle.is_empty() || path.to_string_lossy().to_lowercase().contains(&needle))
+            .cloned()
+            .collect();
+        let index = selected.and_then(|path| self.files.iter().position(|file| *file == path));
+        self.list.select((!self.files.is_empty()).then_some(index.unwrap_or(0)));
     }
 
     /// Selects the file at `index`. `None`, or an index beyond the list, selects nothing in an empty list
@@ -328,13 +395,15 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') => return true,
-            KeyCode::Char('j') | KeyCode::Down => self.list.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.list.select_previous(),
+            KeyCode::Char('j') | KeyCode::Down if !self.files.is_empty() => self.list.select_next(),
+            KeyCode::Char('k') | KeyCode::Up if !self.files.is_empty() => self.list.select_previous(),
             KeyCode::Char('g') | KeyCode::Home => self.select_index(Some(0)),
             KeyCode::Char('G') | KeyCode::End => self.select_index(self.files.len().checked_sub(1)),
             KeyCode::Char('m') => self.toggle_main(),
             KeyCode::Char('r') => self.refresh(),
-            KeyCode::Char('n') => self.open_prompt(),
+            KeyCode::Char('n') => self.open_prompt(PromptKind::NewFile),
+            KeyCode::Char('/') => self.open_prompt(PromptKind::Filter),
+            KeyCode::Esc if !self.filter.is_empty() => self.set_filter(String::new()),
             KeyCode::Enter => self.open_selected(),
             _ => {}
         }
@@ -429,9 +498,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Length(prompt_height),
     ])
     .areas(frame.area());
-    let block = Block::bordered().title("lazytypst");
-    if app.files.is_empty() {
+    let title = if app.filter.is_empty() { "lazytypst".to_string() } else { format!("lazytypst /{}", app.filter) };
+    let block = Block::bordered().title(title);
+    if app.all_files.is_empty() {
         frame.render_widget(Paragraph::new("No .typ files").block(block), body);
+    } else if app.files.is_empty() {
+        frame.render_widget(Paragraph::new("No match").block(block), body);
     } else {
         let items = app.files.iter().map(|path| {
             let mark = if app.main_file.as_ref() == Some(path) { " [main]" } else { "" };
@@ -445,9 +517,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
     }
     frame.render_widget(Paragraph::new(app.status.as_str()), status);
     if let Some(prompt) = &app.prompt {
-        let [label, input] = Layout::horizontal([Constraint::Length(10), Constraint::Min(1)]).areas(prompt_row);
-        frame.render_widget(Paragraph::new("New file: "), label);
-        frame.render_widget(prompt, input);
+        let label_text = prompt.kind.label();
+        let label_width = u16::try_from(label_text.len()).unwrap_or(u16::MAX);
+        let [label, input] =
+            Layout::horizontal([Constraint::Length(label_width), Constraint::Min(1)]).areas(prompt_row);
+        frame.render_widget(Paragraph::new(label_text), label);
+        frame.render_widget(&prompt.input, input);
     }
 }
 
@@ -1023,6 +1098,235 @@ mod tests {
         press(&mut second, KeyCode::Enter);
         assert!(status_row(&mut second).trim_end().ends_with("1:1"), "a new start begins at line 1");
         fs::remove_dir_all(&first.root).unwrap();
+    }
+
+    /// An app with four files: `README.typ`, `chapters/one.typ`, `chapters/two.typ`, and `notes/draft.typ`.
+    fn app_for_filter(name: &str) -> App {
+        let root = std::env::temp_dir().join(format!("lazytypst-main-filter-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for file in ["README.typ", "chapters/one.typ", "chapters/two.typ", "notes/draft.typ", "Épilogue.typ"] {
+            let path = root.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, format!("text of {file}\n")).unwrap();
+        }
+        let files = browser::find_typ_files(&root, browser::MAX_DEPTH).unwrap();
+        App::new(root, files, Picker::halfblocks())
+    }
+
+    /// The names that the list shows, from the screen text: the rows of the list inside its border.
+    fn listed(app: &mut App) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (1..20)
+            .map(|row| (1..99).map(|column| buffer[(column, row)].symbol()).collect::<String>())
+            .map(|row| row.trim().trim_start_matches('>').trim().to_string())
+            .filter(|row| row.ends_with(".typ") || row.contains(".typ ["))
+            .collect()
+    }
+
+    #[test]
+    fn slash_opens_the_filter_prompt_and_typing_filters_the_list_at_once() {
+        let mut app = app_for_filter("type");
+        assert_eq!(listed(&mut app).len(), 5);
+        press(&mut app, KeyCode::Char('/'));
+        assert!(screen(&mut app).contains("Filter:"));
+        type_text(&mut app, "chap");
+        assert_eq!(listed(&mut app), ["chapters/one.typ", "chapters/two.typ"]);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_filter_ignores_case_and_matches_the_whole_path() {
+        let mut app = app_for_filter("case");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "READme");
+        assert_eq!(listed(&mut app), ["README.typ"]);
+        for _ in 0..6 {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_text(&mut app, "CHAPTERS/ONE");
+        assert_eq!(listed(&mut app), ["chapters/one.typ"]);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_filter_ignores_case_for_letters_with_accents() {
+        let mut app = app_for_filter("accent");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "épi");
+        assert_eq!(listed(&mut app), ["Épilogue.typ"]);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn esc_in_the_prompt_shows_all_files_again() {
+        let mut app = app_for_filter("esc");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "chap");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(listed(&mut app).len(), 5);
+        let text = screen(&mut app);
+        assert!(!text.contains("Filter:") && !text.contains("lazytypst /"), "{text}");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn enter_in_the_prompt_keeps_the_filter_and_the_title_shows_it() {
+        let mut app = app_for_filter("enter");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "chap");
+        press(&mut app, KeyCode::Enter);
+        let text = screen(&mut app);
+        assert!(!text.contains("Filter:"), "the prompt must close: {text}");
+        assert!(text.contains("lazytypst /chap"), "{text}");
+        assert_eq!(listed(&mut app), ["chapters/one.typ", "chapters/two.typ"]);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn enter_on_a_filtered_list_opens_the_selected_file() {
+        let mut app = app_for_filter("open");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "two");
+        press(&mut app, KeyCode::Enter); // keeps the filter
+        press(&mut app, KeyCode::Enter); // opens the first match
+        assert!(screen(&mut app).contains("text of chapters/two.typ"));
+        press(&mut app, KeyCode::Esc);
+        assert!(screen(&mut app).contains("lazytypst /two"), "the filter stays after the editor closes");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_filter_with_no_match_shows_no_match_and_enter_does_nothing() {
+        let mut app = app_for_filter("nomatch");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "zzz");
+        let text = screen(&mut app);
+        assert!(text.contains("No match") && !text.contains("No .typ files"), "{text}");
+        press(&mut app, KeyCode::Enter);
+        for code in [KeyCode::Enter, KeyCode::Char('g'), KeyCode::Char('G'), KeyCode::Down, KeyCode::Char('m')] {
+            assert!(!press(&mut app, code));
+        }
+        assert!(app.editor.is_none());
+        assert_eq!(app.list.selected(), None);
+        assert_eq!(app.main_file, None);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_prompt_takes_every_key_while_the_user_filters() {
+        let mut app = app_for_filter("keys");
+        press(&mut app, KeyCode::Char('/'));
+        for letter in "qjkgGmrn".chars() {
+            assert!(!press(&mut app, KeyCode::Char(letter)), "{letter} quit the program");
+        }
+        assert!(screen(&mut app).contains("Filter: qjkgGmrn"));
+        assert_eq!(app.main_file, None);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_selection_stays_on_the_same_file_while_the_filter_still_shows_it() {
+        let mut app = app_for_filter("selected");
+        press(&mut app, KeyCode::Char('G')); // the last file
+        let last = app.selected_file().cloned().unwrap();
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, &last.to_string_lossy()[..3].to_lowercase());
+        assert_eq!(app.selected_file(), Some(&last), "the selection moved to another file");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn slash_again_starts_with_the_current_filter_and_esc_clears_it() {
+        let mut app = app_for_filter("again");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "chap");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('/'));
+        assert!(screen(&mut app).contains("Filter: chap"), "the prompt must start with the filter");
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(listed(&mut app), Vec::<String>::new(), "chaps matches nothing");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(listed(&mut app).len(), 5, "Esc removes the whole filter");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn esc_in_the_list_removes_a_filter_that_is_on() {
+        let mut app = app_for_filter("esclist");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "chap");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(listed(&mut app).len(), 2);
+        assert!(!press(&mut app, KeyCode::Esc));
+        assert_eq!(listed(&mut app).len(), 5);
+        assert!(!press(&mut app, KeyCode::Esc), "Esc with no filter does nothing");
+        assert_eq!(listed(&mut app).len(), 5);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn r_keeps_the_filter_and_finds_new_files_that_match() {
+        let mut app = app_for_filter("refresh");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "chap");
+        press(&mut app, KeyCode::Enter);
+        fs::write(app.root.join("chapters").join("three.typ"), "").unwrap();
+        fs::write(app.root.join("other.typ"), "").unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(listed(&mut app), ["chapters/one.typ", "chapters/three.typ", "chapters/two.typ"]);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_new_file_removes_the_filter_so_that_it_shows_in_the_list() {
+        let mut app = app_for_filter("newfile");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "chap");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('n'));
+        type_text(&mut app, "brand-new");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.root.join("brand-new.typ").is_file());
+        assert!(app.editor.is_some(), "the new file must open");
+        press(&mut app, KeyCode::Esc);
+        let names = listed(&mut app);
+        assert!(names.contains(&"brand-new.typ".to_string()) && names.len() == 6, "{names:?}");
+        assert_eq!(app.selected_file(), Some(&PathBuf::from("brand-new.typ")));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_main_file_mark_shows_in_a_filtered_list_and_a_hidden_main_file_stays_the_main_file() {
+        let mut app = app_for_filter("main");
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "readme");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(listed(&mut app), ["README.typ [main]"]);
+
+        press(&mut app, KeyCode::Char('/'));
+        for _ in 0..6 {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_text(&mut app, "chap");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.main_file, Some(PathBuf::from("README.typ")), "a hidden main file is still the main file");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn slash_types_a_letter_in_the_editor_and_in_the_new_file_prompt() {
+        let mut app = app_for_filter("slashtypes");
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('/'));
+        assert!(screen(&mut app).contains("New file: /"));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('/'));
+        assert!(screen(&mut app).contains("/text of"), "the editor must type the slash");
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[test]
