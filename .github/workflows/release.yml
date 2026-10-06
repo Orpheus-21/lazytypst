@@ -124,7 +124,16 @@ jobs:
           test -x "$check/${name}/lazytypst"
           test -f "$check/${name}/README.md"
           test -f "$check/${name}/LICENSE"
-          ldd "$check/${name}/lazytypst" 2>&1 | grep -q 'not a dynamic executable'
+          # A static binary needs no shared library. Both kinds of static binary pass: with a dynamic section
+          # that has no NEEDED entry (static PIE), and with no dynamic section at all.
+          bin="$check/${name}/lazytypst"
+          file "$bin"
+          ldd "$bin" 2>&1 || true
+          if readelf -d "$bin" 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "::error::The binary needs shared libraries."
+            readelf -d "$bin"
+            exit 1
+          fi
           "$check/${name}/lazytypst" --version | tee version.txt
           test "$(sed -n 1p version.txt)" = "lazytypst ${VERSION}"
           sed -n 2p version.txt | grep -q '^typst '
