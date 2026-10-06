@@ -6,6 +6,8 @@ lazytypst is a terminal program for Typst documents.
 
 lazytypst lists the `.typ` files in a folder. The user opens one file, edits the text, and saves it. The user can also compile the file with the `typst` command. The program shows the compile errors with their line numbers. After a good compile, the program shows the pages of the document as images next to the editor, one page at a time. A failed compile keeps the last good page on screen. A new compile keeps the page number.
 
+Each compile renders only the page on screen, so a long document stays fast. In a release build, the page of a book of 500 pages appears after 0.7 s. When all 500 pages were rendered, it took 2.2 s. The cost is that a page turn needs one compile, about as long as a normal compile. The old page stays on screen until the new page is ready.
+
 The program saves the file 300 ms after the last key. Then it compiles the file. A new compile kills the compile that still runs. The preview follows the text.
 
 A project often has one main file, such as `main.typ`, that includes the other files. In the file list, press `m` to mark the selected file as the main file. The list shows `[main]` after its path. Then the live compile, `Ctrl-B`, and `Ctrl-E` use the main file, whatever file you edit. The autosave still saves the file that you edit. The editor title shows the main file. Press `m` on the main file again to remove the mark. Without a main file, the program compiles the open file.
@@ -17,7 +19,7 @@ The folder that you give to the program is the Typst project root. A file in a s
 ## Requirements
 
 - Rust 1.90 or later, with Cargo.
-- The `typst` command in `PATH`.
+- The `typst` command in `PATH`, version 0.12.0 or later. Version 0.12.0 added the options that render one page. The program is tested with version 0.15.1.
 - Linux. The program is tested on Linux only.
 - A terminal. At start, the program asks the terminal which image protocol it supports. The program uses the kitty, sixel, or iTerm2 protocol when the terminal reports one. Otherwise it draws the page with half block characters. The sixel and iTerm2 protocols are not tested.
 
@@ -71,7 +73,7 @@ Keys in the editor:
 - `Ctrl-B`: save the file and compile it now. A compile that still runs is killed and replaced.
 - `Ctrl-E`: save the file and export a PDF. The PDF has the name of the compiled file with the ending `.pdf`, in the same folder. Example: `doc.typ` becomes `doc.pdf`. With a main file, the PDF comes from the main file, for example `main.pdf`. The program replaces a PDF with this name without a question. The pane shows the path until the next export, or it shows the errors.
 - `Ctrl-G`: go to the first error of the last compile. The cursor moves to the line and the column that Typst reports. If that error is in another file, the status line names the file, and the cursor stays. If the last compile has no error, the status line says so. The line and the column come from the text at the time of the compile. After more edits, compile again to get exact places.
-- `Alt-Down`: show the next page. `Alt-Up`: show the previous page. Both stop at the first page and at the last page. The title of the preview shows the page number and the page count.
+- `Alt-Down`: show the next page. `Alt-Up`: show the previous page. Both stop at the first page and at the last page. A page turn starts a compile for the new page. It does not save the file. A fast second press replaces the compile of the first, so the last press decides the page. The title of the preview shows the page on screen and the page count. If the document gets shorter than the page on screen, the program shows the last page.
 - `Esc`: save the text and go back to the file list. If the save is not possible, the program shows the reason. A second `Esc` then closes the editor without a save. Closing the editor kills a compile that still runs.
 
 All other keys edit the text. A long line wraps on screen, at a word if possible. The file keeps it as one line. The text area uses the Emacs-style keys of the `ratatui-textarea` crate. `Ctrl-B` and `Ctrl-E` do the jobs above and not the Emacs jobs. Use `Left` and `End` instead.
@@ -87,10 +89,14 @@ Save rules:
 
 - `src/browser.rs` finds the `.typ` files. `src/newfile.rs` checks the name of a new file and makes it.
 - `src/editor.rs` holds the text area, the save, the 300 ms autosave, the screen layout, and the pane that shows the compile result.
-- `src/preview.rs` holds the folder of PNG pages from the last good compile. It draws one page with the `ratatui-image` crate. It deletes the old folder when a new folder loads.
-- `src/compile.rs` parses each line of the Typst output into a diagnostic with a severity, a file, a line, and a column. It also runs `typst compile --format png --diagnostic-format short --root <folder>` as a job, inside the root folder. The main thread owns the `typst` process and checks it with `try_wait`. A thread reads the error output. Dropping the job kills the `typst` process. Each compile writes its PNG pages to its own new folder in the temporary directory. The editor deletes the folder of a compile that failed or that it killed. The program deletes the temporary directory when it exits. The PDF export is a second job of the same kind.
+- `src/preview.rs` holds the folder of the last good compile. The folder has one PNG file, named `page-<page>-of-<count>.png`, so the preview learns the page count from the name. It draws the page with the `ratatui-image` crate. It deletes the old folder when a new folder loads. It keeps the number of the wanted page.
+- `src/compile.rs` parses each line of the Typst output into a diagnostic with a severity, a file, a line, and a column. It also runs `typst compile --format png --diagnostic-format short --root <folder> --pages <page>` as a job, inside the root folder. Typst exits with success and writes no file when the document has fewer pages than the page that the program asks for. The editor then compiles page 1, learns the page count, and compiles the last page. The main thread owns the `typst` process and checks it with `try_wait`. A thread reads the error output. Dropping the job kills the `typst` process. Each compile writes its one PNG file to its own new folder in the temporary directory. The editor deletes the folder of a compile that failed or that it killed. The program deletes the temporary directory when it exits. The PDF export is a second job of the same kind.
 - `src/state.rs` reads and writes the state file with the main file of each project. `src/fsutil.rs` holds the safe write that the editor and the state file both use.
 - `src/main.rs` reads the arguments and runs the event loop. `App::handle_key` handles the keys of the file list. Every 50 ms without a key, the loop calls the editor. The editor then runs the autosave if it is due and checks if a compile has finished.
+
+## Measuring
+
+`scripts/bench-pages.sh` compiles documents of 1, 50, 200, and 500 pages with the options of the program, once for all pages and once for one page. It prints the time and the disk use. Give other page counts as arguments. The script needs `typst` in `PATH`.
 
 ## License
 
