@@ -8,6 +8,8 @@ lazytypst lists the `.typ` files in a folder. The user opens one file, edits the
 
 The program saves the file 300 ms after the last key. Then it compiles the file. A new compile kills the compile that still runs. The preview follows the text.
 
+A project often has one main file, such as `main.typ`, that includes the other files. In the file list, press `m` to mark the selected file as the main file. The list shows `[main]` after its path. Then the live compile, `Ctrl-B`, and `Ctrl-E` use the main file, whatever file you edit. The autosave still saves the file that you edit. The editor title shows the main file. Press `m` on the main file again to remove the mark. Without a main file, the program compiles the open file.
+
 The folder that you give to the program is the Typst project root. A file in a subfolder can import a file from a parent folder, such as `../lib.typ`, if that file is inside the root. Error lines and the editor title show paths relative to the root.
 
 ## Requirements
@@ -56,13 +58,14 @@ Keys in the file list:
 - `j` or `Down`: select the next file.
 - `k` or `Up`: select the previous file.
 - `Enter`: open the selected file in the editor.
+- `m`: mark the selected file as the main file, or remove the mark.
 - `q`: quit.
 
 Keys in the editor:
 
 - `Ctrl-S`: save the file now. `Ctrl-S` also overwrites a file that another program changed. See the save rules below.
 - `Ctrl-B`: save the file and compile it now. A compile that still runs is killed and replaced.
-- `Ctrl-E`: save the file and export a PDF. The PDF has the name of the file with the ending `.pdf`, in the same folder. Example: `doc.typ` becomes `doc.pdf`. The program replaces a PDF with this name without a question. The pane shows the path until the next export, or it shows the errors.
+- `Ctrl-E`: save the file and export a PDF. The PDF has the name of the compiled file with the ending `.pdf`, in the same folder. Example: `doc.typ` becomes `doc.pdf`. With a main file, the PDF comes from the main file, for example `main.pdf`. The program replaces a PDF with this name without a question. The pane shows the path until the next export, or it shows the errors.
 - `Alt-Down`: show the next page. `Alt-Up`: show the previous page. Both stop at the first page and at the last page. The title of the preview shows the page number and the page count.
 - `Esc`: save the text and go back to the file list. If the save is not possible, the program shows the reason. A second `Esc` then closes the editor without a save. Closing the editor kills a compile that still runs.
 
