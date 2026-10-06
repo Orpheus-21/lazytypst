@@ -112,6 +112,38 @@ enum Args {
     Version,
 }
 
+/// The commands that save the window title of the terminal and bring it back (xterm window operations 22
+/// and 23). A terminal that follows xterm restores the title that the user had. Ghostty 1.3.1 ignores both,
+/// as a test with a real Ghostty window showed: the title that the program set stays. The shell sets the
+/// title again at the next prompt (the shell integration of Ghostty does this).
+const SAVE_TITLE: &str = "\x1b[22;0t";
+const RESTORE_TITLE: &str = "\x1b[23;0t";
+
+fn write_to_terminal(text: &str) {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(text.as_bytes());
+    let _ = out.flush();
+}
+
+/// The title of the terminal window: `lazytypst: <folder name>` in the list, and
+/// `lazytypst: <path of the file relative to the root>` in the editor. A window title helps to find the
+/// right window when many are open.
+///
+/// The title goes to the terminal inside an escape sequence, and a file name comes from users and from
+/// other programs. A control character in it could end the sequence early and start another one. So each
+/// control character becomes a question mark.
+fn window_title(root: &Path, open: Option<&Path>) -> String {
+    let name = match open {
+        Some(file) => file.strip_prefix(root).unwrap_or(file).display().to_string(),
+        None => root
+            .file_name()
+            .map_or_else(|| root.display().to_string(), |name| name.to_string_lossy().into_owned()),
+    };
+    let name: String = name.chars().map(|letter| if letter.is_control() { '?' } else { letter }).collect();
+    format!("lazytypst: {name}")
+}
+
 /// Why the `typst` command does not run, in a few words for the user.
 fn typst_problem(err: &std::io::Error) -> String {
     if err.kind() == std::io::ErrorKind::NotFound {
@@ -447,10 +479,12 @@ fn main() -> std::io::Result<()> {
     compile::remove_stale_dirs();
     // ratatui::init also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
+    write_to_terminal(SAVE_TITLE);
     // The panic hook of ratatui runs after this one, so a panic also deletes the page folder.
     let restore_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         compile::cleanup();
+        write_to_terminal(RESTORE_TITLE);
         restore_hook(info);
     }));
     // The query needs the raw terminal, and it must run before the first key is read.
@@ -462,6 +496,7 @@ fn main() -> std::io::Result<()> {
         app.open_target(relative);
     }
     let result = run(&mut terminal, &mut app);
+    write_to_terminal(RESTORE_TITLE);
     ratatui::restore();
     compile::cleanup();
     result
@@ -469,7 +504,14 @@ fn main() -> std::io::Result<()> {
 
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
     let mut redraw = true;
+    let mut title = String::new();
     loop {
+        // The title changes when the editor opens or closes. It is sent only when it changes.
+        let wanted = window_title(&app.root, app.editor.as_ref().map(Editor::path));
+        if wanted != title {
+            let _ = ratatui::crossterm::execute!(std::io::stdout(), ratatui::crossterm::terminal::SetTitle(&wanted));
+            title = wanted;
+        }
         if redraw {
             terminal.draw(|frame| draw(frame, app))?;
         }
@@ -1327,6 +1369,49 @@ mod tests {
         press(&mut app, KeyCode::Char('/'));
         assert!(screen(&mut app).contains("/text of"), "the editor must type the slash");
         fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_title_in_the_list_names_the_folder() {
+        assert_eq!(window_title(Path::new("/home/me/books/novel"), None), "lazytypst: novel");
+        assert_eq!(window_title(Path::new("/"), None), "lazytypst: /");
+    }
+
+    #[test]
+    fn the_title_in_the_editor_names_the_file_relative_to_the_root() {
+        let root = Path::new("/home/me/books/novel");
+        assert_eq!(window_title(root, Some(&root.join("report.typ"))), "lazytypst: report.typ");
+        assert_eq!(window_title(root, Some(&root.join("chapters/one.typ"))), "lazytypst: chapters/one.typ");
+        // A file outside the root keeps its whole path.
+        assert_eq!(window_title(root, Some(Path::new("/elsewhere/x.typ"))), "lazytypst: /elsewhere/x.typ");
+    }
+
+    #[test]
+    fn control_characters_in_a_name_never_reach_the_terminal() {
+        let root = Path::new("/home/me/evil\x1b]0;PWNED\x07folder");
+        let title = window_title(root, None);
+        assert!(!title.chars().any(char::is_control), "{title:?}");
+        assert_eq!(title, "lazytypst: evil?]0;PWNED?folder");
+
+        let file = root.join("a\nb\u{9b}c\x7f.typ"); // a line break, a C1 control, and DEL
+        let title = window_title(root, Some(&file));
+        assert!(!title.chars().any(char::is_control), "{title:?}");
+    }
+
+    #[test]
+    fn a_name_with_letters_that_are_not_ascii_stays_as_it_is() {
+        assert_eq!(window_title(Path::new("/books/संस्कृतम्"), None), "lazytypst: संस्कृतम्");
+        assert_eq!(window_title(Path::new("/books/é"), Some(Path::new("/books/é/中文.typ"))), "lazytypst: 中文.typ");
+    }
+
+    #[test]
+    fn the_title_is_sent_as_osc_0_and_the_title_stack_commands_are_the_xterm_ones() {
+        use ratatui::crossterm::Command;
+        let mut bytes = String::new();
+        ratatui::crossterm::terminal::SetTitle("lazytypst: a").write_ansi(&mut bytes).unwrap();
+        assert_eq!(bytes, "\x1b]0;lazytypst: a\x07");
+        assert_eq!(SAVE_TITLE, "\x1b[22;0t");
+        assert_eq!(RESTORE_TITLE, "\x1b[23;0t");
     }
 
     #[test]
