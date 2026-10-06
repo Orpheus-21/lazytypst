@@ -49,7 +49,7 @@ Without FOLDER, lazytypst uses the current folder. FOLDER is also the Typst proj
 
 Options:
   -h, --help     Show this help.
-  -V, --version  Show the version.
+  -V, --version  Show the version of lazytypst and the version of typst.
 
 Keys in the file list:
   j or Down      Select the next file.
@@ -94,6 +94,13 @@ fn missing_typst_message(err: &std::io::Error) -> String {
          Install Typst, and make sure that it is in PATH: https://github.com/typst/typst#installation\n",
         typst_problem(err)
     )
+}
+
+/// The text of `--version`: the version of lazytypst, and the version line of typst or the reason
+/// why typst does not run. A bug report needs both versions.
+fn version_text(lazytypst: &str, typst: std::io::Result<String>) -> String {
+    let typst = typst.unwrap_or_else(|err| format!("typst: {}", typst_problem(&err)));
+    format!("lazytypst {lazytypst}\n{typst}\n")
 }
 
 /// Reads the arguments. `args_os` keeps a folder name that is not UTF-8. `args` would panic on it.
@@ -281,7 +288,7 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
         Ok(Args::Version) => {
-            println!("lazytypst {}", env!("CARGO_PKG_VERSION"));
+            print!("{}", version_text(env!("CARGO_PKG_VERSION"), compile::typst_version()));
             return Ok(());
         }
         Err(message) => {
@@ -814,6 +821,24 @@ mod tests {
         assert_eq!(typst_problem(&missing), "not found in PATH");
         let other = std::io::Error::other("typst --version failed: exit status: 3");
         assert_eq!(typst_problem(&other), "typst --version failed: exit status: 3");
+    }
+
+    #[test]
+    fn the_version_text_has_the_two_versions() {
+        let text = version_text("0.1.0", Ok("typst 0.15.1 (9dfd3a08)".into()));
+        assert_eq!(text, "lazytypst 0.1.0\ntypst 0.15.1 (9dfd3a08)\n");
+    }
+
+    #[test]
+    fn the_version_text_says_that_typst_is_missing() {
+        let text = version_text("0.1.0", Err(std::io::Error::from(std::io::ErrorKind::NotFound)));
+        assert_eq!(text, "lazytypst 0.1.0\ntypst: not found in PATH\n");
+    }
+
+    #[test]
+    fn the_version_text_gives_the_reason_when_typst_fails() {
+        let text = version_text("0.1.0", Err(std::io::Error::other("typst --version failed: exit status: 3")));
+        assert_eq!(text, "lazytypst 0.1.0\ntypst: typst --version failed: exit status: 3\n");
     }
 
     #[test]
