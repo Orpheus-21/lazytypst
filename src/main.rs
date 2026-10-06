@@ -51,6 +51,7 @@ Keys in the file list:
   j or Down      Select the next file.
   k or Up        Select the previous file.
   Enter          Open the selected file.
+  r              Read the folder again, to show new files and to drop deleted files.
   m              Mark the selected file as the main file, or remove the mark.
                  lazytypst then compiles the main file, whatever file you edit.
   q              Quit.
@@ -125,6 +126,28 @@ impl App {
         }
     }
 
+    /// Reads the folder again. The selection stays on the same file if it is still there, and moves to
+    /// the first file if not. A main file that is gone loses its mark, and the saved choice goes with it.
+    /// If the folder cannot be read, the old list stays.
+    fn refresh(&mut self) {
+        let files = match browser::find_typ_files(&self.root, browser::MAX_DEPTH) {
+            Ok(files) => files,
+            Err(err) => {
+                self.status = format!("Cannot read the folder: {err}");
+                return;
+            }
+        };
+        let selected = self.selected_file().cloned();
+        let index = selected.and_then(|path| files.iter().position(|file| *file == path));
+        self.list.select((!files.is_empty()).then_some(index.unwrap_or(0)));
+        self.status = format!("Read the folder again: {} files", files.len());
+        self.files = files;
+        if self.main_file.as_ref().is_some_and(|main| !self.files.contains(main)) {
+            self.main_file = None;
+            self.save_main_choice();
+        }
+    }
+
     /// The file that the selection is on.
     fn selected_file(&self) -> Option<&PathBuf> {
         self.list.selected().and_then(|i| self.files.get(i))
@@ -158,6 +181,7 @@ impl App {
             KeyCode::Char('j') | KeyCode::Down => self.list.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.list.select_previous(),
             KeyCode::Char('m') => self.toggle_main(),
+            KeyCode::Char('r') => self.refresh(),
             KeyCode::Enter => {
                 if let Some(path) = self.selected_file() {
                     let main = self.main_file.as_ref().map(|main| self.root.join(main));
@@ -441,6 +465,108 @@ mod tests {
         app.load_state(None);
         press(&mut app, KeyCode::Char('m'));
         assert_eq!(app.main_file, Some(PathBuf::from("a.typ")));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn r_shows_a_file_that_was_made_after_the_start() {
+        let mut app = app("refresh-new");
+        fs::write(app.root.join("new.typ"), "").unwrap();
+        assert!(!screen(&mut app).contains("new.typ"));
+        press(&mut app, KeyCode::Char('r'));
+        assert!(screen(&mut app).contains("new.typ"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn r_removes_a_file_that_was_deleted() {
+        let mut app = app("refresh-gone");
+        fs::remove_file(app.root.join("sub").join("b.typ")).unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        let text = screen(&mut app);
+        assert!(text.contains("a.typ") && !text.contains("b.typ"), "{text}");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn r_keeps_the_selection_on_the_same_file() {
+        let mut app = app("refresh-keep");
+        press(&mut app, KeyCode::Char('j')); // sub/b.typ
+        screen(&mut app);
+        fs::write(app.root.join("0first.typ"), "").unwrap(); // sorts before every other file
+        press(&mut app, KeyCode::Char('r'));
+        screen(&mut app);
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("text of b"), "the selection moved to another file");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn r_selects_the_first_file_when_the_selected_file_is_gone() {
+        let mut app = app("refresh-selected-gone");
+        press(&mut app, KeyCode::Char('j')); // sub/b.typ
+        screen(&mut app);
+        fs::remove_file(app.root.join("sub").join("b.typ")).unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        screen(&mut app);
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("text of a"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn r_removes_the_main_mark_of_a_file_that_is_gone_and_saves_that() {
+        let state = state_path("refresh-main");
+        let mut app = app("refresh-main");
+        app.load_state(Some(state.clone()));
+        press(&mut app, KeyCode::Char('m')); // a.typ
+        fs::remove_file(app.root.join("a.typ")).unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.main_file, None);
+        assert!(!fs::read_to_string(&state).unwrap().contains("a.typ"), "the saved choice stays");
+        fs::remove_dir_all(&app.root).unwrap();
+        fs::remove_dir_all(state.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn r_keeps_the_main_mark_of_a_file_that_is_still_there() {
+        let mut app = app("refresh-main-stays");
+        press(&mut app, KeyCode::Char('m'));
+        fs::write(app.root.join("0first.typ"), "").unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.main_file, Some(PathBuf::from("a.typ")));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn r_in_a_folder_that_is_gone_shows_an_error_and_keeps_the_list() {
+        let mut app = app("refresh-folder-gone");
+        let root = app.root.clone();
+        fs::remove_dir_all(&root).unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        let text = screen(&mut app);
+        assert!(text.contains("Cannot read the folder"), "{text}");
+        assert!(text.contains("a.typ"), "the old list must stay: {text}");
+    }
+
+    #[test]
+    fn r_shows_the_empty_message_when_all_files_are_gone() {
+        let mut app = app("refresh-empty");
+        fs::remove_file(app.root.join("a.typ")).unwrap();
+        fs::remove_file(app.root.join("sub").join("b.typ")).unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        assert!(screen(&mut app).contains("No .typ files"));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editor.is_none());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn r_types_a_letter_in_the_editor() {
+        let mut app = app("refresh-editor");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('r'));
+        assert!(screen(&mut app).contains("rtext of a"));
         fs::remove_dir_all(&app.root).unwrap();
     }
 
