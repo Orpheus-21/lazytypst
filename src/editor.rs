@@ -7,7 +7,7 @@ use std::{
 use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    layout::{Constraint, Layout},
+    layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Paragraph, Wrap},
 };
@@ -373,7 +373,15 @@ impl Editor {
         } else {
             &self.message
         };
-        frame.render_widget(Paragraph::new(hint), status);
+        // The cursor position is at the right end of the status line, also while a message shows. Line and
+        // column start at 1, and the column counts characters, the same as the error lines of Typst.
+        let cursor = self.textarea.cursor();
+        let position = format!("{}:{}", cursor.0 + 1, cursor.1 + 1);
+        let width = u16::try_from(position.len() + 1).unwrap_or(u16::MAX);
+        let [hint_area, position_area] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(status);
+        frame.render_widget(Paragraph::new(hint), hint_area);
+        frame.render_widget(Paragraph::new(position).alignment(Alignment::Right), position_area);
     }
 }
 
@@ -971,6 +979,64 @@ mod tests {
         assert!(number.modifier.contains(ratatui::style::Modifier::DIM), "the number must be dim");
         let letter = (1..12).map(|column| &buffer[(column, 1)]).find(|cell| cell.symbol() == "a").unwrap();
         assert!(!letter.modifier.contains(ratatui::style::Modifier::DIM), "the text must not be dim");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// The status line of the editor: the last row of the screen.
+    fn status_row(editor: &mut Editor) -> String {
+        screen_rows(editor).pop().unwrap()
+    }
+
+    #[test]
+    fn the_status_line_shows_the_cursor_position_at_its_right_end() {
+        let path = temp_file("position", "line one\nline two\nline three\n");
+        let mut editor = open(&path);
+        assert!(status_row(&mut editor).trim_end().ends_with("1:1"), "{:?}", status_row(&mut editor));
+
+        editor.handle_key(key(KeyCode::Down));
+        editor.handle_key(key(KeyCode::Down));
+        for _ in 0..4 {
+            editor.handle_key(key(KeyCode::Right));
+        }
+        assert!(status_row(&mut editor).trim_end().ends_with("3:5"), "{:?}", status_row(&mut editor));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_position_stays_when_the_status_line_shows_a_message() {
+        let path = temp_file("positionmessage", "text\n");
+        let mut editor = open(&path);
+        editor.message = "Saved".into();
+        let row = status_row(&mut editor);
+        assert!(row.starts_with("Saved") && row.trim_end().ends_with("1:1"), "{row:?}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_column_counts_characters_like_typst_does() {
+        let path = temp_file("positionunicode", "é #nope()\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Right)); // over the é
+        assert!(status_row(&mut editor).trim_end().ends_with("1:2"), "{:?}", status_row(&mut editor));
+
+        // Ctrl-G moves to the position that Typst names, and the status line shows the same position.
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        editor.handle_key(ctrl('g'));
+        assert!(status_row(&mut editor).trim_end().ends_with("1:3"), "{:?}", status_row(&mut editor));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_position_does_not_cut_the_hint_on_a_wide_screen_and_wins_on_a_narrow_one() {
+        let path = temp_file("positionnarrow", "text\n");
+        let mut editor = open(&path);
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row: String = (0..40).map(|column| buffer[(column, 11)].symbol()).collect();
+        assert!(row.trim_end().ends_with("1:1"), "{row:?}");
+        assert!(row.starts_with("Ctrl-S save"), "{row:?}");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
