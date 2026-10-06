@@ -7,6 +7,7 @@ mod preview;
 mod state;
 
 use std::{
+    collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -35,6 +36,8 @@ struct App {
     state_file: Option<PathBuf>,
     list: ListState,
     status: String,
+    /// Where the cursor was in each file when the user closed it. The positions stay in memory for this run.
+    cursors: HashMap<PathBuf, (usize, usize)>,
     /// The prompt for the name of a new file. While it is open, it takes every key.
     prompt: Option<TextArea<'static>>,
     /// The open file. The browser shows while this is `None`.
@@ -163,6 +166,7 @@ impl App {
             list: ListState::default().with_selected(first),
             status: String::new(),
             prompt: None,
+            cursors: HashMap::new(),
             editor: None,
         }
     }
@@ -231,7 +235,10 @@ impl App {
         let main = self.main_file.as_ref().map(|main| self.root.join(main));
         let opened = Editor::open(self.root.join(&path), self.root.clone(), main, self.picker.clone());
         self.status = match opened {
-            Ok(editor) => {
+            Ok(mut editor) => {
+                if let Some(place) = self.cursors.get(editor.path()) {
+                    editor.set_cursor_position(*place);
+                }
                 self.editor = Some(editor);
                 String::new()
             }
@@ -308,6 +315,7 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         if let Some(editor) = &mut self.editor {
             if matches!(editor.handle_key(key), Action::Close) {
+                self.cursors.insert(editor.path().to_path_buf(), editor.cursor_position());
                 self.editor = None;
             }
             return false;
@@ -903,6 +911,116 @@ mod tests {
         press(&mut app, KeyCode::Char('G'));
         assert!(screen(&mut app).contains("Gtext of a"));
         fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    /// The last row of the screen: the status line.
+    fn status_row(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..100).map(|column| buffer[(column, 23)].symbol()).collect()
+    }
+
+    /// An app with the files `long.typ` (10 lines) and `other.typ` (2 lines).
+    fn app_with_long_file(name: &str) -> App {
+        let root = std::env::temp_dir().join(format!("lazytypst-main-cursor-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let long: String = (1..=10).map(|n| format!("line number {n}\n")).collect();
+        fs::write(root.join("long.typ"), long).unwrap();
+        fs::write(root.join("other.typ"), "first\nsecond\n").unwrap();
+        let files = browser::find_typ_files(&root, browser::MAX_DEPTH).unwrap();
+        App::new(root, files, Picker::halfblocks())
+    }
+
+    #[test]
+    fn a_file_opens_again_with_the_cursor_where_the_user_left_it() {
+        let mut app = app_with_long_file("again");
+        press(&mut app, KeyCode::Enter); // long.typ
+        for _ in 0..9 {
+            press(&mut app, KeyCode::Down);
+        }
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Right);
+        }
+        assert!(status_row(&mut app).trim_end().ends_with("10:6"), "{:?}", status_row(&mut app));
+        press(&mut app, KeyCode::Esc);
+
+        press(&mut app, KeyCode::Enter); // the same file again
+        assert!(status_row(&mut app).trim_end().ends_with("10:6"), "{:?}", status_row(&mut app));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn another_file_opens_at_line_1() {
+        let mut app = app_with_long_file("other");
+        press(&mut app, KeyCode::Enter);
+        for _ in 0..9 {
+            press(&mut app, KeyCode::Down);
+        }
+        press(&mut app, KeyCode::Esc);
+
+        press(&mut app, KeyCode::Down); // other.typ
+        press(&mut app, KeyCode::Enter);
+        assert!(status_row(&mut app).trim_end().ends_with("1:1"), "{:?}", status_row(&mut app));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn each_file_keeps_its_own_position() {
+        let mut app = app_with_long_file("each");
+        press(&mut app, KeyCode::Enter); // long.typ: line 4
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Down);
+        }
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter); // other.typ: line 2
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Esc);
+
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Enter);
+        assert!(status_row(&mut app).trim_end().ends_with("4:1"), "{:?}", status_row(&mut app));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(status_row(&mut app).trim_end().ends_with("2:1"), "{:?}", status_row(&mut app));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_got_shorter_opens_on_its_last_line() {
+        let mut app = app_with_long_file("shorter");
+        press(&mut app, KeyCode::Enter);
+        for _ in 0..9 {
+            press(&mut app, KeyCode::Down);
+        }
+        for _ in 0..8 {
+            press(&mut app, KeyCode::Right);
+        }
+        press(&mut app, KeyCode::Esc);
+        fs::write(app.root.join("long.typ"), "one\ntwo\nthree\n").unwrap();
+
+        press(&mut app, KeyCode::Enter);
+        // The text has 3 lines and the last line has 5 characters. The old column 8 is cut to the end.
+        assert!(status_row(&mut app).trim_end().ends_with("3:6"), "{:?}", status_row(&mut app));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_position_is_kept_in_memory_only() {
+        let mut first = app_with_long_file("memory");
+        press(&mut first, KeyCode::Enter);
+        for _ in 0..6 {
+            press(&mut first, KeyCode::Down);
+        }
+        press(&mut first, KeyCode::Esc);
+
+        let mut second = App::new(first.root.clone(), first.files.clone(), Picker::halfblocks());
+        press(&mut second, KeyCode::Enter);
+        assert!(status_row(&mut second).trim_end().ends_with("1:1"), "a new start begins at line 1");
+        fs::remove_dir_all(&first.root).unwrap();
     }
 
     #[test]

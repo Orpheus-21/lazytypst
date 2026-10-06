@@ -262,6 +262,24 @@ impl Editor {
         Action::Stay
     }
 
+    /// The file that the editor holds.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The cursor as `(row, column)`, both counted from 0, the column in characters.
+    pub fn cursor_position(&self) -> (usize, usize) {
+        let cursor = self.textarea.cursor();
+        (cursor.0, cursor.1)
+    }
+
+    /// Moves the cursor to `(row, column)`, counted from 0. A place beyond the end of the text goes to the
+    /// last line, and a column beyond the end of a line goes to the end of that line.
+    pub fn set_cursor_position(&mut self, (row, column): (usize, usize)) {
+        let to_u16 = |number: usize| u16::try_from(number).unwrap_or(u16::MAX);
+        self.textarea.move_cursor(CursorMove::Jump(to_u16(row), to_u16(column)));
+    }
+
     /// Moves the cursor to the first error of the last report, if that error is in the open file.
     /// An error in another file only gets named: the cursor stays. The line and the column of the report
     /// are those of the text at the time of the compile. After more edits, a new compile makes them exact.
