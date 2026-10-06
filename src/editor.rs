@@ -9,13 +9,14 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
+    text::Line,
     widgets::{Block, Paragraph, Wrap},
 };
 use ratatui_image::picker::Picker;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 
 use crate::{
-    compile::{self, Job, Report},
+    compile::{self, Job, Report, Severity},
     fsutil,
     preview::{Preview, page_in},
 };
@@ -36,6 +37,16 @@ fn disk_time(path: &Path) -> Option<SystemTime> {
 /// True when the user edited the text and then typed nothing for `DEBOUNCE`.
 fn debounce_done(last_edit: Option<Instant>, now: Instant) -> bool {
     last_edit.is_some_and(|edit| now.saturating_duration_since(edit) >= DEBOUNCE)
+}
+
+/// The style of a line of the compile report. The colors are the colors of the terminal palette, so they
+/// follow the theme of the user: errors are red, warnings are yellow, and other lines are dim.
+fn severity_style(severity: Severity) -> Style {
+    match severity {
+        Severity::Error => Style::new().fg(Color::Red),
+        Severity::Warning => Style::new().fg(Color::Yellow),
+        Severity::Other => Style::new().add_modifier(Modifier::DIM),
+    }
 }
 
 /// The words for the number of errors and warnings, for the title of the compile pane:
@@ -337,16 +348,23 @@ impl Editor {
     }
 
     fn compile_pane(&self) -> Paragraph<'static> {
-        let (mut color, mut lines) = match &self.report {
+        let plain = Style::default();
+        let (mut color, mut lines): (Color, Vec<(String, Style)>) = match &self.report {
             Some(report) => {
                 let color = if report.ok { Color::Green } else { Color::Red };
                 let head = report.ok.then(|| match report.elapsed {
-                    Some(elapsed) => format!("OK in {} ms", elapsed.as_millis()),
-                    None => "OK".to_string(),
+                    Some(elapsed) => (format!("OK in {} ms", elapsed.as_millis()), plain),
+                    None => ("OK".to_string(), plain),
                 });
-                (color, head.into_iter().chain(report.lines.iter().cloned()).collect())
+                // One line of the report has one diagnostic. The kind of the diagnostic decides the style.
+                let body = report
+                    .lines
+                    .iter()
+                    .zip(&report.diagnostics)
+                    .map(|(line, diagnostic)| (line.clone(), severity_style(diagnostic.severity)));
+                (color, head.into_iter().chain(body).collect())
             }
-            None => (Color::Reset, vec!["Press Ctrl-B to compile.".to_string()]),
+            None => (Color::Reset, vec![("Press Ctrl-B to compile.".to_string(), plain)]),
         };
         // The title: the counts of errors and warnings, and for a failed compile also its time.
         let mut title = "Compile".to_string();
@@ -363,13 +381,14 @@ impl Editor {
             color = Color::Yellow;
             title = "Compile (running)".to_string();
             if self.report.is_none() {
-                lines = vec!["Compiling...".to_string()];
+                lines = vec![("Compiling...".to_string(), plain)];
             }
         }
         if let Some(pdf) = &self.exported {
-            lines.push(format!("Exported {}", pdf.display()));
+            lines.push((format!("Exported {}", pdf.display()), plain));
         }
-        Paragraph::new(lines.join("\n"))
+        let lines: Vec<Line> = lines.into_iter().map(|(text, style)| Line::styled(text, style)).collect();
+        Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .block(Block::bordered().title(title).border_style(Style::new().fg(color)))
     }
@@ -1224,6 +1243,64 @@ mod tests {
         compile_and_wait(&mut editor);
         assert!(editor.report.as_ref().unwrap().ok);
         assert!(pane_rows(&mut editor)[0].starts_with("┌Compile: 1 warning"), "{:?}", pane_rows(&mut editor));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// The first cell of the screen row that holds `text`, at the left of the compile pane.
+    fn pane_cell(editor: &mut Editor, text: &str) -> ratatui::buffer::Cell {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        for row in 17..24 {
+            let line: String = (0..50).map(|column| buffer[(column, row)].symbol()).collect();
+            if let Some(at) = line.find(text) {
+                let column = line[..at].chars().count();
+                return buffer[(column as u16, row)].clone();
+            }
+        }
+        panic!("the text {text:?} is not in the pane");
+    }
+
+    #[test]
+    fn an_error_a_warning_and_a_hint_have_different_looks() {
+        let path = temp_file("colors", "text\n");
+        let mut editor = open(&path);
+        editor.report = report_with(
+            false,
+            &["a.typ:1:1: error: boom", "a.typ:2:1: warning: careful", "hint: try a space"],
+        );
+        let error = pane_cell(&mut editor, "a.typ:1:1");
+        let warning = pane_cell(&mut editor, "a.typ:2:1");
+        let hint = pane_cell(&mut editor, "hint:");
+        assert_eq!(error.fg, Color::Red);
+        assert_eq!(warning.fg, Color::Yellow);
+        assert_ne!(error.fg, warning.fg);
+        assert!(hint.modifier.contains(ratatui::style::Modifier::DIM), "a hint must be dim");
+        assert_eq!(hint.fg, Color::Reset, "a hint has no color of its own");
+        assert!(!error.modifier.contains(ratatui::style::Modifier::DIM));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_colors_are_palette_colors_so_that_they_follow_the_theme() {
+        let path = temp_file("palette", "text\n");
+        let mut editor = open(&path);
+        editor.report = report_with(false, &["a.typ:1:1: error: boom", "a.typ:2:1: warning: careful"]);
+        for text in ["a.typ:1:1", "a.typ:2:1"] {
+            let cell = pane_cell(&mut editor, text);
+            assert!(!matches!(cell.fg, Color::Rgb(..) | Color::Indexed(..)), "{:?}", cell.fg);
+        }
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_ok_line_and_the_export_line_have_no_color_of_their_own() {
+        let path = temp_file("plainlines", "text\n");
+        let mut editor = open(&path);
+        editor.report = Some(Report::new(true, vec![]).with_elapsed(Duration::from_millis(5)));
+        editor.exported = Some(path.with_extension("pdf"));
+        assert_eq!(pane_cell(&mut editor, "OK in").fg, Color::Reset);
+        assert_eq!(pane_cell(&mut editor, "Exported").fg, Color::Reset);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
