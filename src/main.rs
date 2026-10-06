@@ -25,6 +25,8 @@ struct App {
     root: PathBuf,
     picker: Picker,
     files: Vec<PathBuf>,
+    /// The main file, as a path relative to `root`. The compile and the export use it.
+    main_file: Option<PathBuf>,
     list: ListState,
     status: String,
     /// The open file. The browser shows while this is `None`.
@@ -45,6 +47,8 @@ Keys in the file list:
   j or Down      Select the next file.
   k or Up        Select the previous file.
   Enter          Open the selected file.
+  m              Mark the selected file as the main file, or remove the mark.
+                 lazytypst then compiles the main file, whatever file you edit.
   q              Quit.
 
 Keys in the editor:
@@ -89,9 +93,29 @@ impl App {
             root,
             picker,
             files,
+            main_file: None,
             list: ListState::default().with_selected(first),
             status: String::new(),
             editor: None,
+        }
+    }
+
+    /// The file that the selection is on.
+    fn selected_file(&self) -> Option<&PathBuf> {
+        self.list.selected().and_then(|i| self.files.get(i))
+    }
+
+    /// Marks the selected file as the main file. The same key on the main file removes the mark.
+    fn toggle_main(&mut self) {
+        let Some(selected) = self.selected_file().cloned() else {
+            return;
+        };
+        if self.main_file.as_ref() == Some(&selected) {
+            self.main_file = None;
+            self.status = "No main file. lazytypst compiles the open file.".into();
+        } else {
+            self.status = format!("Main file: {}", selected.display());
+            self.main_file = Some(selected);
         }
     }
 
@@ -107,9 +131,11 @@ impl App {
             KeyCode::Char('q') => return true,
             KeyCode::Char('j') | KeyCode::Down => self.list.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.list.select_previous(),
+            KeyCode::Char('m') => self.toggle_main(),
             KeyCode::Enter => {
-                if let Some(path) = self.list.selected().and_then(|i| self.files.get(i)) {
-                    let opened = Editor::open(self.root.join(path), self.root.clone(), None, self.picker.clone());
+                if let Some(path) = self.selected_file() {
+                    let main = self.main_file.as_ref().map(|main| self.root.join(main));
+                    let opened = Editor::open(self.root.join(path), self.root.clone(), main, self.picker.clone());
                     self.status = match opened {
                         Ok(editor) => {
                             self.editor = Some(editor);
@@ -203,7 +229,10 @@ fn draw(frame: &mut Frame, app: &mut App) {
     if app.files.is_empty() {
         frame.render_widget(Paragraph::new("No .typ files").block(block), body);
     } else {
-        let items = app.files.iter().map(|path| path.display().to_string());
+        let items = app.files.iter().map(|path| {
+            let mark = if app.main_file.as_ref() == Some(path) { " [main]" } else { "" };
+            format!("{}{mark}", path.display())
+        });
         let list = List::new(items)
             .block(block)
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
@@ -282,6 +311,51 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(screen(&mut app).contains("text of a"));
         fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn m_marks_the_selected_file_as_main_and_a_second_m_removes_the_mark() {
+        let mut app = app("mark");
+        assert!(!screen(&mut app).contains("[main]"));
+
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.main_file, Some(PathBuf::from("a.typ")));
+        assert!(screen(&mut app).contains("a.typ [main]"));
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.main_file, None);
+        assert!(!screen(&mut app).contains("[main]"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn m_on_another_file_moves_the_mark() {
+        let mut app = app("move");
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.main_file, Some(PathBuf::from("sub/b.typ")));
+        let text = screen(&mut app);
+        assert!(text.contains("sub/b.typ [main]") && !text.contains("a.typ [main]"), "{text}");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_file_opens_with_the_marked_main_file() {
+        let mut app = app("openmain");
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('m')); // sub/b.typ is the main file
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Enter); // open a.typ
+        assert!(screen(&mut app).contains("a.typ (main: sub/b.typ)"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn m_in_an_empty_list_does_nothing() {
+        let root = std::env::temp_dir().join(format!("lazytypst-main-emptymark-{}", std::process::id()));
+        let mut app = App::new(root, Vec::new(), Picker::halfblocks());
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.main_file, None);
     }
 
     #[test]
