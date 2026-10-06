@@ -57,6 +57,8 @@ Keys in the file list:
   Enter          Open the selected file.
   n              Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
   r              Read the folder again, to show new files and to drop deleted files.
+  g or Home      Select the first file.
+  G or End       Select the last file.
   m              Mark the selected file as the main file, or remove the mark.
                  lazytypst then compiles the main file, whatever file you edit.
   q              Quit.
@@ -234,6 +236,13 @@ impl App {
         }
     }
 
+    /// Selects the file at `index`. `None`, or an index beyond the list, selects nothing in an empty list
+    /// and the last file otherwise. The index is set at once, so a key that follows needs no redraw.
+    fn select_index(&mut self, index: Option<usize>) {
+        let last = self.files.len().checked_sub(1);
+        self.list.select(index.zip(last).map(|(index, last)| index.min(last)));
+    }
+
     /// The file that the selection is on.
     fn selected_file(&self) -> Option<&PathBuf> {
         self.list.selected().and_then(|i| self.files.get(i))
@@ -270,6 +279,8 @@ impl App {
             KeyCode::Char('q') => return true,
             KeyCode::Char('j') | KeyCode::Down => self.list.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.list.select_previous(),
+            KeyCode::Char('g') | KeyCode::Home => self.select_index(Some(0)),
+            KeyCode::Char('G') | KeyCode::End => self.select_index(self.files.len().checked_sub(1)),
             KeyCode::Char('m') => self.toggle_main(),
             KeyCode::Char('r') => self.refresh(),
             KeyCode::Char('n') => self.open_prompt(),
@@ -772,6 +783,82 @@ mod tests {
         press(&mut app, KeyCode::Char('n'));
         let text = screen(&mut app);
         assert!(text.contains("ntext of a") && !text.contains("New file:"), "{text}");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    /// An app with three files: `a.typ`, `b.typ`, and `c.typ`. Each file holds `text of <name>`.
+    fn app_with_three_files(name: &str) -> App {
+        let root = std::env::temp_dir().join(format!("lazytypst-main-three-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for file in ["a", "b", "c"] {
+            fs::write(root.join(format!("{file}.typ")), format!("text of {file}\n")).unwrap();
+        }
+        let files = browser::find_typ_files(&root, browser::MAX_DEPTH).unwrap();
+        App::new(root, files, Picker::halfblocks())
+    }
+
+    #[test]
+    fn capital_g_then_enter_opens_the_last_file_and_g_then_enter_opens_the_first() {
+        let mut app = app_with_three_files("g");
+        press(&mut app, KeyCode::Char('G'));
+        press(&mut app, KeyCode::Enter); // no draw between the keys
+        assert!(screen(&mut app).contains("text of c"), "G must select the last file");
+        press(&mut app, KeyCode::Esc);
+
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("text of a"), "g must select the first file");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn end_and_home_do_the_same_as_capital_g_and_g() {
+        let mut app = app_with_three_files("home");
+        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("text of c"));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("text of a"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn g_and_capital_g_select_from_the_middle_of_the_list() {
+        let mut app = app_with_three_files("middle");
+        press(&mut app, KeyCode::Char('j')); // b.typ
+        screen(&mut app);
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.list.selected(), Some(2));
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.list.selected(), Some(0));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn g_and_capital_g_in_an_empty_list_do_nothing() {
+        let root = std::env::temp_dir().join(format!("lazytypst-main-g-empty-{}", std::process::id()));
+        let mut app = App::new(root, Vec::new(), Picker::halfblocks());
+        for code in [KeyCode::Char('g'), KeyCode::Char('G'), KeyCode::Home, KeyCode::End, KeyCode::Enter] {
+            assert!(!press(&mut app, code));
+        }
+        assert_eq!(app.list.selected(), None);
+        assert!(app.editor.is_none());
+        assert!(screen(&mut app).contains("No .typ files"));
+    }
+
+    #[test]
+    fn g_types_a_letter_in_the_editor_and_in_the_new_file_prompt() {
+        let mut app = app_with_three_files("g-types");
+        press(&mut app, KeyCode::Char('n'));
+        type_text(&mut app, "gG");
+        assert!(screen(&mut app).contains("New file: gG"));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('G'));
+        assert!(screen(&mut app).contains("Gtext of a"));
         fs::remove_dir_all(&app.root).unwrap();
     }
 
