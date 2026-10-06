@@ -2,6 +2,7 @@ mod browser;
 mod compile;
 mod editor;
 mod fsutil;
+mod newfile;
 mod preview;
 mod state;
 
@@ -20,6 +21,7 @@ use ratatui::{
 };
 
 use ratatui_image::picker::Picker;
+use ratatui_textarea::TextArea;
 
 use editor::{Action, Editor};
 
@@ -33,6 +35,8 @@ struct App {
     state_file: Option<PathBuf>,
     list: ListState,
     status: String,
+    /// The prompt for the name of a new file. While it is open, it takes every key.
+    prompt: Option<TextArea<'static>>,
     /// The open file. The browser shows while this is `None`.
     editor: Option<Editor>,
 }
@@ -51,6 +55,7 @@ Keys in the file list:
   j or Down      Select the next file.
   k or Up        Select the previous file.
   Enter          Open the selected file.
+  n              Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
   r              Read the folder again, to show new files and to drop deleted files.
   m              Mark the selected file as the main file, or remove the mark.
                  lazytypst then compiles the main file, whatever file you edit.
@@ -102,6 +107,7 @@ impl App {
             state_file: None,
             list: ListState::default().with_selected(first),
             status: String::new(),
+            prompt: None,
             editor: None,
         }
     }
@@ -148,6 +154,60 @@ impl App {
         }
     }
 
+    /// Opens the selected file in the editor. A file that cannot be read shows an error in the list.
+    fn open_selected(&mut self) {
+        let Some(path) = self.selected_file().cloned() else {
+            return;
+        };
+        let main = self.main_file.as_ref().map(|main| self.root.join(main));
+        let opened = Editor::open(self.root.join(&path), self.root.clone(), main, self.picker.clone());
+        self.status = match opened {
+            Ok(editor) => {
+                self.editor = Some(editor);
+                String::new()
+            }
+            Err(err) => format!("Cannot open {}: {err}", path.display()),
+        };
+    }
+
+    fn open_prompt(&mut self) {
+        let mut prompt = TextArea::default();
+        prompt.set_cursor_line_style(Style::default());
+        self.prompt = Some(prompt);
+        self.status = "Type a path such as chapters/two. Enter makes the file. Esc cancels.".into();
+    }
+
+    /// Handles a key while the prompt is open. Enter makes the file and opens it. If the name is not
+    /// valid, the prompt stays open and the status line says why.
+    fn handle_prompt_key(&mut self, key: KeyEvent) {
+        let Some(prompt) = &mut self.prompt else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.prompt = None;
+                self.status.clear();
+            }
+            KeyCode::Enter => {
+                let name = prompt.lines().join("");
+                match newfile::create(&self.root, &name, browser::MAX_DEPTH) {
+                    Ok(made) => {
+                        self.prompt = None;
+                        self.refresh();
+                        if let Some(index) = self.files.iter().position(|file| *file == made) {
+                            self.list.select(Some(index));
+                        }
+                        self.open_selected();
+                    }
+                    Err(message) => self.status = message,
+                }
+            }
+            _ => {
+                prompt.input(key);
+            }
+        }
+    }
+
     /// The file that the selection is on.
     fn selected_file(&self) -> Option<&PathBuf> {
         self.list.selected().and_then(|i| self.files.get(i))
@@ -176,25 +236,18 @@ impl App {
             }
             return false;
         }
+        if self.prompt.is_some() {
+            self.handle_prompt_key(key);
+            return false;
+        }
         match key.code {
             KeyCode::Char('q') => return true,
             KeyCode::Char('j') | KeyCode::Down => self.list.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.list.select_previous(),
             KeyCode::Char('m') => self.toggle_main(),
             KeyCode::Char('r') => self.refresh(),
-            KeyCode::Enter => {
-                if let Some(path) = self.selected_file() {
-                    let main = self.main_file.as_ref().map(|main| self.root.join(main));
-                    let opened = Editor::open(self.root.join(path), self.root.clone(), main, self.picker.clone());
-                    self.status = match opened {
-                        Ok(editor) => {
-                            self.editor = Some(editor);
-                            String::new()
-                        }
-                        Err(err) => format!("Cannot open {}: {err}", path.display()),
-                    };
-                }
-            }
+            KeyCode::Char('n') => self.open_prompt(),
+            KeyCode::Enter => self.open_selected(),
             _ => {}
         }
         false
@@ -274,8 +327,13 @@ fn draw(frame: &mut Frame, app: &mut App) {
         editor.draw(frame);
         return;
     }
-    let [body, status] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let prompt_height = u16::from(app.prompt.is_some());
+    let [body, status, prompt_row] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(prompt_height),
+    ])
+    .areas(frame.area());
     let block = Block::bordered().title("lazytypst");
     if app.files.is_empty() {
         frame.render_widget(Paragraph::new("No .typ files").block(block), body);
@@ -291,6 +349,11 @@ fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_stateful_widget(list, body, &mut app.list);
     }
     frame.render_widget(Paragraph::new(app.status.as_str()), status);
+    if let Some(prompt) = &app.prompt {
+        let [label, input] = Layout::horizontal([Constraint::Length(10), Constraint::Min(1)]).areas(prompt_row);
+        frame.render_widget(Paragraph::new("New file: "), label);
+        frame.render_widget(prompt, input);
+    }
 }
 
 #[cfg(test)]
@@ -567,6 +630,117 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('r'));
         assert!(screen(&mut app).contains("rtext of a"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for letter in text.chars() {
+            press(app, KeyCode::Char(letter));
+        }
+    }
+
+    #[test]
+    fn n_opens_the_prompt_and_esc_closes_it_without_a_file() {
+        let mut app = app("new-esc");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(screen(&mut app).contains("New file:"));
+        type_text(&mut app, "draft");
+        press(&mut app, KeyCode::Esc);
+        let text = screen(&mut app);
+        assert!(!text.contains("New file:") && text.contains("a.typ"), "{text}");
+        assert!(!app.root.join("draft.typ").exists());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_prompt_takes_every_key_before_the_list_does() {
+        let mut app = app("new-keys");
+        press(&mut app, KeyCode::Char('n'));
+        for letter in "qjkmrn".chars() {
+            assert!(!press(&mut app, KeyCode::Char(letter)), "{letter} quit the program");
+        }
+        assert!(screen(&mut app).contains("New file: qjkmrn"));
+        assert_eq!(app.main_file, None, "m marked a file");
+        assert!(app.editor.is_none());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn enter_makes_the_file_selects_it_and_opens_it() {
+        let mut app = app("new-ok");
+        press(&mut app, KeyCode::Char('n'));
+        type_text(&mut app, "chapters/two");
+        press(&mut app, KeyCode::Enter);
+
+        assert!(app.root.join("chapters").join("two.typ").is_file());
+        assert!(screen(&mut app).contains("chapters/two.typ"), "the editor must show the new file");
+        press(&mut app, KeyCode::Esc);
+        let text = screen(&mut app);
+        assert!(text.contains("chapters/two.typ") && !text.contains("New file:"), "{text}");
+        // The new file is selected: Enter opens it again.
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("chapters/two.typ"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_bad_name_shows_the_error_and_keeps_the_prompt() {
+        let mut app = app("new-bad");
+        press(&mut app, KeyCode::Char('n'));
+        type_text(&mut app, "../x");
+        press(&mut app, KeyCode::Enter);
+        let text = screen(&mut app);
+        assert!(text.contains("inside the project") && text.contains("New file: ../x"), "{text}");
+        assert!(app.editor.is_none());
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.root.parent().unwrap().join("x.typ").exists());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_name_that_exists_already_shows_the_error_and_changes_nothing() {
+        let mut app = app("new-exists");
+        press(&mut app, KeyCode::Char('n'));
+        type_text(&mut app, "a");
+        press(&mut app, KeyCode::Enter);
+        assert!(screen(&mut app).contains("a.typ exists already"));
+        assert_eq!(fs::read_to_string(app.root.join("a.typ")).unwrap(), "text of a\n");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn backspace_edits_the_name() {
+        let mut app = app("new-backspace");
+        press(&mut app, KeyCode::Char('n'));
+        type_text(&mut app, "abc");
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.root.join("ab.typ").is_file());
+        assert!(!app.root.join("abc.typ").exists());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn n_makes_the_first_file_in_an_empty_folder() {
+        let root = std::env::temp_dir().join(format!("lazytypst-main-new-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut app = App::new(root.clone(), Vec::new(), Picker::halfblocks());
+        press(&mut app, KeyCode::Char('n'));
+        type_text(&mut app, "first");
+        press(&mut app, KeyCode::Enter);
+        assert!(root.join("first.typ").is_file());
+        assert!(app.editor.is_some());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn n_types_a_letter_in_the_editor() {
+        let mut app = app("new-editor");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('n'));
+        let text = screen(&mut app);
+        assert!(text.contains("ntext of a") && !text.contains("New file:"), "{text}");
         fs::remove_dir_all(&app.root).unwrap();
     }
 
