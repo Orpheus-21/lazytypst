@@ -177,11 +177,13 @@ enum State {
 }
 
 impl Job {
-    /// Runs `typst compile` on `file`. The pages go to `dir/page-{p}.png`.
+    /// Runs `typst compile` on `file` for page number `page` only, counted from 1.
+    /// The one file goes to `dir/page-<page>-of-<count>.png`, where `<count>` is the number of pages of the
+    /// document. If the document has fewer than `page` pages, Typst exits with success and writes no file.
     /// Typst can read the files under `root`. So `file` can import files from parent folders inside `root`.
     /// Typst runs in `root`, so an error line names the file relative to `root`.
     /// `file` and `dir` must be absolute, or relative to `root`.
-    pub fn start(file: &Path, root: &Path, dir: PathBuf) -> Job {
+    pub fn start(file: &Path, root: &Path, dir: PathBuf, page: usize) -> Job {
         if let Err(err) = fs::create_dir_all(&dir) {
             return Job::failed(format!("Cannot make {}: {err}", dir.display()), dir);
         }
@@ -190,8 +192,10 @@ impl Job {
             .current_dir(root)
             .args(["compile", "--format", "png", "--diagnostic-format", "short", "--root"])
             .arg(root)
+            .arg("--pages")
+            .arg(page.to_string())
             .arg(file)
-            .arg(dir.join("page-{p}.png"));
+            .arg(dir.join("page-{p}-of-{t}.png"));
         Job::spawn(command, dir)
     }
 
@@ -400,7 +404,7 @@ mod tests {
     #[test]
     fn a_real_typst_error_gets_a_position() {
         let (file, pages) = project("diag", "= Title\n#nope()\n");
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
         let first = report.first_error().expect("an error with a position");
         assert_eq!((first.line, first.column), (2, 1), "{first:?}");
         assert!(first.message.contains("unknown variable"), "{first:?}");
@@ -411,7 +415,7 @@ mod tests {
     fn typst_counts_the_column_in_characters_from_1() {
         for (text, column) in [("é #nope()", 3), ("संस्कृतम् #nope()", 11), ("👨\u{200d}👩\u{200d}👧\u{200d}👦 #nope()", 9)] {
             let (file, pages) = project("column", &format!("{text}\n"));
-            let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
+            let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
             let first = report.first_error().expect("an error with a position");
             assert_eq!(first.column, column, "{text}");
             fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -421,10 +425,10 @@ mod tests {
     #[test]
     fn a_valid_file_makes_a_png_page() {
         let (file, pages) = project("ok", "= Title\nSome text.\n");
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
         assert!(report.ok, "{:?}", report.lines);
         assert!(report.lines.is_empty());
-        let png = fs::read(pages.join("page-1.png")).unwrap();
+        let png = fs::read(pages.join("page-1-of-1.png")).unwrap();
         assert_eq!(&png[1..4], b"PNG");
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
@@ -438,7 +442,7 @@ mod tests {
         let chapter = root.join("chapters").join("c.typ");
         fs::write(&chapter, "#import \"../lib.typ\": title\n= #title\n").unwrap();
 
-        let report = wait(&mut Job::start(&chapter, root, pages.clone()));
+        let report = wait(&mut Job::start(&chapter, root, pages.clone(), 1));
         assert!(report.ok, "{:?}", report.lines);
         let report = wait(&mut Job::start_pdf(&chapter, root, root.join("c.pdf")));
         assert!(report.ok, "{:?}", report.lines);
@@ -453,11 +457,30 @@ mod tests {
         let chapter = root.join("chapters").join("c.typ");
         fs::write(&chapter, "#nope()\n").unwrap();
 
-        let report = wait(&mut Job::start(&chapter, root, pages.clone()));
+        let report = wait(&mut Job::start(&chapter, root, pages.clone(), 1));
         assert!(report.lines[0].starts_with("chapters/c.typ:1:"), "{:?}", report.lines);
         let report = wait(&mut Job::start_pdf(&chapter, root, root.join("c.pdf")));
         assert!(report.lines[0].starts_with("chapters/c.typ:1:"), "{:?}", report.lines);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_compile_of_one_page_writes_exactly_one_png_named_with_the_page_count() {
+        let (file, pages) = project("onepage", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 2));
+        assert!(report.ok, "{:?}", report.lines);
+        let names: Vec<_> = fs::read_dir(&pages).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["page-2-of-3.png"]);
+        fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_page_beyond_the_end_gives_success_and_no_file() {
+        let (file, pages) = project("beyond", "= One\n#pagebreak()\n= Two\n");
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 5));
+        assert!(report.ok, "{:?}", report.lines);
+        assert_eq!(fs::read_dir(&pages).unwrap().count(), 0, "typst wrote a file");
+        fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
 
     #[test]
@@ -486,7 +509,7 @@ mod tests {
     #[test]
     fn an_error_report_names_the_line() {
         let (file, pages) = project("bad", "= Title\n#nope()\n");
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
         assert!(!report.ok);
         assert!(
             report.lines.iter().any(|l| l.contains(":2:") && l.contains("error")),
@@ -597,7 +620,7 @@ mod tests {
     fn a_missing_input_file_is_a_failure() {
         let (file, pages) = project("missing", "");
         fs::remove_file(&file).unwrap();
-        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone()));
+        let report = wait(&mut Job::start(&file, file.parent().unwrap(), pages.clone(), 1));
         assert!(!report.ok);
         assert!(!report.lines.is_empty());
         fs::remove_dir_all(file.parent().unwrap()).unwrap();

@@ -11,34 +11,50 @@ use ratatui::{
 use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
 
 /// The pane that shows one compiled page as an image.
+///
+/// A compile renders one page only. Its folder holds one file, `page-<p>-of-<t>.png`: `<p>` is the page
+/// number and `<t>` is the number of pages of the document. So the preview learns the page count from
+/// the name, without the other pages.
 pub struct Preview {
     picker: Picker,
-    /// The folder with the PNG pages that the pane shows. The preview owns the folder.
+    /// The folder with the PNG file that the pane shows. The preview owns the folder.
     dir: Option<PathBuf>,
-    /// The number of pages in `dir`.
+    /// The number of pages of the document.
     count: usize,
-    /// The shown page. Page 1 has the index 0.
-    index: usize,
+    /// The page on screen, counted from 1.
+    shown: usize,
+    /// The page that the next compile must render, counted from 1. It differs from `shown`
+    /// between a page turn and the end of the compile that loads the new page.
+    wanted: usize,
     /// The last page that loaded. It stays on screen when a later compile fails.
     page: Option<StatefulProtocol>,
 }
 
 impl Preview {
     pub fn new(picker: Picker) -> Self {
-        Self { picker, dir: None, count: 0, index: 0, page: None }
+        Self { picker, dir: None, count: 0, shown: 1, wanted: 1, page: None }
     }
 
-    /// Shows the new folder and deletes the old folder. The page number stays the same,
-    /// or it moves to the last page if the new folder has fewer pages.
-    /// If the page does not load, the new folder is deleted, the old page stays, and the error text comes back.
+    /// The page that the next compile must render, counted from 1.
+    pub fn wanted_page(&self) -> usize {
+        self.wanted
+    }
+
+    /// Shows the page in the new folder and deletes the old folder.
+    /// If the folder has no page or the page does not load, the new folder is deleted, the old page
+    /// stays, and the error text comes back.
     pub fn load(&mut self, dir: PathBuf) -> Result<(), String> {
-        let count = count_pages(&dir);
-        let index = self.index.min(count.saturating_sub(1));
-        match self.read(&dir, index) {
-            Ok(page) => {
-                self.page = Some(page);
+        let Some((number, count)) = page_in(&dir) else {
+            let _ = fs::remove_dir_all(&dir);
+            return Err(format!("Typst wrote no page file in {}", dir.display()));
+        };
+        let path = dir.join(format!("page-{number}-of-{count}.png"));
+        match image::open(&path) {
+            Ok(image) => {
+                self.page = Some(self.picker.new_resize_protocol(image));
+                self.shown = number;
+                self.wanted = number;
                 self.count = count;
-                self.index = index;
                 if let Some(old) = self.dir.replace(dir) {
                     let _ = fs::remove_dir_all(old);
                 }
@@ -46,32 +62,24 @@ impl Preview {
             }
             Err(err) => {
                 let _ = fs::remove_dir_all(&dir);
-                Err(err)
+                Err(format!("Cannot load {}: {err}", path.display()))
             }
         }
     }
 
-    /// Shows the next page or the previous page. At the first page and at the last page, nothing changes.
-    pub fn turn(&mut self, forward: bool) -> Result<(), String> {
-        let Some(dir) = &self.dir else {
-            return Ok(());
-        };
-        let index = if forward {
-            (self.index + 1).min(self.count - 1)
-        } else {
-            self.index.saturating_sub(1)
-        };
-        if index != self.index {
-            self.page = Some(self.read(dir, index)?);
-            self.index = index;
+    /// Asks for the next page or the previous page. At the first page and at the last page, nothing changes.
+    /// Returns true when the wanted page changed. The caller must then start a compile for that page.
+    /// The old page stays on screen until that compile has loaded the new page.
+    pub fn turn(&mut self, forward: bool) -> bool {
+        if self.dir.is_none() {
+            return false; // no compile has loaded a page, so the page count is not known
         }
-        Ok(())
-    }
-
-    fn read(&self, dir: &Path, index: usize) -> Result<StatefulProtocol, String> {
-        let path = dir.join(format!("page-{}.png", index + 1));
-        let image = image::open(&path).map_err(|err| format!("Cannot load {}: {err}", path.display()))?;
-        Ok(self.picker.new_resize_protocol(image))
+        let target = if forward {
+            (self.wanted + 1).min(self.count)
+        } else {
+            self.wanted.saturating_sub(1).max(1)
+        };
+        std::mem::replace(&mut self.wanted, target) != target
     }
 
     #[cfg(test)]
@@ -81,7 +89,7 @@ impl Preview {
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
         let title = match self.page {
-            Some(_) => format!("Preview {}/{}", self.index + 1, self.count),
+            Some(_) => format!("Preview {}/{}", self.shown, self.count),
             None => "Preview".to_string(),
         };
         let block = Block::bordered().title(title);
@@ -97,11 +105,19 @@ impl Preview {
     }
 }
 
-/// Counts the files page-1.png, page-2.png, and so on, up to the first number that is missing.
-fn count_pages(dir: &Path) -> usize {
-    (1..)
-        .take_while(|number| dir.join(format!("page-{number}.png")).is_file())
-        .count()
+/// Finds the file `page-<p>-of-<t>.png` in `dir`. Returns `(p, t)`, with `1 <= p <= t`.
+/// Typst writes no file when the page that the compile asked for is beyond the end of the document.
+pub fn page_in(dir: &Path) -> Option<(usize, usize)> {
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let (number, count) = name.strip_prefix("page-")?.strip_suffix(".png")?.split_once("-of-")?;
+            let (number, count) = (number.parse::<usize>().ok()?, count.parse::<usize>().ok()?);
+            (1 <= number && number <= count).then_some((number, count))
+        })
+        .min()
 }
 
 #[cfg(test)]
@@ -112,27 +128,25 @@ mod tests {
     const RED: Color = Color::Rgb(255, 0, 0);
     const GREEN: Color = Color::Rgb(0, 255, 0);
 
-    /// Makes a folder with `count` PNG files of 40 by 40 pixels, named page-1.png and so on.
-    /// Page 1 is red and page 2 is green. All other pages are blue.
-    fn pages(name: &str, count: usize) -> PathBuf {
+    /// Makes a folder with the one file that a compile of page `number` writes: `page-<number>-of-<count>.png`.
+    /// The image is 40 by 40 pixels. Page 1 is red, page 2 is green, and all other pages are blue.
+    fn page(name: &str, number: usize, count: usize) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("lazytypst-preview-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        for number in 1..=count {
-            let rgb = match number {
-                1 => [255, 0, 0, 255],
-                2 => [0, 255, 0, 255],
-                _ => [0, 0, 255, 255],
-            };
-            image::RgbaImage::from_pixel(40, 40, image::Rgba(rgb))
-                .save(dir.join(format!("page-{number}.png")))
-                .unwrap();
-        }
+        let rgb = match number {
+            1 => [255, 0, 0, 255],
+            2 => [0, 255, 0, 255],
+            _ => [0, 0, 255, 255],
+        };
+        image::RgbaImage::from_pixel(40, 40, image::Rgba(rgb))
+            .save(dir.join(format!("page-{number}-of-{count}.png")))
+            .unwrap();
         dir
     }
 
-    fn red_pages(name: &str) -> PathBuf {
-        pages(name, 1)
+    fn red_page(name: &str) -> PathBuf {
+        page(name, 1, 1)
     }
 
     /// Draws the pane on a 30 by 10 screen. Returns the text and a flag for each color.
@@ -149,8 +163,8 @@ mod tests {
     }
 
     #[test]
-    fn load_reads_page_1() {
-        let dir = red_pages("load");
+    fn load_reads_the_page_in_the_folder() {
+        let dir = red_page("load");
         let mut preview = Preview::new(Picker::halfblocks());
         assert!(!preview.has_page());
         preview.load(dir.clone()).unwrap();
@@ -159,8 +173,19 @@ mod tests {
     }
 
     #[test]
+    fn the_title_shows_the_page_number_and_the_page_count_from_the_file_name() {
+        let dir = page("title", 30, 67);
+        let mut preview = Preview::new(Picker::halfblocks());
+        assert!(draw(&mut preview).0.contains("Preview"));
+        preview.load(dir.clone()).unwrap();
+        assert!(draw(&mut preview).0.contains("Preview 30/67"));
+        assert_eq!(preview.wanted_page(), 30);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn a_new_load_deletes_the_old_folder() {
-        let (first, second) = (red_pages("old"), red_pages("new"));
+        let (first, second) = (red_page("old"), red_page("new"));
         let mut preview = Preview::new(Picker::halfblocks());
         preview.load(first.clone()).unwrap();
         preview.load(second.clone()).unwrap();
@@ -170,27 +195,42 @@ mod tests {
     }
 
     #[test]
+    fn a_new_load_shows_the_new_page() {
+        let (first, second) = (page("shows-a", 1, 3), page("shows-b", 2, 3));
+        let mut preview = Preview::new(Picker::halfblocks());
+        preview.load(first).unwrap();
+        let (text, red, green) = draw(&mut preview);
+        assert!(text.contains("Preview 1/3") && red && !green);
+
+        preview.load(second.clone()).unwrap();
+        let (text, red, green) = draw(&mut preview);
+        assert!(text.contains("Preview 2/3") && green && !red, "{text}");
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
     fn a_failed_load_keeps_the_old_page_and_deletes_the_new_folder() {
-        let good = red_pages("keep");
+        let good = red_page("keep");
         let mut preview = Preview::new(Picker::halfblocks());
         preview.load(good.clone()).unwrap();
 
         let empty = std::env::temp_dir().join(format!("lazytypst-preview-empty-{}", std::process::id()));
         fs::create_dir_all(&empty).unwrap();
         let err = preview.load(empty.clone()).unwrap_err();
-        assert!(err.contains("Cannot load"), "{err}");
+        assert!(err.contains("no page file"), "{err}");
         assert!(preview.has_page());
         assert!(good.exists(), "the folder of the shown page was deleted");
         assert!(!empty.exists(), "the folder of the failed load is still there");
+        assert!(draw(&mut preview).0.contains("Preview 1/1"));
         fs::remove_dir_all(good).unwrap();
     }
 
     #[test]
     fn a_file_that_is_not_a_png_is_an_error() {
-        let dir = red_pages("bad");
-        fs::write(dir.join("page-1.png"), "not a png").unwrap();
+        let dir = red_page("bad");
+        fs::write(dir.join("page-1-of-1.png"), "not a png").unwrap();
         let mut preview = Preview::new(Picker::halfblocks());
-        assert!(preview.load(dir.clone()).is_err());
+        assert!(preview.load(dir.clone()).unwrap_err().contains("Cannot load"));
         assert!(!preview.has_page());
         assert!(!dir.exists());
     }
@@ -204,86 +244,70 @@ mod tests {
     }
 
     #[test]
-    fn the_title_shows_the_page_number_and_the_page_count() {
-        let dir = pages("title", 3);
+    fn turn_changes_the_wanted_page_and_stops_at_the_first_and_the_last_page() {
+        let dir = page("turn", 1, 3);
         let mut preview = Preview::new(Picker::halfblocks());
-        assert!(draw(&mut preview).0.contains("Preview"));
+        assert!(!preview.turn(true), "no page count is known before the first load");
         preview.load(dir.clone()).unwrap();
-        assert!(draw(&mut preview).0.contains("Preview 1/3"));
+
+        assert!(!preview.turn(false), "page 1 has no previous page");
+        assert!(preview.turn(true));
+        assert_eq!(preview.wanted_page(), 2);
+        assert!(preview.turn(true));
+        assert_eq!(preview.wanted_page(), 3);
+        assert!(!preview.turn(true), "page 3 is the last page");
+        assert_eq!(preview.wanted_page(), 3);
+        assert!(preview.turn(false));
+        assert_eq!(preview.wanted_page(), 2);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn turn_stops_at_the_first_and_the_last_page() {
-        let dir = pages("turn", 3);
+    fn the_old_page_stays_on_screen_after_a_turn_until_a_new_page_loads() {
+        let (first, second) = (page("stay-a", 1, 3), page("stay-b", 2, 3));
         let mut preview = Preview::new(Picker::halfblocks());
-        preview.turn(true).unwrap(); // no folder yet: nothing happens
-        preview.load(dir.clone()).unwrap();
+        preview.load(first).unwrap();
+        assert!(preview.turn(true));
+        let (text, red, green) = draw(&mut preview);
+        assert!(text.contains("Preview 1/3") && red && !green, "the old page must stay: {text}");
 
-        preview.turn(false).unwrap();
-        assert!(draw(&mut preview).0.contains("Preview 1/3"));
-        for _ in 0..5 {
-            preview.turn(true).unwrap();
+        preview.load(second.clone()).unwrap();
+        assert!(draw(&mut preview).0.contains("Preview 2/3"));
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn page_in_reads_the_page_number_and_the_count_from_the_name() {
+        let dir = page("name", 30, 67);
+        assert_eq!(page_in(&dir), Some((30, 67)));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn page_in_ignores_names_that_are_not_a_page_file() {
+        let dir = std::env::temp_dir().join(format!("lazytypst-preview-names-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "page-1.png",           // the old name
+            "page-x-of-3.png",      // not a number
+            "page-0-of-3.png",      // pages count from 1
+            "page-4-of-3.png",      // beyond the end
+            "page-1-of-3.png.tmp",  // another ending
+            "notes.txt",
+        ] {
+            fs::write(dir.join(name), "").unwrap();
         }
-        assert!(draw(&mut preview).0.contains("Preview 3/3"));
-        preview.turn(false).unwrap();
-        assert!(draw(&mut preview).0.contains("Preview 2/3"));
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn turn_changes_the_image() {
-        let dir = pages("image", 3);
-        let mut preview = Preview::new(Picker::halfblocks());
-        preview.load(dir.clone()).unwrap();
-        let (_, red, green) = draw(&mut preview);
-        assert!(red && !green, "page 1 must be red");
-
-        preview.turn(true).unwrap();
-        let (_, red, green) = draw(&mut preview);
-        assert!(green && !red, "page 2 must be green");
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn a_new_load_keeps_the_page_number() {
-        let (first, second) = (pages("keep-a", 3), pages("keep-b", 3));
-        let mut preview = Preview::new(Picker::halfblocks());
-        preview.load(first).unwrap();
-        preview.turn(true).unwrap();
-        preview.load(second.clone()).unwrap();
-        assert!(draw(&mut preview).0.contains("Preview 2/3"));
-        fs::remove_dir_all(second).unwrap();
-    }
-
-    #[test]
-    fn a_new_load_with_fewer_pages_moves_to_the_last_page() {
-        let (first, second) = (pages("fewer-a", 3), pages("fewer-b", 2));
-        let mut preview = Preview::new(Picker::halfblocks());
-        preview.load(first).unwrap();
-        preview.turn(true).unwrap();
-        preview.turn(true).unwrap();
-        preview.load(second.clone()).unwrap();
-        assert!(draw(&mut preview).0.contains("Preview 2/2"));
-        fs::remove_dir_all(second).unwrap();
-    }
-
-    #[test]
-    fn a_page_that_does_not_load_keeps_the_old_page() {
-        let dir = pages("missing", 3);
-        let mut preview = Preview::new(Picker::halfblocks());
-        preview.load(dir.clone()).unwrap();
-        fs::remove_file(dir.join("page-2.png")).unwrap();
-
-        let err = preview.turn(true).unwrap_err();
-        assert!(err.contains("page-2.png"), "{err}");
-        assert!(draw(&mut preview).0.contains("Preview 1/3"));
+        assert_eq!(page_in(&dir), None);
+        fs::write(dir.join("page-2-of-3.png"), "").unwrap();
+        assert_eq!(page_in(&dir), Some((2, 3)));
+        assert_eq!(page_in(&dir.join("missing")), None);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn the_pane_draws_the_page() {
-        let dir = red_pages("draw");
+        let dir = red_page("draw");
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
         let mut preview = Preview::new(Picker::halfblocks());
         preview.load(dir.clone()).unwrap();

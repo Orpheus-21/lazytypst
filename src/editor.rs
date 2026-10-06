@@ -157,8 +157,11 @@ impl Editor {
         } else if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Down | KeyCode::Up) {
             // Alt with an arrow key arrives as one escape sequence. Alt with a letter arrives as Esc and
             // the letter, so a fast Esc and n looked like Alt-n.
-            if let Err(err) = self.preview.turn(key.code == KeyCode::Down) {
-                self.message = err;
+            // A page turn renders the new page with a new compile. It does not save: the file on disk is
+            // what the compile reads, and a refused save (a file that another program changed) must not
+            // stop the turn. The old page stays on screen until the new page is ready.
+            if self.preview.turn(key.code == KeyCode::Down) {
+                self.start_compile();
             }
         } else if key.code == KeyCode::Esc {
             if armed || self.save(false) {
@@ -197,10 +200,16 @@ impl Editor {
 
     fn save_and_compile(&mut self) {
         if self.save(false) {
-            self.stop_compile();
-            let target = self.compile_target().to_path_buf();
-            self.job = Some(Job::start(&target, &self.root, compile::next_dir(&self.pages_root)));
+            self.start_compile();
         }
+    }
+
+    /// Starts a compile of the wanted page. The new compile replaces the running compile.
+    fn start_compile(&mut self) {
+        self.stop_compile();
+        let target = self.compile_target().to_path_buf();
+        let dir = compile::next_dir(&self.pages_root);
+        self.job = Some(Job::start(&target, &self.root, dir, self.preview.wanted_page()));
     }
 
     /// The file that the compile and the export use: the main file, or else the open file.
@@ -927,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn alt_down_and_alt_up_turn_the_preview_page() {
+    fn alt_down_and_alt_up_render_the_new_page_with_a_new_compile() {
         let path = temp_file("pages", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
         let mut editor = open(&path);
         editor.handle_key(ctrl('b'));
@@ -935,13 +944,86 @@ mod tests {
         assert!(screen_text(&mut editor).contains("Preview 1/3"));
 
         editor.handle_key(alt(KeyCode::Down));
+        assert!(editor.job.is_some(), "a page turn must start a compile");
+        assert!(screen_text(&mut editor).contains("Preview 1/3"), "the old page must stay until the new page is ready");
+        wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 2/3"));
+
+        // Fast presses replace each other: the last press decides the page.
         editor.handle_key(alt(KeyCode::Down));
         editor.handle_key(alt(KeyCode::Down));
+        wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 3/3"));
+
+        editor.handle_key(alt(KeyCode::Down));
+        assert!(editor.job.is_none(), "page 3 is the last page, so no compile starts");
         editor.handle_key(alt(KeyCode::Up));
+        wait_for_report(&mut editor);
         assert!(screen_text(&mut editor).contains("Preview 2/3"));
         assert!(!editor.dirty, "the page keys must not change the text");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_page_turn_works_while_the_file_has_a_conflict_and_does_not_save() {
+        let path = temp_file("turnconflict", "= One\n#pagebreak()\n= Two\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+
+        editor.handle_key(key(KeyCode::Char('X')));
+        fs::write(&path, "= One\n#pagebreak()\n= Two\nchanged outside\n").unwrap();
+        editor.handle_key(alt(KeyCode::Down));
+        assert!(editor.job.is_some(), "the turn must start a compile");
+        assert!(editor.dirty, "the turn must not save");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "= One\n#pagebreak()\n= Two\nchanged outside\n");
+        wait_for_report(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 2/2"));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_page_number_stays_after_an_edit() {
+        let path = temp_file("pageedit", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        editor.handle_key(alt(KeyCode::Down));
+        wait_for_report(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 2/3"));
+
+        editor.handle_key(key(KeyCode::Char('X')));
+        assert!(editor.tick(Instant::now() + Duration::from_millis(400)));
+        wait_for_report(&mut editor);
+        assert!(screen_text(&mut editor).contains("Preview 2/3"), "the live compile must render page 2");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn each_compile_folder_holds_exactly_one_png() {
+        let path = temp_file("onepng", "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        editor.handle_key(alt(KeyCode::Down));
+        wait_for_report(&mut editor);
+
+        let folders: Vec<_> = fs::read_dir(&editor.pages_root).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(folders.len(), 1, "only the folder of the shown page stays");
+        let files: Vec<_> = fs::read_dir(&folders[0]).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(files, ["page-2-of-3.png"]);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn an_error_on_a_later_page_shows_while_page_1_is_wanted() {
+        let path = temp_file("laterror", "= One\n#pagebreak()\n= Two\n#pagebreak()\n#nope()\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        let report = editor.report.as_ref().unwrap();
+        assert!(!report.ok);
+        assert!(report.lines.iter().any(|l| l.contains(":5:")), "{:?}", report.lines);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
