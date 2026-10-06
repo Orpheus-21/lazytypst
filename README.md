@@ -60,6 +60,7 @@ Keys in the file list:
 - `j` or `Down`: select the next file.
 - `k` or `Up`: select the previous file.
 - `Enter`: open the selected file in the editor.
+- `n`: make a new file. A prompt asks for a path, for example `chapters/two`. `Enter` makes the empty file, opens it in the editor, and selects it in the list. `Esc` cancels. The program adds `.typ` if the name has no ending, and it makes missing folders. The program refuses a name that leaves the project, that has an ending other than `.typ`, that starts with a dot, that is deeper than the list reads, that goes through a link, or that exists already. The prompt then stays open and the status line gives the reason.
 - `r`: read the folder again. New files appear and deleted files go. The selection stays on the same file if it is still there. A main file that is gone loses its mark.
 - `m`: mark the selected file as the main file, or remove the mark.
 - `q`: quit.
@@ -83,7 +84,7 @@ Save rules:
 
 ## How it works
 
-- `src/browser.rs` finds the `.typ` files.
+- `src/browser.rs` finds the `.typ` files. `src/newfile.rs` checks the name of a new file and makes it.
 - `src/editor.rs` holds the text area, the save, the 300 ms autosave, the screen layout, and the pane that shows the compile result.
 - `src/preview.rs` holds the folder of PNG pages from the last good compile. It draws one page with the `ratatui-image` crate. It deletes the old folder when a new folder loads.
 - `src/compile.rs` runs `typst compile --format png --diagnostic-format short --root <folder>` as a job, inside the root folder. The main thread owns the `typst` process and checks it with `try_wait`. A thread reads the error output. Dropping the job kills the `typst` process. Each compile writes its PNG pages to its own new folder in the temporary directory. The editor deletes the folder of a compile that failed or that it killed. The program deletes the temporary directory when it exits. The PDF export is a second job of the same kind.
