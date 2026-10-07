@@ -996,7 +996,7 @@ impl Editor {
         frame.render_widget(self.compile_pane(pane), pane);
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
-            "F1 help  Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Ctrl-G error  Alt-Up/Down page  Esc back"
+            "F1 help  Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Alt-Up/Down page  Esc back"
         } else {
             &self.message
         };
