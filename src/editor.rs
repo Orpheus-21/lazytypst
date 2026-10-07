@@ -176,6 +176,17 @@ impl Drop for Editor {
     }
 }
 
+/// What the editor shows and what takes the keys. The three modes exclude each other, so a key, a paste,
+/// and a draw each use one `match` and cannot disagree about the mode.
+enum Mode {
+    /// The text area and the preview side by side. The keys edit the text.
+    Edit,
+    /// The prompt `Search:` in the status line. It takes every key and every paste. See `search_key`.
+    Search(Box<TextArea<'static>>),
+    /// The preview fills the screen and the text area is hidden. Typing does nothing. See `full_key`.
+    Full,
+}
+
 pub enum Action {
     Stay,
     /// Close the editor and go back to the file list.
@@ -211,10 +222,8 @@ pub struct Editor {
     clipboard: Option<String>,
     /// True if the file used CR LF line ends when it was read. The save then writes CR LF again.
     crlf: bool,
-    /// True while the preview fills the screen and the text area is hidden. See `full_key`.
-    full: bool,
-    /// The prompt `Search:` while it is open. It takes every key. See `search_key`.
-    search: Option<TextArea<'static>>,
+    /// What takes the keys: the text, the prompt `Search:`, or the full preview. Only one at a time.
+    mode: Mode,
     /// The text of the last search, for the next prompt.
     last_search: String,
     /// True when the user turned the live compile off with F5. The autosave still runs.
@@ -268,8 +277,7 @@ impl Editor {
             words: 0,
             colors: colors_wanted(),
             paused: false,
-            full: false,
-            search: None,
+            mode: Mode::Edit,
             last_search: String::new(),
             close_armed: false,
             message: String::new(),
@@ -388,15 +396,16 @@ impl Editor {
     pub fn paste(&mut self, text: &str) {
         self.close_armed = false;
         self.message.clear();
-        if self.full {
-            return; // typing is off in the full preview
-        }
-        if self.search.is_some() {
-            // The prompt takes the text of a paste, as one line.
-            for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
-                self.search_key(KeyEvent::from(KeyCode::Char(letter)));
+        match self.mode {
+            Mode::Full => return, // typing is off in the full preview
+            Mode::Search(_) => {
+                // The prompt takes the text of a paste, as one line.
+                for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
+                    self.search_key(KeyEvent::from(KeyCode::Char(letter)));
+                }
+                return;
             }
-            return;
+            Mode::Edit => {}
         }
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         if self.textarea.insert_str(text) {
@@ -480,7 +489,7 @@ impl Editor {
         let plain = !key.modifiers.contains(KeyModifiers::ALT);
         let zoomed = match key.code {
             KeyCode::F(11) | KeyCode::Esc => {
-                self.full = false;
+                self.mode = Mode::Edit;
                 // The split view cannot move the view, so it shows the whole page. A zoom would also
                 // make every autosave render a big page.
                 if self.preview.zoom_fit() {
@@ -532,13 +541,13 @@ impl Editor {
     /// The matches show while you type. `Enter` or `Ctrl-F` moves the cursor to the next match, and the
     /// search wraps at the end of the file. `Esc` closes the prompt and keeps the cursor.
     fn search_key(&mut self, key: KeyEvent) {
-        let Some(prompt) = &mut self.search else {
+        let Mode::Search(prompt) = &mut self.mode else {
             return;
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let next = key.code == KeyCode::Enter || (ctrl && key.code == KeyCode::Char('f'));
         if key.code == KeyCode::Esc {
-            self.search = None;
+            self.mode = Mode::Edit;
             let _ = self.textarea.set_search_pattern("");
             return;
         }
@@ -566,26 +575,27 @@ impl Editor {
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         let armed = std::mem::take(&mut self.close_armed);
         self.message.clear();
-        if self.search.is_some() {
-            self.search_key(key);
-            return Action::Stay;
-        }
-        if self.full && !full_passthrough(key) {
-            return self.full_key(key);
-        }
-        if key.code == KeyCode::F(11) {
-            self.full = true;
-            return Action::Stay;
-        }
-        if self.full && key.code == KeyCode::Char('g') {
-            self.full = false; // the error is in the text, so the text must show
+        match self.mode {
+            Mode::Search(_) => {
+                self.search_key(key);
+                return Action::Stay;
+            }
+            Mode::Full if !full_passthrough(key) => return self.full_key(key),
+            // The error is in the text, so the text must show.
+            Mode::Full if key.code == KeyCode::Char('g') => self.mode = Mode::Edit,
+            Mode::Full => {}
+            Mode::Edit if key.code == KeyCode::F(11) => {
+                self.mode = Mode::Full;
+                return Action::Stay;
+            }
+            Mode::Edit => {}
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('f') {
             let mut prompt = TextArea::new(vec![self.last_search.clone()]);
             prompt.set_cursor_line_style(Style::default());
             prompt.move_cursor(CursorMove::End);
-            self.search = Some(prompt);
+            self.mode = Mode::Search(Box::new(prompt));
         } else if ctrl && key.code == KeyCode::Char('s') {
             if !self.dirty {
                 self.message = "No changes to save".into();
@@ -794,7 +804,7 @@ impl Editor {
                 let place = self.cursor_position();
                 self.crlf = text.contains("\r\n");
                 self.textarea = new_textarea(&text);
-                if self.search.is_some() {
+                if matches!(self.mode, Mode::Search(_)) {
                     let _ = self.textarea.set_search_pattern(&self.last_search);
                 }
                 self.count_words();
@@ -1026,7 +1036,7 @@ impl Editor {
     pub fn draw(&mut self, frame: &mut Frame) {
         let [main, status] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-        if self.full {
+        if matches!(self.mode, Mode::Full) {
             self.preview.draw(frame, main);
             let zoom = format!("{}%", self.preview.zoom_percent());
             let width = u16::try_from(zoom.len() + 1).unwrap_or(u16::MAX);
@@ -1078,7 +1088,7 @@ impl Editor {
         let width = u16::try_from(position.len() + 1).unwrap_or(u16::MAX);
         let [hint_area, position_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(status);
-        if let Some(prompt) = &self.search {
+        if let Mode::Search(prompt) = &self.mode {
             let message_width = u16::try_from(self.message.len()).unwrap_or(u16::MAX);
             let [label, input, message] = Layout::horizontal([
                 Constraint::Length(8),
@@ -1087,7 +1097,7 @@ impl Editor {
             ])
             .areas(hint_area);
             frame.render_widget(Paragraph::new("Search: "), label);
-            frame.render_widget(prompt, input);
+            frame.render_widget(&**prompt, input);
             frame.render_widget(Paragraph::new(self.message.as_str()), message);
         } else {
             frame.render_widget(Paragraph::new(hint), hint_area);
@@ -2049,7 +2059,7 @@ mod tests {
         editor.handle_key(key(KeyCode::Enter));
         assert_eq!(editor.cursor_position(), (0, 0), "it wraps to the top");
         editor.handle_key(key(KeyCode::Esc));
-        assert!(editor.search.is_none());
+        assert!(matches!(editor.mode, Mode::Edit));
         assert_eq!(editor.cursor_position(), (0, 0), "Esc keeps the cursor");
         assert!(matches!(
             editor.handle_key(key(KeyCode::Esc)),
@@ -2159,7 +2169,10 @@ mod tests {
         assert_eq!(editor.textarea.lines(), ["text"]);
         assert!(!editor.dirty);
         assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
-        assert!(!editor.full, "Esc shows the editor again");
+        assert!(
+            matches!(editor.mode, Mode::Edit),
+            "Esc shows the editor again"
+        );
         assert!(matches!(
             editor.handle_key(key(KeyCode::Esc)),
             Action::Close
@@ -2316,7 +2329,10 @@ mod tests {
             ["hello"],
             "the prompt takes the paste"
         );
-        assert_eq!(editor.search.as_ref().unwrap().lines(), ["XYZ"]);
+        let Mode::Search(prompt) = &editor.mode else {
+            panic!("the prompt must be open");
+        };
+        assert_eq!(prompt.lines(), ["XYZ"]);
         assert!(!editor.dirty);
         editor.handle_key(key(KeyCode::Esc));
         editor.handle_key(key(KeyCode::F(11)));
@@ -2455,6 +2471,31 @@ mod tests {
         editor.handle_key(key(KeyCode::Char('Y')));
         assert_eq!(editor.textarea.lines(), ["Xtext"], "a letter does nothing");
         assert!(matches!(editor.handle_key(ctrl('q')), Action::Quit));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_search_prompt_and_the_full_preview_exclude_each_other() {
+        let path = temp_file("modes", "hello\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('f'));
+        editor.handle_key(key(KeyCode::F(11)));
+        assert!(
+            matches!(editor.mode, Mode::Search(_)),
+            "F11 does not leave the prompt"
+        );
+        editor.handle_key(key(KeyCode::Esc));
+        assert!(matches!(editor.mode, Mode::Edit));
+
+        editor.handle_key(key(KeyCode::F(11)));
+        assert!(matches!(editor.mode, Mode::Full));
+        editor.handle_key(ctrl('f'));
+        assert!(
+            matches!(editor.mode, Mode::Full),
+            "Ctrl-F does not open the prompt in the full preview"
+        );
+        editor.handle_key(key(KeyCode::F(11)));
+        assert!(matches!(editor.mode, Mode::Edit));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
