@@ -1,4 +1,5 @@
 mod browser;
+mod clipboard;
 mod compile;
 mod editor;
 mod fsutil;
@@ -61,6 +62,8 @@ struct App {
     cursors: HashMap<PathBuf, (usize, usize)>,
     /// The page of the preview when each file was closed. Only the last file of the project is saved to disk.
     pages: HashMap<PathBuf, usize>,
+    /// Text for the system clipboard that the list copied. See `take_clipboard`.
+    clipboard: Option<String>,
     /// The prompt for a new file name, or for the filter. While it is open, it takes every key.
     prompt: Option<Prompt>,
     /// The part of a path that a file must have to show in the list. The match ignores case. Empty: no filter.
@@ -87,6 +90,7 @@ Keys in the file list:
   k or Up        Select the previous file.
   Enter          Open the selected file.
   n              Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
+  y              Copy the absolute path of the selected file to the system clipboard.
   /              Filter the list. Type a part of a path. Enter keeps the filter, Esc removes it.
   r              Read the folder again, to show new files and to drop deleted files.
   g or Home      Select the first file.
@@ -105,6 +109,7 @@ Keys in the editor:
   Alt-Home       Show the first page.
   Alt-End        Show the last page.
   Esc            Save the file and go back to the file list.
+  Ctrl-C, Ctrl-X Copy or cut the selected text. It also goes to the system clipboard.
   Ctrl-Q         Save the file and quit.
 ";
 
@@ -259,6 +264,7 @@ impl App {
             prompt: None,
             cursors: HashMap::new(),
             pages: HashMap::new(),
+            clipboard: None,
             editor: None,
         }
     }
@@ -506,6 +512,24 @@ impl App {
         }
     }
 
+    /// The text that the user copied since the last call, for the system clipboard.
+    fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard
+            .take()
+            .or_else(|| self.editor.as_mut().and_then(Editor::take_clipboard))
+    }
+
+    /// Copies the absolute path of the selected file.
+    fn copy_selected_path(&mut self) {
+        let Some(file) = self.selected_file() else {
+            return;
+        };
+        let path =
+            std::path::absolute(self.root.join(file)).unwrap_or_else(|_| self.root.join(file));
+        self.status = format!("Copied {}", path.display());
+        self.clipboard = Some(path.display().to_string());
+    }
+
     /// Handles a paste. The editor inserts it. The list and the prompts ignore it.
     fn handle_paste(&mut self, text: &str) {
         if let Some(editor) = &mut self.editor {
@@ -528,6 +552,7 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') => return true,
+            KeyCode::Char('y') => self.copy_selected_path(),
             KeyCode::Char('j') | KeyCode::Down if !self.files.is_empty() => self.list.select_next(),
             KeyCode::Char('k') | KeyCode::Up if !self.files.is_empty() => {
                 self.list.select_previous()
@@ -639,7 +664,11 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
         redraw = true;
         match event::read()? {
             Event::Key(key) => {
-                if app.handle_key(key) {
+                let quit = app.handle_key(key);
+                if let Some(text) = app.take_clipboard() {
+                    write_to_terminal(&clipboard::osc52(&text));
+                }
+                if quit {
                     return Ok(());
                 }
             }
@@ -1879,6 +1908,17 @@ mod tests {
         assert_eq!(second.list.selected(), Some(0));
         assert!(second.status.is_empty(), "{}", second.status);
         fs::remove_dir_all(&first.root).unwrap();
+    }
+
+    #[test]
+    fn y_copies_the_absolute_path_of_the_selected_file() {
+        let mut app = app("copypath");
+        press(&mut app, KeyCode::Char('y'));
+        let expected = app.root.join("a.typ").display().to_string();
+        assert_eq!(app.take_clipboard(), Some(expected.clone()));
+        assert_eq!(app.status, format!("Copied {expected}"));
+        assert_eq!(app.take_clipboard(), None);
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[test]

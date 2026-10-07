@@ -164,6 +164,8 @@ pub struct Editor {
     conflict: bool,
     /// The time of the last edit that no save has covered yet.
     last_edit: Option<Instant>,
+    /// Text that the user copied or cut. The main loop sends it to the system clipboard. See `take_clipboard`.
+    clipboard: Option<String>,
     /// The time of the last look at the file on disk. See `watch_file`.
     last_watch: Option<Instant>,
     /// True after an Esc that could not save the text. A second Esc closes without a save.
@@ -203,6 +205,7 @@ impl Editor {
             dirty: false,
             last_edit: None,
             last_watch: None,
+            clipboard: None,
             close_armed: false,
             message: String::new(),
             pages_root: compile::out_dir(),
@@ -245,6 +248,11 @@ impl Editor {
                 false
             }
         }
+    }
+
+    /// The text that the user copied since the last call, for the system clipboard.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
     }
 
     /// The page that the preview shows or waits for, counted from 1.
@@ -328,9 +336,18 @@ impl Editor {
             } else {
                 " Esc again closes without a save."
             });
-        } else if self.textarea.input(key) {
-            self.dirty = true;
-            self.last_edit = Some(Instant::now());
+        } else {
+            // Ctrl-C and Ctrl-X also go to the system clipboard. Without a selection they copy nothing.
+            let copying = ctrl
+                && matches!(key.code, KeyCode::Char('c' | 'x'))
+                && self.textarea.selection_range().is_some();
+            if self.textarea.input(key) {
+                self.dirty = true;
+                self.last_edit = Some(Instant::now());
+            }
+            if copying {
+                self.clipboard = Some(self.textarea.yank_text());
+            }
         }
         Action::Stay
     }
@@ -1286,6 +1303,42 @@ mod tests {
         assert_eq!(editor.textarea.lines(), ["a\tb", "c", "d", "e"]);
         editor.handle_key(key(KeyCode::Esc));
         assert_eq!(fs::read(&path).unwrap(), b"a\tb\nc\nd\ne\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_c_and_ctrl_x_put_the_selection_on_the_system_clipboard() {
+        let path = temp_file("clip", "héllo wörld\n");
+        let mut editor = open(&path);
+        let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+        for _ in 0..5 {
+            editor.handle_key(shift(KeyCode::Right));
+        }
+        editor.handle_key(ctrl('c'));
+        assert_eq!(editor.take_clipboard().as_deref(), Some("héllo"));
+        assert_eq!(editor.take_clipboard(), None, "taken once");
+        assert_eq!(
+            editor.textarea.lines()[0],
+            "héllo wörld",
+            "copy keeps the text"
+        );
+
+        editor.handle_key(key(KeyCode::Home));
+        for _ in 0..5 {
+            editor.handle_key(shift(KeyCode::Right));
+        }
+        editor.handle_key(ctrl('x'));
+        assert_eq!(editor.take_clipboard().as_deref(), Some("héllo"));
+        assert_eq!(editor.textarea.lines()[0], " wörld");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_c_without_a_selection_sends_nothing() {
+        let path = temp_file("clipnone", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('c'));
+        assert_eq!(editor.take_clipboard(), None);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
