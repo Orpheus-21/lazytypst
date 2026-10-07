@@ -237,7 +237,7 @@ The page preview is an image. The terminal must have an image protocol. The prog
 |---|---|---|
 | Ghostty | kitty protocol | tested |
 | kitty | kitty protocol | not tested |
-| WezTerm | iTerm2 protocol, sixel, and the kitty protocol | not tested |
+| WezTerm | iTerm2 protocol and sixel | not tested |
 | foot | sixel | not tested |
 | Konsole | not known | not tested |
 | Alacritty | none, so half blocks | not tested |
@@ -251,11 +251,11 @@ The terminal has no image protocol, or the program could not read the answer of 
 
 ### tmux
 
-tmux sits between the program and the terminal, and it can block the image data. I have not tested images in tmux. Newer versions of tmux have the option `allow-passthrough`, for example `set -g allow-passthrough on` in `~/.tmux.conf`. This fix is not tried.
+tmux sits between the program and the terminal, and it can block the image data. Images in tmux are not tested. Newer versions of tmux have the option `allow-passthrough`, for example `set -g allow-passthrough on` in `~/.tmux.conf`. This fix is not tried.
 
 ### Alt keys do nothing
 
-The page keys use `Alt`. Some terminals use `Alt` for their own keys, or they do not send it to the program. In Ghostty on Linux, `Alt` works. For other terminals, look for a setting that sends `Alt` as `Escape` or as the Meta key. This fix is not tried.
+The page keys use `Alt`. Some terminals use `Alt` for their own keys, or they do not send it to the program. The `Alt` keys are tested with a test terminal. The settings of other terminals are not tested. Look for a setting that sends `Alt` as `Escape` or as the Meta key. This fix is not tried.
 
 ### typst not found
 
