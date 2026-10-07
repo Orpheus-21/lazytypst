@@ -19,6 +19,8 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `r` reads the folder again, to show new files and to drop deleted files.
 - `n` makes a new `.typ` file from a path such as `chapters/two`. The program makes missing folders and refuses a name that leaves the project.
 - The list selects the file that you closed last time in the folder. Opening it shows the page of the preview that was open. The program keeps this outside the project folder.
+- `s` switches the order of the list between the path and the newest change first.
+- Each line of the list shows the time since the last change, such as `2 h`. A narrow terminal hides the ages.
 - `e` in the list edits the selected file in `VISUAL` or `EDITOR`, and then opens it with a compile.
 - `E` in the list exports the PDF of the selected file.
 - `y` copies the absolute path of the selected file to the system clipboard.

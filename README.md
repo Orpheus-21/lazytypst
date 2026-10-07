@@ -96,7 +96,7 @@ The program sets the title of the terminal window to `lazytypst: <folder name>` 
 
 At start, the program makes the folder `lazytypst-<process id>` in the temporary directory, with access for your user only. If that path exists already, the program stops with an error. There is one exception: a real folder of yours with this name was left by an earlier run to which the system had given the same process id. The program deletes that folder and makes it new. A link, a file, or a folder of another user still stops the program with an error. The program deletes the folder when it quits or panics. A closed terminal window or a kill can leave the folder behind. The next start deletes each such folder that belongs to you and has no running process.
 
-Keys in the file list:
+Keys in the file list. Each line shows the time since the last change of the file at the right end, in a dim style: `now`, `5 min`, `2 h`, `3 d`, `4 mo`, or `2 y`. The program hides all ages if one would cut the longest path. The list reads the times again when you press `r`, when you press `s`, and when you close the editor.
 
 - `j` or `Down`: select the next file.
 - `k` or `Up`: select the previous file.
@@ -105,6 +105,7 @@ Keys in the file list:
 - `r`: read the folder again. New files appear and deleted files go. The selection stays on the same file if it is still there. A main file that is gone loses its mark.
 - `g` or `Home`: select the first file. `G` or `End`: select the last file.
 - `/`: filter the list. A prompt `Filter:` asks for a part of a path. The list shows only the files whose path contains that text, and the match ignores case. The list follows the text while you type. `Enter` keeps the filter, and the list title shows it, for example `lazytypst /chap`. `Esc` removes the filter, in the prompt and also in the list. If no file matches, the list says `No match`. `r` keeps the filter. A new file removes it, so that the file shows. The filter does not change the main file.
+- `s`: switch the order of the list between the path and the last change, newest first. The title of the list shows `(newest first)` in the second order. The selection stays on the same file. Files with the same time stay in the order by path.
 - `e`: edit the selected file in your own editor. The program runs the command in the variable `VISUAL`, or else `EDITOR`, in the same terminal, with the file as the last argument. A value such as `code --wait` splits on spaces into the program and its arguments. The program leaves its screen, waits, and comes back. Then it opens the file in its own editor and starts a compile, so the preview shows the new text. If neither variable is set, the status line says so. If the editor ends with an error, the status line shows how it ended.
 - `E`: export the PDF of the selected file, with the same job as `Ctrl-E`. The PDF goes next to the file, for example `report.typ` becomes `report.pdf`. This key uses the selected file and not the main file. The list stays usable while the export runs. The status line shows `Exported report.pdf`, or the first error line of Typst. A new export stops an export that still runs.
 - `y`: copy the absolute path of the selected file to the system clipboard. The status line shows `Copied` and the path.
