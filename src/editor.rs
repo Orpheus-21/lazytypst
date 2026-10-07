@@ -228,7 +228,7 @@ impl Editor {
         main: Option<PathBuf>,
         picker: Picker,
     ) -> io::Result<Self> {
-        let mut textarea = new_textarea(&fs::read_to_string(&path)?);
+        let mut textarea = new_textarea(&fsutil::read_text(&path)?);
         // The matches of a search stand out. Without colors, they are underlined.
         textarea.set_search_style(if colors_wanted() {
             Style::new().bg(Color::Blue)
@@ -734,7 +734,7 @@ impl Editor {
             self.message = "The file is gone. Ctrl-S writes it again.".into();
             return true;
         }
-        match fs::read_to_string(&self.path) {
+        match fsutil::read_text(&self.path) {
             Ok(text) => {
                 let place = self.cursor_position();
                 self.textarea = new_textarea(&text);

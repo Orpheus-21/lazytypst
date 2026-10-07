@@ -1,4 +1,4 @@
-//! Safe writes to files.
+//! Safe reads and writes of files.
 
 use std::{
     fs,
@@ -6,6 +6,28 @@ use std::{
     path::{Path, PathBuf},
     time::SystemTime,
 };
+
+/// The most bytes that the editor opens. A larger file is almost never a Typst file.
+pub const MAX_TEXT_BYTES: u64 = 16 << 20;
+
+/// Reads the text of the file at `path`. The path must lead to a regular file of at most `MAX_TEXT_BYTES`.
+/// A pipe or a device would never end, and the read would hold the program with the terminal in raw mode.
+pub fn read_text(path: &Path) -> io::Result<String> {
+    let meta = fs::metadata(path)?;
+    if !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "it is not a regular file",
+        ));
+    }
+    if meta.len() > MAX_TEXT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("the file is larger than {} MiB", MAX_TEXT_BYTES >> 20),
+        ));
+    }
+    fs::read_to_string(path)
+}
 
 /// Writes `bytes` to the file at `path` so that a crash leaves the old file or the new file, never a cut file.
 /// The text goes to a new hidden temp file next to the real file. Then a rename replaces the real file.
@@ -105,6 +127,29 @@ mod tests {
         write_file(&path, b"new").unwrap();
         assert_eq!(fs::read(&victim).unwrap(), b"keep");
         assert_eq!(fs::read(&path).unwrap(), b"new");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn read_text_refuses_a_pipe_a_device_and_a_big_file() {
+        let dir = std::env::temp_dir().join(format!("lazytypst-readtext-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("ok.typ"), "text").unwrap();
+        assert_eq!(read_text(&dir.join("ok.typ")).unwrap(), "text");
+        assert!(read_text(Path::new("/dev/zero")).is_err());
+        let fifo = dir.join("pipe.typ");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(read_text(&fifo).is_err());
+        let big = fs::File::create(dir.join("big.typ")).unwrap();
+        big.set_len(MAX_TEXT_BYTES + 1).unwrap();
+        let err = read_text(&dir.join("big.typ")).unwrap_err();
+        assert!(err.to_string().contains("larger than 16 MiB"), "{err}");
         fs::remove_dir_all(dir).unwrap();
     }
 }
