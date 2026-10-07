@@ -278,6 +278,11 @@ impl Editor {
         self.clipboard.take()
     }
 
+    /// Saves nothing and starts a compile of the file on disk now.
+    pub fn compile_now(&mut self) {
+        self.start_compile();
+    }
+
     /// The page that the preview shows or waits for, counted from 1.
     pub fn page(&self) -> usize {
         self.preview.wanted_page()

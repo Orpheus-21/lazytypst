@@ -67,6 +67,8 @@ struct App {
     clipboard: Option<String>,
     /// The running PDF export of the list, and the PDF that it writes. `None` when no export runs.
     export: Option<(Job, PathBuf)>,
+    /// The command that the main loop runs in the terminal, and the file that it edits. See `edit_selected`.
+    external: Option<(Vec<String>, PathBuf)>,
     /// The prompt for a new file name, or for the filter. While it is open, it takes every key.
     prompt: Option<Prompt>,
     /// The part of a path that a file must have to show in the list. The match ignores case. Empty: no filter.
@@ -94,6 +96,7 @@ Keys in the file list:
   Enter          Open the selected file.
   n              Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
   E              Export the PDF of the selected file next to it.
+  e              Edit the selected file in $VISUAL or $EDITOR, then open it here.
   y              Copy the absolute path of the selected file to the system clipboard.
   /              Filter the list. Type a part of a path. Enter keeps the filter, Esc removes it.
   r              Read the folder again, to show new files and to drop deleted files.
@@ -149,6 +152,39 @@ fn write_to_terminal(text: &str) {
 /// The title goes to the terminal inside an escape sequence, and a file name comes from users and from
 /// other programs. A control character in it could end the sequence early and start another one. So each
 /// control character becomes a question mark.
+/// The command to edit a file in the terminal: `$VISUAL`, or else `$EDITOR`. An empty value does not count.
+/// The value splits on spaces, so `code --wait` is a program and one argument.
+fn editor_command(visual: Option<OsString>, editor: Option<OsString>) -> Option<Vec<String>> {
+    [visual, editor].into_iter().flatten().find_map(|value| {
+        let parts: Vec<String> = value
+            .to_string_lossy()
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        (!parts.is_empty()).then_some(parts)
+    })
+}
+
+/// Leaves the terminal UI, runs `command` with `file` as the last argument, waits, and comes back.
+/// The terminal is normal while the command runs.
+fn run_external(command: &[String], file: &Path) -> std::io::Result<std::process::ExitStatus> {
+    write_to_terminal(DISABLE_PASTE);
+    ratatui::restore();
+    let result = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .arg(file)
+        .status();
+    let back = ratatui::crossterm::terminal::enable_raw_mode().and_then(|()| {
+        ratatui::crossterm::execute!(
+            std::io::stdout(),
+            ratatui::crossterm::terminal::EnterAlternateScreen
+        )
+    });
+    write_to_terminal(ENABLE_PASTE);
+    back?;
+    result
+}
+
 fn window_title(root: &Path, open: Option<&Path>) -> String {
     let name = match open {
         Some(file) => file
@@ -271,6 +307,7 @@ impl App {
             pages: HashMap::new(),
             clipboard: None,
             export: None,
+            external: None,
             editor: None,
         }
     }
@@ -562,6 +599,36 @@ impl App {
         true
     }
 
+    /// Asks the main loop to edit the selected file in `$VISUAL` or `$EDITOR`.
+    fn edit_selected(&mut self, visual: Option<OsString>, editor: Option<OsString>) {
+        let Some(file) = self.selected_file().cloned() else {
+            return;
+        };
+        match editor_command(visual, editor) {
+            Some(command) => self.external = Some((command, file)),
+            None => {
+                self.status = "Set VISUAL or EDITOR to edit a file with your own editor.".into()
+            }
+        }
+    }
+
+    /// Runs after the external editor ended. `result` is how the command ended. The program opens the
+    /// file in its own editor and compiles it, so the preview shows the new text.
+    fn after_external(&mut self, file: PathBuf, result: std::io::Result<std::process::ExitStatus>) {
+        match result {
+            Err(err) => self.status = format!("Cannot start the editor: {err}"),
+            Ok(status) if !status.success() => {
+                self.status = format!("The editor ended with {status}");
+            }
+            Ok(_) => {
+                self.open_file(file);
+                if let Some(editor) = &mut self.editor {
+                    editor.compile_now();
+                }
+            }
+        }
+    }
+
     /// Copies the absolute path of the selected file.
     fn copy_selected_path(&mut self) {
         let Some(file) = self.selected_file() else {
@@ -597,6 +664,9 @@ impl App {
             KeyCode::Char('q') => return true,
             KeyCode::Char('y') => self.copy_selected_path(),
             KeyCode::Char('E') => self.export_selected(),
+            KeyCode::Char('e') => {
+                self.edit_selected(std::env::var_os("VISUAL"), std::env::var_os("EDITOR"));
+            }
             KeyCode::Char('j') | KeyCode::Down if !self.files.is_empty() => self.list.select_next(),
             KeyCode::Char('k') | KeyCode::Up if !self.files.is_empty() => {
                 self.list.select_previous()
@@ -693,6 +763,13 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
                 ratatui::crossterm::terminal::SetTitle(&wanted)
             );
             title = wanted;
+        }
+        if let Some((command, file)) = app.external.take() {
+            let result = run_external(&command, &app.root.join(&file));
+            terminal.clear()?;
+            title.clear(); // the other program may have changed the title
+            app.after_external(file, result);
+            redraw = true;
         }
         if redraw {
             terminal.draw(|frame| draw(frame, app))?;
@@ -1995,6 +2072,61 @@ mod tests {
         assert!(app.status.starts_with("a.typ:1: "), "{}", app.status);
         assert!(app.status.contains("unknown variable"), "{}", app.status);
         assert!(!app.root.join("a.pdf").exists());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_editor_command_prefers_visual_splits_on_spaces_and_skips_empty_values() {
+        let os = |text: &str| Some(OsString::from(text));
+        assert_eq!(
+            editor_command(os("code --wait"), os("nvim")),
+            Some(vec!["code".to_string(), "--wait".to_string()])
+        );
+        assert_eq!(
+            editor_command(None, os("nvim")),
+            Some(vec!["nvim".to_string()])
+        );
+        assert_eq!(
+            editor_command(os("  "), os("nano")),
+            Some(vec!["nano".to_string()])
+        );
+        assert_eq!(editor_command(None, None), None);
+        assert_eq!(editor_command(os(""), os("")), None);
+    }
+
+    #[test]
+    fn e_without_visual_and_editor_shows_a_message_and_does_nothing_else() {
+        let mut app = app("noeditor");
+        app.edit_selected(None, None);
+        assert!(app.status.contains("VISUAL"), "{}", app.status);
+        assert!(app.external.is_none());
+        app.edit_selected(None, Some(OsString::from("nvim")));
+        assert_eq!(
+            app.external,
+            Some((vec!["nvim".to_string()], PathBuf::from("a.typ")))
+        );
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn after_the_editor_the_file_opens_with_a_compile_and_a_failure_shows_in_the_status() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut app = app("afterexternal");
+        let ok = std::process::ExitStatus::from_raw(0);
+        app.after_external(PathBuf::from("a.typ"), Ok(ok));
+        assert!(app.editor.is_some());
+        app.editor = None;
+        let failed = std::process::ExitStatus::from_raw(256); // exit code 1
+        app.after_external(PathBuf::from("a.typ"), Ok(failed));
+        assert!(app.editor.is_none());
+        assert!(app.status.contains("ended with"), "{}", app.status);
+        let err = std::io::Error::new(std::io::ErrorKind::NotFound, "no such program");
+        app.after_external(PathBuf::from("a.typ"), Err(err));
+        assert!(
+            app.status.starts_with("Cannot start the editor"),
+            "{}",
+            app.status
+        );
         fs::remove_dir_all(&app.root).unwrap();
     }
 
