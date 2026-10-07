@@ -247,6 +247,18 @@ impl Editor {
         }
     }
 
+    /// The page that the preview shows or waits for, counted from 1.
+    pub fn page(&self) -> usize {
+        self.preview.wanted_page()
+    }
+
+    /// Shows the page `page`. The compile starts at once. If the document is shorter, the preview
+    /// ends on the last page (see `poll_compile`).
+    pub fn show_page(&mut self, page: usize) {
+        self.preview.want(page);
+        self.start_compile();
+    }
+
     /// Inserts pasted text at the cursor in one step, so one undo takes it back. A tab character stays a
     /// tab character. Terminals send a line break as CR LF or as CR: both become one line break.
     pub fn paste(&mut self, text: &str) {

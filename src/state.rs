@@ -46,10 +46,67 @@ pub fn load_main(file: &Path, root: &Path) -> Option<PathBuf> {
 /// The lines of other projects stay. A path with a tab or a line break cannot be saved, because
 /// the format uses them as separators.
 pub fn save_main(file: &Path, root: &Path, main: Option<&Path>) -> io::Result<()> {
+    let value = main.map(|main| main.as_os_str().as_bytes().to_vec());
+    if value.as_deref().is_some_and(|value| value.contains(&b'\t')) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a path with a tab or a line break cannot be saved",
+        ));
+    }
+    replace_line(file, root, value)
+}
+
+/// The file that holds the last open file of each project, next to the main file list.
+/// Each line is `<project folder>`, a tab, `<file>`, a tab, and the page number.
+pub fn last_file(state_file: &Path) -> PathBuf {
+    state_file.with_file_name("last-files")
+}
+
+/// The saved last file of the project `root` and its page, if the file still exists inside the project.
+/// A missing file, a broken line, and a saved path that leaves the project all give `None`.
+pub fn load_last(file: &Path, root: &Path) -> Option<(PathBuf, usize)> {
+    let bytes = fs::read(file).ok()?;
+    let value = bytes
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| {
+            split_line(line).filter(|(saved_root, _)| *saved_root == root.as_os_str().as_bytes())
+        })
+        .map(|(_, value)| value)
+        .next_back()?;
+    let tab = value.iter().rposition(|byte| *byte == b'\t')?;
+    let path = PathBuf::from(OsStr::from_bytes(&value[..tab]));
+    let page = std::str::from_utf8(&value[tab + 1..])
+        .ok()?
+        .parse::<usize>()
+        .ok()
+        .filter(|page| *page >= 1)?;
+    let plain = path
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)));
+    (plain && root.join(&path).is_file()).then_some((path, page))
+}
+
+/// Saves the last open file of the project `root` and the page of its preview.
+pub fn save_last(file: &Path, root: &Path, path: &Path, page: usize) -> io::Result<()> {
+    let mut value = path.as_os_str().as_bytes().to_vec();
+    value.extend_from_slice(format!("\t{page}").as_bytes());
+    // The path must not hold a tab: the page would then be read from the wrong place.
+    if path.as_os_str().as_bytes().contains(&b'\t') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a path with a tab or a line break cannot be saved",
+        ));
+    }
+    replace_line(file, root, Some(value))
+}
+
+/// Writes the line of the project `root` with `value` after the tab, or removes the line if `value` is
+/// `None`. The lines of other projects stay.
+fn replace_line(file: &Path, root: &Path, value: Option<Vec<u8>>) -> io::Result<()> {
     let root_bytes = root.as_os_str().as_bytes();
-    let main_bytes = main.map(|main| main.as_os_str().as_bytes());
-    let bad = |bytes: &[u8]| bytes.iter().any(|byte| matches!(byte, b'\t' | b'\n'));
-    if bad(root_bytes) || main_bytes.is_some_and(bad) {
+    let bad = |bytes: &[u8]| bytes.contains(&b'\n') || bytes.contains(&b'\t');
+    // The value of a last file has its own tab, so only a line break is a fault there.
+    if bad(root_bytes) || value.as_deref().is_some_and(|value| value.contains(&b'\n')) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "a path with a tab or a line break cannot be saved",
@@ -70,10 +127,10 @@ pub fn save_main(file: &Path, root: &Path, main: Option<&Path>) -> io::Result<()
             new.push(b'\n');
         }
     }
-    if let Some(main) = main_bytes {
+    if let Some(value) = value {
         new.extend_from_slice(root_bytes);
         new.push(b'\t');
-        new.extend_from_slice(main);
+        new.extend_from_slice(&value);
         new.push(b'\n');
     }
     if new.is_empty() && old.is_empty() {
@@ -239,6 +296,43 @@ mod tests {
             assert_eq!(load_main(&file, &root), None, "{bad}");
         }
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_last_file_and_its_page_come_back_for_the_same_project_only() {
+        let dir = temp_dir("last");
+        let (one, two) = (project(&dir, "one"), project(&dir, "two"));
+        let file = last_file(&dir.join("state").join("main-files"));
+        assert_eq!(file, dir.join("state").join("last-files"));
+
+        save_last(&file, &one, Path::new("chapters/one.typ"), 3).unwrap();
+        save_last(&file, &two, Path::new("main.typ"), 1).unwrap();
+        assert_eq!(
+            load_last(&file, &one),
+            Some((PathBuf::from("chapters/one.typ"), 3))
+        );
+        assert_eq!(load_last(&file, &two), Some((PathBuf::from("main.typ"), 1)));
+        save_last(&file, &one, Path::new("main.typ"), 2).unwrap();
+        assert_eq!(load_last(&file, &one), Some((PathBuf::from("main.typ"), 2)));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_or_broken_last_file_gives_none_and_no_error() {
+        let dir = temp_dir("lastgone");
+        let root = project(&dir, "p");
+        let file = dir.join("last-files");
+        assert_eq!(load_last(&file, &root), None, "no state file");
+        save_last(&file, &root, Path::new("main.typ"), 2).unwrap();
+        fs::remove_file(root.join("main.typ")).unwrap();
+        assert_eq!(load_last(&file, &root), None, "the file is gone");
+        for bad in ["main.typ\t0", "main.typ\tx", "main.typ", "../x.typ\t1"] {
+            let line = format!("{}\t{bad}\n", root.display());
+            fs::write(&file, line).unwrap();
+            fs::write(root.join("main.typ"), "").unwrap();
+            assert_eq!(load_last(&file, &root), None, "{bad}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

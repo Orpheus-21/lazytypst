@@ -59,6 +59,8 @@ struct App {
     status: String,
     /// Where the cursor was in each file when the user closed it. The positions stay in memory for this run.
     cursors: HashMap<PathBuf, (usize, usize)>,
+    /// The page of the preview when each file was closed. Only the last file of the project is saved to disk.
+    pages: HashMap<PathBuf, usize>,
     /// The prompt for a new file name, or for the filter. While it is open, it takes every key.
     prompt: Option<Prompt>,
     /// The part of a path that a file must have to show in the list. The match ignores case. Empty: no filter.
@@ -256,6 +258,7 @@ impl App {
             status: String::new(),
             prompt: None,
             cursors: HashMap::new(),
+            pages: HashMap::new(),
             editor: None,
         }
     }
@@ -267,6 +270,16 @@ impl App {
             .as_deref()
             .and_then(|file| state::load_main(file, &self.root))
             .filter(|main| self.all_files.contains(main));
+        // The list selects the last file of the project and does not open it. The page waits for the open.
+        if let Some((path, page)) = state_file
+            .as_deref()
+            .and_then(|file| state::load_last(&state::last_file(file), &self.root))
+        {
+            if let Some(index) = self.files.iter().position(|file| *file == path) {
+                self.list.select(Some(index));
+            }
+            self.pages.insert(self.root.join(path), page);
+        }
         self.state_file = state_file;
     }
 
@@ -344,6 +357,9 @@ impl App {
             Ok(mut editor) => {
                 if let Some(place) = self.cursors.get(editor.path()) {
                     editor.set_cursor_position(*place);
+                }
+                if let Some(&page) = self.pages.get(editor.path()).filter(|page| **page > 1) {
+                    editor.show_page(page);
                 }
                 self.editor = Some(editor);
                 String::new()
@@ -468,6 +484,28 @@ impl App {
         self.save_main_choice();
     }
 
+    /// Closes the editor. The program remembers the cursor and the page of the file. It also saves the
+    /// file and the page as the last file of the project. A failure only shows a message.
+    fn close_editor(&mut self) {
+        let Some(editor) = self.editor.take() else {
+            return;
+        };
+        let path = editor.path().to_path_buf();
+        self.cursors.insert(path.clone(), editor.cursor_position());
+        self.pages.insert(path.clone(), editor.page());
+        let (Some(state), Ok(relative)) = (&self.state_file, path.strip_prefix(&self.root)) else {
+            return;
+        };
+        if let Err(err) = state::save_last(
+            &state::last_file(state),
+            &self.root,
+            relative,
+            editor.page(),
+        ) {
+            self.status = format!("Cannot save the last file: {err}");
+        }
+    }
+
     /// Handles a paste. The editor inserts it. The list and the prompts ignore it.
     fn handle_paste(&mut self, text: &str) {
         if let Some(editor) = &mut self.editor {
@@ -480,9 +518,7 @@ impl App {
         if let Some(editor) = &mut self.editor {
             let action = editor.handle_key(key);
             if !matches!(action, Action::Stay) {
-                self.cursors
-                    .insert(editor.path().to_path_buf(), editor.cursor_position());
-                self.editor = None;
+                self.close_editor();
             }
             return matches!(action, Action::Quit);
         }
@@ -1799,6 +1835,50 @@ mod tests {
         app.start(None);
         assert!(app.editor.is_none());
         fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_next_start_selects_the_last_file_and_opens_it_on_its_page() {
+        let mut first = app("lastfile");
+        let state = first.root.join("state").join("main-files");
+        first.load_state(Some(state.clone()));
+        first.list.select(Some(1));
+        press(&mut first, KeyCode::Enter);
+        first.editor.as_mut().unwrap().show_page(3);
+        press(&mut first, KeyCode::Esc);
+        assert!(first.status.is_empty(), "{}", first.status);
+
+        let files = browser::find_typ_files(&first.root, browser::MAX_DEPTH).unwrap();
+        let mut second = App::new(first.root.clone(), files, Picker::halfblocks());
+        assert_eq!(
+            second.list.selected(),
+            Some(0),
+            "the first file before the load"
+        );
+        second.load_state(Some(state));
+        assert_eq!(second.list.selected(), Some(1), "the last file is selected");
+        assert!(second.editor.is_none(), "the program does not open it");
+        press(&mut second, KeyCode::Enter);
+        assert_eq!(second.editor.as_ref().unwrap().page(), 3);
+        fs::remove_dir_all(&first.root).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_last_file_selects_the_first_file_without_an_error() {
+        let mut first = app("lastgone");
+        let state = first.root.join("state").join("main-files");
+        first.load_state(Some(state.clone()));
+        first.list.select(Some(1));
+        press(&mut first, KeyCode::Enter);
+        press(&mut first, KeyCode::Esc);
+        fs::remove_file(first.root.join("sub").join("b.typ")).unwrap();
+
+        let files = browser::find_typ_files(&first.root, browser::MAX_DEPTH).unwrap();
+        let mut second = App::new(first.root.clone(), files, Picker::halfblocks());
+        second.load_state(Some(state));
+        assert_eq!(second.list.selected(), Some(0));
+        assert!(second.status.is_empty(), "{}", second.status);
+        fs::remove_dir_all(&first.root).unwrap();
     }
 
     #[test]
