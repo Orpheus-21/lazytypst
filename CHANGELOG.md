@@ -26,6 +26,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `y` copies the absolute path of the selected file to the system clipboard.
 - `m` marks a main file. The live compile, `Ctrl-B`, and `Ctrl-E` then use the main file, whatever file you edit. The program remembers the main file of each project, and it keeps that choice outside the project folder.
 - A folder or a `.typ` file as the argument. A file opens in the editor at once, and its folder is the project root. Files in subfolders can import files from parent folders inside the root.
+- `Left`, `Right`, `Backspace`, and `Delete` work on one visible character, such as a Devanagari conjunct or an emoji with joiners.
 - The status line shows an approximate word count. It skips comments, math, and lines of code such as `#set` and `#import`.
 - Syntax color in the editor for headings, commands after `#`, strings in code, math, raw text, and comments. The colors come from the terminal palette.
 - A text area with line numbers, long lines that wrap, and Emacs style editing keys. `Tab` inserts 2 spaces. The status line shows the cursor as `line:column`. If you close a file and open it again, the cursor comes back.

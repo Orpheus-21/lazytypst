@@ -149,6 +149,8 @@ The editor colors the Typst source: headings (lines that start with `=` and a sp
 | `Ctrl-V`, `Alt-V` | Scroll one page down or up. |
 | `Alt-<`, `Alt->` | Move to the first or the last line. The column stays. |
 
+`Left`, `Right`, `Backspace`, and `Delete` work on one visible character, not on one code point. A Devanagari conjunct, a letter with a combining mark, and an emoji with joiners count as one character. The column in the status line still counts code points, the same as the error lines of Typst.
+
 `Alt` with a letter arrives as `Esc` and the letter. A terminal that sends both at once gives the program the `Alt` key. `F1` shows the same table in the help window.
 
 Save rules:
