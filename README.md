@@ -48,7 +48,7 @@ An idea that adds keys or settings without making this work faster is closed wit
 
 ## Install
 
-There are three ways to install lazytypst: use Cargo, download a release, or build the program from a clone. Each way needs the `typst` command in `PATH` (see Requirements).
+There are four ways to install lazytypst: use Cargo, use the PKGBUILD on Arch Linux, download a release, or build the program from a clone. Each way needs the `typst` command in `PATH` (see Requirements).
 
 ### Install with Cargo
 
@@ -59,6 +59,10 @@ cargo install --locked --git https://github.com/Orpheus-21/lazytypst
 ```
 
 Cargo builds the program and puts it in `~/.cargo/bin`. That folder is in `PATH` for most Rust users. Then `lazytypst --version` works in a new terminal. To update, run the same command again. To remove the program, run `cargo uninstall lazytypst`.
+
+### Install on Arch Linux
+
+The folder `packaging/aur/` has a `PKGBUILD` for the package `lazytypst-git`. It builds the latest commit of `main` and needs `typst`, `cargo`, and `git`. To build and install it, run `makepkg -si` in that folder. The package is not on the AUR yet. After it is there, `yay -S lazytypst-git` will install it.
 
 ### Download a release
 
