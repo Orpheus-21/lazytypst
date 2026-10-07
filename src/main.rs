@@ -117,6 +117,7 @@ Keys in the editor:
   Ctrl-S         Save the file.
   Ctrl-B         Save and compile the file.
   Ctrl-E         Save the file and export a PDF next to it.
+  F5             Turn the live compile off or on. Autosave stays on.
   Ctrl-G         Go to the first error of the last compile.
   Ctrl-O         Open the last exported PDF in the system viewer (xdg-open).
   Alt-Down       Show the next page.

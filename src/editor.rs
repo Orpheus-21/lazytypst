@@ -179,6 +179,8 @@ pub struct Editor {
     last_edit: Option<Instant>,
     /// Text that the user copied or cut. The main loop sends it to the system clipboard. See `take_clipboard`.
     clipboard: Option<String>,
+    /// True when the user turned the live compile off with F5. The autosave still runs.
+    paused: bool,
     /// False when the user turned colors off with `NO_COLOR`. The preview image keeps its colors.
     colors: bool,
     /// The approximate word count of the text. See `words::count`.
@@ -225,6 +227,7 @@ impl Editor {
             clipboard: None,
             words: 0,
             colors: colors_wanted(),
+            paused: false,
             close_armed: false,
             message: String::new(),
             pages_root: compile::out_dir(),
@@ -343,6 +346,13 @@ impl Editor {
                 self.message = "No changes to save".into();
             }
             self.save(true);
+        } else if key.code == KeyCode::F(5) {
+            self.paused = !self.paused;
+            self.message = if self.paused {
+                "Live compile off. Ctrl-B compiles. F5 turns it on.".into()
+            } else {
+                "Live compile on".into()
+            };
         } else if ctrl && key.code == KeyCode::Char('b') {
             self.save_and_compile();
         } else if ctrl && key.code == KeyCode::Char('g') {
@@ -491,7 +501,11 @@ impl Editor {
         if debounce_done(self.last_edit, now) {
             // `save` clears `last_edit`. If the save fails, nothing retries until the next edit.
             self.last_edit = None;
-            self.save_and_compile();
+            if self.paused {
+                self.save(false);
+            } else {
+                self.save_and_compile();
+            }
             changed = true;
         }
         changed |= self.watch_file(now);
@@ -529,7 +543,9 @@ impl Editor {
                 self.count_words();
                 self.set_cursor_position(place);
                 self.message = "Loaded the change from disk".into();
-                self.start_compile();
+                if !self.paused {
+                    self.start_compile();
+                }
             }
             Err(err) => self.message = format!("Cannot read the file: {err}"),
         }
@@ -650,6 +666,9 @@ impl Editor {
             if let Some(elapsed) = report.elapsed.filter(|_| !report.ok) {
                 title = format!("{title} ({} ms)", elapsed.as_millis());
             }
+        }
+        if self.paused {
+            title = format!("{title} (paused)");
         }
         if self.job.is_some() {
             // The last report stays on screen until the new report replaces it.
@@ -1440,6 +1459,35 @@ mod tests {
         editor.open_pdf("true");
         assert!(editor.message.starts_with("Opening "), "{}", editor.message);
         assert!(editor.message.ends_with("doc.pdf"), "{}", editor.message);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn with_the_live_compile_off_typing_saves_but_starts_no_compile() {
+        let path = temp_file("paused", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::F(5)));
+        assert!(editor.paused);
+        assert!(screen_text(&mut editor).contains("Compile (paused)"));
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.tick(Instant::now() + Duration::from_secs(1));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "Xtext\n",
+            "the autosave runs"
+        );
+        assert!(editor.job.is_none(), "no compile starts");
+
+        editor.handle_key(ctrl('b'));
+        assert!(editor.job.is_some(), "Ctrl-B still compiles");
+        editor.stop_compile();
+
+        editor.handle_key(key(KeyCode::F(5)));
+        assert!(!editor.paused);
+        editor.handle_key(key(KeyCode::Char('Y')));
+        editor.tick(Instant::now() + Duration::from_secs(1));
+        assert!(editor.job.is_some(), "the next pause compiles");
+        editor.stop_compile();
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
