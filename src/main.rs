@@ -418,8 +418,15 @@ impl App {
                 if let Some(place) = self.cursors.get(editor.path()) {
                     editor.set_cursor_position(*place);
                 }
-                if let Some(&page) = self.pages.get(editor.path()).filter(|page| **page > 1) {
-                    editor.show_page(page);
+                // The preview shows at once: a compile starts, on the saved page if there is one.
+                match self
+                    .pages
+                    .get(editor.path())
+                    .copied()
+                    .filter(|page| *page > 1)
+                {
+                    Some(page) => editor.show_page(page),
+                    None => editor.compile_now(),
                 }
                 self.editor = Some(editor);
                 String::new()
@@ -2542,6 +2549,22 @@ mod tests {
         ] {
             assert!(page.contains(section), "{section}");
         }
+    }
+
+    #[test]
+    fn opening_a_file_starts_a_compile_so_the_preview_shows_at_once() {
+        let mut app = app("opencompile");
+        press(&mut app, KeyCode::Enter);
+        let start = Instant::now();
+        while !screen(&mut app).contains("OK in") {
+            app.tick(Instant::now());
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "no compile after the open"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[test]

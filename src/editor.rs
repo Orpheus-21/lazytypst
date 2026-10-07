@@ -856,7 +856,11 @@ impl Editor {
             ),
         };
         // The title: the counts of errors and warnings, and for a failed compile also its time.
-        let mut title = "Compile".to_string();
+        let mut title = if self.paused {
+            "Compile (paused)".to_string()
+        } else {
+            "Compile".to_string()
+        };
         if let Some(report) = &self.report {
             if let Some(counts) = counts_text(report.error_count(), report.warning_count()) {
                 title = format!("{title}: {counts}");
@@ -864,9 +868,6 @@ impl Editor {
             if let Some(elapsed) = report.elapsed.filter(|_| !report.ok) {
                 title = format!("{title} ({} ms)", elapsed.as_millis());
             }
-        }
-        if self.paused {
-            title = format!("{title} (paused)");
         }
         if self.job.is_some() {
             // The last report stays on screen until the new report replaces it.
