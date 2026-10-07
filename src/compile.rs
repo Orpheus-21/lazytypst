@@ -245,9 +245,21 @@ pub fn version_of(program: &str) -> io::Result<String> {
         .ok_or_else(|| io::Error::other(format!("{program} --version printed nothing")))
 }
 
-/// The version line of the `typst` command. See `version_of`.
+/// The program that runs Typst: the value of `LAZYTYPST_TYPST` if it is set and not empty, or else `typst`.
+pub fn typst_program() -> String {
+    program_from(std::env::var_os("LAZYTYPST_TYPST"))
+}
+
+fn program_from(value: Option<std::ffi::OsString>) -> String {
+    value.filter(|value| !value.is_empty()).map_or_else(
+        || "typst".into(),
+        |value| value.to_string_lossy().into_owned(),
+    )
+}
+
+/// The version line of the Typst program. See `version_of` and `typst_program`.
 pub fn typst_version() -> io::Result<String> {
-    version_of("typst")
+    version_of(&typst_program())
 }
 
 /// A running command. Dropping the job kills the process, so a new job can replace an old one.
@@ -275,10 +287,15 @@ impl Job {
     /// Typst runs in `root`, so an error line names the file relative to `root`.
     /// `file` and `dir` must be absolute, or relative to `root`.
     pub fn start(file: &Path, root: &Path, dir: PathBuf, page: usize) -> Job {
+        Job::start_with(&typst_program(), file, root, dir, page)
+    }
+
+    /// `start` with the program that runs Typst.
+    fn start_with(program: &str, file: &Path, root: &Path, dir: PathBuf, page: usize) -> Job {
         if let Err(err) = fs::create_dir_all(&dir) {
             return Job::failed(format!("Cannot make {}: {err}", dir.display()), dir);
         }
-        let mut command = Command::new("typst");
+        let mut command = Command::new(program);
         command
             .current_dir(root)
             .args([
@@ -300,7 +317,12 @@ impl Job {
     /// Runs `typst compile` on `file`. The PDF goes to `pdf`. An old file at `pdf` is replaced.
     /// The paths follow the same rules as in `start`.
     pub fn start_pdf(file: &Path, root: &Path, pdf: PathBuf) -> Job {
-        let mut command = Command::new("typst");
+        Job::start_pdf_with(&typst_program(), file, root, pdf)
+    }
+
+    /// `start_pdf` with the program that runs Typst.
+    fn start_pdf_with(program: &str, file: &Path, root: &Path, pdf: PathBuf) -> Job {
+        let mut command = Command::new(program);
         command
             .current_dir(root)
             .args([
@@ -779,6 +801,76 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let uid = uid_of(&dir);
         (dir, uid)
+    }
+
+    #[test]
+    fn a_fake_program_from_the_variable_runs_the_compile_and_the_export() {
+        let (program, dir) = fake_program("lazytypst-typst-var", "echo \"fake: $*\" >&2; exit 3");
+        let root = dir.clone();
+        let file = root.join("a.typ");
+        fs::write(&file, "").unwrap();
+        let mut report = None;
+        for _ in 0..50 {
+            let mut job = Job::start_with(
+                program.to_str().unwrap(),
+                &file,
+                &root,
+                root.join("pages"),
+                1,
+            );
+            let got = wait(&mut job);
+            if got.lines.iter().any(|line| line.starts_with("Cannot run")) {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            report = Some(got);
+            break;
+        }
+        let report = report.expect("the fake program must start");
+        assert!(!report.ok);
+        assert!(
+            report.lines[0].starts_with("fake: compile --format png"),
+            "{:?}",
+            report.lines
+        );
+        let mut export =
+            Job::start_pdf_with(program.to_str().unwrap(), &file, &root, root.join("a.pdf"));
+        let report = wait(&mut export);
+        assert!(
+            report.lines[0].starts_with("fake: compile --format pdf"),
+            "{:?}",
+            report.lines
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_program_that_does_not_exist_shows_cannot_run_and_the_path() {
+        let dir = std::env::temp_dir().join(format!("lazytypst-novar-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut job = Job::start_with(
+            "/no/such/typst-0.14",
+            &dir.join("a.typ"),
+            &dir,
+            dir.join("pages"),
+            1,
+        );
+        let report = wait(&mut job);
+        assert!(!report.ok);
+        assert!(
+            report.lines[0].starts_with("Cannot run /no/such/typst-0.14"),
+            "{:?}",
+            report.lines
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_variable_names_the_program_only_when_it_is_not_empty() {
+        let os = |text: &str| Some(std::ffi::OsString::from(text));
+        assert_eq!(program_from(None), "typst");
+        assert_eq!(program_from(os("")), "typst");
+        assert_eq!(program_from(os("/opt/typst-0.14")), "/opt/typst-0.14");
     }
 
     /// A program for a test: a shell script in a new folder. Returns the path of the script and its folder.
