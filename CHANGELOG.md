@@ -19,6 +19,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `r` reads the folder again, to show new files and to drop deleted files.
 - `n` makes a new `.typ` file from a path such as `chapters/two`. The program makes missing folders and refuses a name that leaves the project.
 - The list selects the file that you closed last time in the folder. Opening it shows the page of the preview that was open. The program keeps this outside the project folder.
+- `y` copies the absolute path of the selected file to the system clipboard.
 - `m` marks a main file. The live compile, `Ctrl-B`, and `Ctrl-E` then use the main file, whatever file you edit. The program remembers the main file of each project, and it keeps that choice outside the project folder.
 - A folder or a `.typ` file as the argument. A file opens in the editor at once, and its folder is the project root. Files in subfolders can import files from parent folders inside the root.
 - A text area with line numbers, long lines that wrap, and Emacs style editing keys. `Tab` inserts 2 spaces. The status line shows the cursor as `line:column`. If you close a file and open it again, the cursor comes back.
@@ -31,6 +32,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `Alt-Down`, `Alt-Up`, `Alt-Home`, and `Alt-End` change the page. The title of the preview shows the page and the page count. If the document gets shorter than the page on screen, the preview shows the last page.
 - A compile pane under the editor. It shows the errors with their line numbers, the time of the compile, and the number of errors and warnings. Errors are red, warnings are yellow, and hints are dim. If the report does not fit, the last row says how many rows are hidden.
 - `Ctrl-Q` saves the file and quits the program from the editor.
+- `Ctrl-C` and `Ctrl-X` also put the selected text on the system clipboard, with the OSC 52 escape sequence.
 - `Ctrl-G` moves the cursor to the first error of the last compile.
 - `Ctrl-B` compiles at once, and `Ctrl-E` exports a PDF next to the file that was compiled.
 - The title of the terminal window names the folder or the open file.
