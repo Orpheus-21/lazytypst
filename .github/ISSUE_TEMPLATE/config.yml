@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Scope of the project
+    url: https://github.com/Orpheus-21/lazytypst#scope
+    about: Read what lazytypst does and what it does not do, before you ask for a feature.

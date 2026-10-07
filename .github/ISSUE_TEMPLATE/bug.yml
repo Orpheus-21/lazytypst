@@ -1,0 +1,55 @@
+name: Bug report
+description: Something does not work as the README says.
+labels: [bug]
+body:
+  - type: textarea
+    id: versions
+    attributes:
+      label: Output of lazytypst --version
+      description: Run `lazytypst --version` and paste both lines. It shows the version of lazytypst and the version of typst.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of lazytypst --doctor
+      description: Run `lazytypst --doctor` in the same terminal and paste the lines. This is useful when the preview looks wrong.
+      render: text
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and its version
+      placeholder: Ghostty 1.3.1
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Arch Linux
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: One action in each step.
+      placeholder: |
+        1. Run `lazytypst ~/book`.
+        2. Press Enter on `main.typ`.
+        3. Type a letter.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
