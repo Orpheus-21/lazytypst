@@ -2,6 +2,12 @@
 
 lazytypst is a terminal program for Typst documents.
 
+## Quick start
+
+1. Install lazytypst: `cargo install --locked --git https://github.com/Orpheus-21/lazytypst` (see [Install](#install)).
+2. Start it in a folder with Typst files: `lazytypst ~/my-typst-folder`
+3. Select a file with `j` and `k`, press `Enter`, and type. The preview follows the text. Press `F1` to see all keys.
+
 ## What it does
 
 lazytypst lists the `.typ` files in a folder. The user opens one file, edits the text, and saves it. The user can also compile the file with the `typst` command. The program shows the compile errors with their line numbers. After a good compile, the program shows the pages of the document as images next to the editor, one page at a time. A failed compile keeps the last good page on screen. A new compile keeps the page number.
@@ -30,7 +36,17 @@ The folder that you give to the program is the Typst project root. A file in a s
 
 ## Install
 
-There are two ways to install lazytypst: download a release, or build the program from the source.
+There are three ways to install lazytypst: use Cargo, download a release, or build the program from a clone. Each way needs the `typst` command in `PATH` (see Requirements).
+
+### Install with Cargo
+
+This way needs Rust 1.90 or later. It needs no clone of the repository.
+
+```
+cargo install --locked --git https://github.com/Orpheus-21/lazytypst
+```
+
+Cargo builds the program and puts it in `~/.cargo/bin`. That folder is in `PATH` for most Rust users. Then `lazytypst --version` works in a new terminal. To update, run the same command again. To remove the program, run `cargo uninstall lazytypst`.
 
 ### Download a release
 
@@ -61,7 +77,9 @@ This way needs no Rust. The first release is not published yet.
 
 The program in the archive is a static binary. It runs on any x86_64 Linux system, and it does not depend on the C library of the system. It still needs the `typst` command in `PATH`.
 
-### Build from the source
+### Build from a clone
+
+This way is for people who want to change the program.
 
 1. Clone the repository.
 
