@@ -17,7 +17,7 @@ use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 
 use crate::{
     compile::{self, Job, Report, Severity},
-    fsutil,
+    fsutil, highlight,
     preview::{Preview, page_in},
     words,
 };
@@ -849,6 +849,70 @@ impl Editor {
         .block(block)
     }
 
+    /// Colors the cells of the text area that the text area has drawn. `ratatui-textarea` has no style for a
+    /// single word, so this reads the rows from the buffer and sets only the foreground of the cells of a
+    /// part (see `highlight`). The background stays, so the cursor, the selection, and the search matches
+    /// keep their look.
+    ///
+    /// A row that starts a line shows the number of the line in the gutter. A row that continues a wrapped
+    /// line has a blank gutter, and it continues where the row above stopped. The rows above the first
+    /// numbered row are left plain, because the line of such a row is not known.
+    fn paint(&self, buffer: &mut ratatui::buffer::Buffer, area: Rect) {
+        let lines = self.textarea.lines();
+        let gutter = u16::try_from(lines.len().to_string().len() + 2).unwrap_or(u16::MAX);
+        let parts = highlight::tokenize(lines);
+        let mut current: Option<(usize, Vec<char>, usize)> = None; // the line, its characters, the next offset
+        for y in area.top()..area.bottom() {
+            let number: String = (area.left()..(area.left() + gutter).min(area.right()))
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect();
+            let number = number.trim();
+            if let Ok(n) = number.parse::<usize>() {
+                let Some(text) = lines.get(n.wrapping_sub(1)) else {
+                    current = None;
+                    continue;
+                };
+                current = Some((n - 1, text.chars().collect(), 0));
+            } else if !number.is_empty() {
+                current = None;
+            }
+            let Some((line, chars, offset)) = &mut current else {
+                continue;
+            };
+            let mut x = area.left() + gutter;
+            // A wrap at a space drops the space from the row. Skip it in the text.
+            let first = buffer[(x.min(area.right().saturating_sub(1)), y)]
+                .symbol()
+                .to_string();
+            while *offset < chars.len()
+                && chars[*offset].is_whitespace()
+                && !first.starts_with(chars[*offset])
+            {
+                *offset += 1;
+            }
+            while x < area.right() && *offset < chars.len() {
+                let ch = chars[*offset];
+                let width = if ch == '\t' {
+                    usize::from(self.textarea.tab_length().max(1))
+                } else {
+                    Span::raw(ch.to_string()).width().max(1)
+                };
+                let width = u16::try_from(width).unwrap_or(1);
+                if let Some(part) = parts[*line]
+                    .iter()
+                    .find(|part| part.start <= *offset && *offset < part.end)
+                {
+                    let style = highlight::style(part.kind, self.colors);
+                    for cell_x in x..(x + width).min(area.right()) {
+                        buffer[(cell_x, y)].set_style(style);
+                    }
+                }
+                x += width;
+                *offset += 1;
+            }
+        }
+    }
+
     pub fn draw(&mut self, frame: &mut Frame) {
         let [main, status] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
@@ -883,6 +947,7 @@ impl Editor {
         let inner = block.inner(body);
         frame.render_widget(block, body);
         frame.render_widget(&self.textarea, inner);
+        self.paint(frame.buffer_mut(), inner);
         frame.render_widget(self.compile_pane(pane), pane);
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
@@ -1984,6 +2049,103 @@ mod tests {
         editor.handle_key(key(KeyCode::Char('0')));
         assert_eq!(editor.preview.zoom_percent(), 100);
         wait_for_report(&mut editor);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// The foreground color of the first cell on screen whose symbol starts a row text `word`, in the
+    /// text area half of a 100 by 20 screen. Returns the cell.
+    fn cell_of(editor: &mut Editor, word: &str) -> ratatui::buffer::Cell {
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        for row in 0..20 {
+            let text: String = (0..50)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect();
+            if let Some(at) = text.find(word) {
+                let column = text[..at].chars().count();
+                return buffer[(u16::try_from(column).unwrap(), row)].clone();
+            }
+        }
+        panic!("{word:?} is not on the screen");
+    }
+
+    #[test]
+    fn the_editor_colors_headings_commands_strings_math_and_comments() {
+        let text = "= Heading\n#set text(font: \"Libertinus\")\nSome $x + y$ and // a note\n";
+        let path = temp_file("syntax", text);
+        let mut editor = open(&path);
+        editor.colors = true;
+        editor.textarea.move_cursor(CursorMove::Jump(2, 0));
+        assert_eq!(cell_of(&mut editor, "Heading").fg, Color::Blue);
+        assert_eq!(cell_of(&mut editor, "#set").fg, Color::Magenta);
+        assert_eq!(cell_of(&mut editor, "\"Libertinus").fg, Color::Green);
+        assert_eq!(
+            cell_of(&mut editor, "text(").fg,
+            Color::Reset,
+            "plain code stays plain"
+        );
+        assert_eq!(cell_of(&mut editor, "$x").fg, Color::Yellow);
+        assert_eq!(cell_of(&mut editor, "// a note").fg, Color::DarkGray);
+        assert_eq!(cell_of(&mut editor, "Some").fg, Color::Reset);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_colors_follow_the_text_after_a_wrap_and_a_tab() {
+        // The comment is after the wrap of a long line.
+        let text = format!("{}// the comment\n\t#set x\n", "word ".repeat(11));
+        let path = temp_file("syntaxwrap", &text);
+        let mut editor = open(&path);
+        editor.colors = true;
+        editor.textarea.move_cursor(CursorMove::Jump(1, 5));
+        assert_eq!(cell_of(&mut editor, "// the comment").fg, Color::DarkGray);
+        assert_eq!(
+            cell_of(&mut editor, "#set").fg,
+            Color::Magenta,
+            "after a tab"
+        );
+        assert_eq!(cell_of(&mut editor, "word word").fg, Color::Reset);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn without_colors_the_parts_use_bold_dim_and_italic_only() {
+        let path = temp_file("syntaxplain", "= Heading\n// note\n$x$ text\n");
+        let mut editor = open(&path);
+        editor.colors = false;
+        editor.textarea.move_cursor(CursorMove::Jump(2, 6));
+        let heading = cell_of(&mut editor, "Heading");
+        assert_eq!(heading.fg, Color::Reset);
+        assert!(heading.modifier.contains(ratatui::style::Modifier::BOLD));
+        let comment = cell_of(&mut editor, "// note");
+        assert_eq!(comment.fg, Color::Reset);
+        assert!(comment.modifier.contains(ratatui::style::Modifier::DIM));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_color_step_is_cheap_on_a_file_of_2000_lines() {
+        let text: String = (0..2000)
+            .map(|n| format!("= Heading {n}\nText with $x$ and #emph[word] and \"q\" // note\n"))
+            .collect();
+        let path = temp_file("syntaxspeed", &text);
+        let mut editor = open(&path);
+        editor.colors = true;
+        let area = Rect::new(0, 0, 50, 20);
+        let mut terminal = Terminal::new(TestBackend::new(100, 22)).unwrap();
+        let draw = |editor: &mut Editor, terminal: &mut Terminal<TestBackend>| {
+            let start = Instant::now();
+            terminal.draw(|frame| editor.draw(frame)).unwrap();
+            start.elapsed()
+        };
+        let whole = draw(&mut editor, &mut terminal);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        let start = Instant::now();
+        editor.paint(&mut buffer, area);
+        let paint = start.elapsed();
+        eprintln!("draw of 4000 lines: {whole:?}, of which the color step: {paint:?}");
+        assert!(paint < Duration::from_millis(100), "{paint:?}");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

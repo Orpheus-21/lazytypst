@@ -5,6 +5,7 @@ mod doctor;
 mod editor;
 mod fsutil;
 mod help;
+mod highlight;
 mod newfile;
 mod preview;
 mod state;
