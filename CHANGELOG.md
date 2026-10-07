@@ -19,6 +19,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `r` reads the folder again, to show new files and to drop deleted files.
 - `n` makes a new `.typ` file from a path such as `chapters/two`. The program makes missing folders and refuses a name that leaves the project.
 - The list selects the file that you closed last time in the folder. Opening it shows the page of the preview that was open. The program keeps this outside the project folder.
+- `e` in the list edits the selected file in `VISUAL` or `EDITOR`, and then opens it with a compile.
 - `E` in the list exports the PDF of the selected file.
 - `y` copies the absolute path of the selected file to the system clipboard.
 - `m` marks a main file. The live compile, `Ctrl-B`, and `Ctrl-E` then use the main file, whatever file you edit. The program remembers the main file of each project, and it keeps that choice outside the project folder.
