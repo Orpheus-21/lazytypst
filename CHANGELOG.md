@@ -36,6 +36,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - The preview renders only the page on screen, so a long document stays fast. In a release build, a book of 500 pages shows its page after 0.7 s.
 - `Alt-Down`, `Alt-Up`, `Alt-Home`, and `Alt-End` change the page. The title of the preview shows the page and the page count. If the document gets shorter than the page on screen, the preview shows the last page.
 - The program honors `NO_COLOR`. Text and borders have no color, and an error line is bold. The preview image keeps its colors.
+- `F11` shows the preview on the full screen. There, `+`, `-`, and `0` zoom, and the arrow keys move the view of a zoomed page. Typing does nothing there.
 - A compile pane under the editor. It shows the errors with their line numbers, the time of the compile, and the number of errors and warnings. Errors are red, warnings are yellow, and hints are dim. If the report does not fit, the last row says how many rows are hidden.
 - `Ctrl-O` opens the last exported PDF with `xdg-open`.
 - `Ctrl-Q` saves the file and quits the program from the editor.
