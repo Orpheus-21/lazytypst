@@ -44,5 +44,6 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `Ctrl-B` compiles at once, and `Ctrl-E` exports a PDF next to the file that was compiled.
 - The title of the terminal window names the folder or the open file.
 - `--help` prints the keys. `--version` prints the version of lazytypst and the version of Typst.
+- The variable `LAZYTYPST_TYPST` names the Typst program instead of `typst`.
 - A clear message and exit code 1 when the `typst` command is missing. The program checks this before it draws anything.
 - A temporary folder that only your user can open. The program deletes it when it ends, and the next start deletes folders that an earlier run left behind.

@@ -24,6 +24,7 @@ The folder that you give to the program is the Typst project root. A file in a s
 
 - Rust 1.90 or later, with Cargo.
 - The `typst` command in `PATH`, version 0.12.0 or later. Version 0.12.0 added the options that render one page. The program is tested with version 0.15.1. At start, the program runs `typst --version`. If that fails, the program prints which command it needs, why it cannot run it, and the Typst install page, and it exits with code 1. It makes no temporary folder and draws nothing before that.
+- The variable `LAZYTYPST_TYPST` can name another Typst program, for example a second version or a wrapper script: `LAZYTYPST_TYPST=/opt/typst-0.14/typst lazytypst`. If the variable is set and not empty, the compile, the export, and the version check of `--version` run that program instead of `typst`. If it cannot run, the compile pane shows `Cannot run` and the path. Without the variable, the program runs `typst` from `PATH`.
 - Linux. The program is tested on Linux only.
 - A terminal. At start, the program asks the terminal which image protocol it supports. The program uses the kitty, sixel, or iTerm2 protocol when the terminal reports one. Otherwise it draws the page with half block characters. The sixel and iTerm2 protocols are not tested.
 
