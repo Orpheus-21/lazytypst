@@ -122,6 +122,7 @@ Save rules:
 
 - A save writes the file only when the text has edits. A compile or an export of an unchanged file does not write it.
 - Before the autosave, `Ctrl-B`, `Ctrl-E`, or `Esc` writes, the program compares the modification time of the file. If another program changed the file, the program does not write it and shows a warning. `Ctrl-S` then overwrites the file with your text. `Esc` twice closes the editor and keeps the version on disk.
+- About once a second, while the text has no edits, the program compares the modification time of the file. If another program changed the file, the program loads the new text, keeps the cursor on the same line number, and starts a compile. If the file got shorter, the cursor goes to the last line. If another program deleted the file, the status line says that the file is gone, and the text stays in the editor. `Ctrl-S` writes it again.
 - A save writes the text to a hidden temp file next to the file. Then it renames the temp file over the file. A crash during a save leaves the old text or the new text, never a cut file. A symlink stays a symlink, and the permissions stay. A hard link to the file keeps the old text.
 - A save writes the text with LF line ends and one final newline. A file with CRLF line ends changes to LF when you edit it.
 

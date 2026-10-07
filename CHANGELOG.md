@@ -21,6 +21,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - A folder or a `.typ` file as the argument. A file opens in the editor at once, and its folder is the project root. Files in subfolders can import files from parent folders inside the root.
 - A text area with line numbers, long lines that wrap, and Emacs style editing keys. `Tab` inserts 2 spaces. The status line shows the cursor as `line:column`. If you close a file and open it again, the cursor comes back.
 - An autosave 300 ms after the last key, and a live compile after each save. A new compile stops the compile that still runs.
+- A reload of the file when another program changes it and the text has no edits. The cursor keeps its line, and a compile starts.
 - A safe save. The program writes the file only when the text has edits. It does not overwrite a change that another program made, until you press `Ctrl-S`. It writes a temp file and renames it, so a crash cannot cut the file. A symlink stays a symlink, and the permissions stay.
 - A live preview of the document as an image next to the editor. The program uses the kitty, sixel, or iTerm2 image protocol when the terminal has one, and half block characters if not.
 - The preview renders only the page on screen, so a long document stays fast. In a release build, a book of 500 pages shows its page after 0.7 s.
