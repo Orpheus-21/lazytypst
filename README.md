@@ -85,6 +85,8 @@ This way needs no Rust. The first release is not published yet.
    install -m 755 lazytypst-<version>-x86_64-linux/lazytypst ~/.local/bin/
    ```
 
+The archive also holds the man page `lazytypst.1`. To install it, run `install -D -m 644 lazytypst-<version>-x86_64-linux/lazytypst.1 ~/.local/share/man/man1/lazytypst.1`. Then `man lazytypst` shows it.
+
 The program in the archive is a static binary. It runs on any x86_64 Linux system, and it does not depend on the C library of the system. It still needs the `typst` command in `PATH`.
 
 ### Build from a clone
@@ -110,6 +112,8 @@ This way is for people who want to change the program.
    ```
 
 The program is the file `target/release/lazytypst`.
+
+To read the man page from a clone, run `man ./docs/lazytypst.1`.
 
 ## Usage
 
