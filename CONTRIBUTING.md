@@ -4,9 +4,10 @@ This guide tells you how to change lazytypst and how to send the change.
 
 ## Before you start
 
-1. Pick an open issue, or open a new issue first.
-2. Write a comment on the issue before you start. Then two people do not do the same work.
-3. Make one pull request for one issue.
+1. Read the [Scope](README.md#scope) of the project. An idea that does not fit it is closed.
+2. Pick an open issue, or open a new issue first.
+3. Write a comment on the issue before you start. Then two people do not do the same work.
+4. Make one pull request for one issue.
 
 ## Build and test
 

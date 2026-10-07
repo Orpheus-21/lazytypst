@@ -26,6 +26,16 @@ The compile pane under the editor shows the result of the last compile. After a 
 
 The folder that you give to the program is the Typst project root. A file in a subfolder can import a file from a parent folder, such as `../lib.typ`, if that file is inside the root. Error lines and the editor title show paths relative to the root.
 
+## Scope
+
+lazytypst does these jobs: it browses the Typst files of a project, edits one file, compiles it, shows the errors, shows the pages, and exports a PDF.
+
+The project follows these guides: few keys, good defaults, no configuration file, and the keys on screen.
+
+lazytypst does not act as a general file manager, as a language server client, as a plugin host, or as an editor with many open files. It does not replace the options of the Typst CLI with settings.
+
+An idea that adds keys or settings without making this work faster is closed with a link to this section. Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open an issue.
+
 ## Requirements
 
 - Rust 1.90 or later, with Cargo.
