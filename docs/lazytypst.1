@@ -1,0 +1,193 @@
+.TH LAZYTYPST 1 "" "lazytypst 0.1.0" "User Commands"
+.SH NAME
+lazytypst \- browse, edit, and compile Typst documents in the terminal
+.SH SYNOPSIS
+.B lazytypst
+[\fIFOLDER\fR | \fIFILE\fR.typ]
+.br
+.B lazytypst
+[\-h | \-\-help | \-V | \-\-version | \-\-doctor]
+.SH DESCRIPTION
+.B lazytypst
+lists the .typ files in a folder and opens them in an editor with a live preview.
+It runs the
+.BR typst (1)
+command to compile. Without \fIFOLDER\fR, it uses the current folder. The folder is also the Typst project root.
+With a .typ file, it opens the file at once. The folder of the file is the project root.
+.PP
+The editor saves the file 300 ms after the last key and compiles it. The preview shows one page as an image.
+The terminal needs an image protocol (kitty, sixel, or iTerm2) for a sharp page. Without one, the program draws half blocks.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Show the usage and the keys.
+.TP
+.BR \-V ", " \-\-version
+Show the version of lazytypst and the version of typst.
+.TP
+.B \-\-doctor
+Check typst, the terminal image protocol, and the temporary folder. The exit code is 0 if all checks pass, and 1 if not.
+.SH KEYS
+.SS Keys in the file list
+.TP
+.B ? or F1
+Show this help window.
+.TP
+.B j or Down
+Select the next file.
+.TP
+.B k or Up
+Select the previous file.
+.TP
+.B Enter
+Open the selected file.
+.TP
+.B n
+Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
+.TP
+.B E
+Export the PDF of the selected file next to it.
+.TP
+.B e
+Edit the selected file in $VISUAL or $EDITOR, then open it here.
+.TP
+.B s
+Switch the order: by path, or the newest change first.
+.TP
+.B y
+Copy the absolute path of the selected file to the system clipboard.
+.TP
+.B /
+Filter the list. Type a part of a path. Enter keeps the filter, Esc removes it.
+.TP
+.B r
+Read the folder again, to show new files and to drop deleted files.
+.TP
+.B g or Home
+Select the first file.
+.TP
+.B G or End
+Select the last file.
+.TP
+.B m
+Mark the selected file as the main file, or remove the mark. lazytypst then compiles the main file, whatever file you edit.
+.TP
+.B q
+Quit.
+.SS Keys in the editor
+.TP
+.B F1
+Show this help window.
+.TP
+.B Ctrl\-S
+Save the file.
+.TP
+.B Ctrl\-B
+Save and compile the file.
+.TP
+.B Ctrl\-E
+Save the file and export a PDF next to it.
+.TP
+.B Ctrl\-F
+Search. Type a regular expression, then Enter or Ctrl\-F for the next match. Esc closes.
+.TP
+.B F11
+Show the preview on the full screen, and back. There, + and \- zoom, 0 shows the whole page, and the arrow keys move the view. Typing does nothing there.
+.TP
+.B F5
+Turn the live compile off or on. Autosave stays on.
+.TP
+.B Ctrl\-G
+Go to the first error of the last compile.
+.TP
+.B Ctrl\-O
+Open the last exported PDF in the system viewer (xdg\-open).
+.TP
+.B Alt\-Down
+Show the next page.
+.TP
+.B Alt\-Up
+Show the previous page.
+.TP
+.B Alt\-Home
+Show the first page.
+.TP
+.B Alt\-End
+Show the last page.
+.TP
+.B Esc
+Save the file and go back to the file list.
+.TP
+.B Ctrl\-Q
+Save the file and quit.
+.SS Editing keys in the editor
+.TP
+.B Ctrl\-U
+Undo.
+.TP
+.B Ctrl\-R
+Redo.
+.TP
+.B Shift with arrow keys
+Select text.
+.TP
+.B Ctrl\-C
+Copy the selection. It also goes to the system clipboard.
+.TP
+.B Ctrl\-X
+Cut the selection. It also goes to the system clipboard.
+.TP
+.B Ctrl\-Y
+Paste the text that the text area holds.
+.TP
+.B Ctrl\-W
+Delete the word before the cursor.
+.TP
+.B Ctrl\-K
+Delete to the end of the line.
+.TP
+.B Ctrl\-J
+Delete to the start of the line.
+.TP
+.B Alt\-F, Alt\-B
+Move one word forward or back.
+.TP
+.B Ctrl\-A, End
+Move to the start or the end of the line.
+.TP
+.B Ctrl\-V, Alt\-V
+Scroll one page down or up.
+.TP
+.B Alt\-<, Alt\->
+Move to the first or the last line. The column stays.
+.SH ENVIRONMENT
+.TP
+.B LAZYTYPST_TYPST
+The program that runs Typst. The default is \fBtypst\fR.
+.TP
+.B NO_COLOR
+If set and not empty, the program uses no colors for text and borders.
+.TP
+.BR VISUAL ", " EDITOR
+The editor for the key e in the file list. VISUAL wins over EDITOR.
+.TP
+.B XDG_STATE_HOME
+The folder for the state files. The default is ~/.local/state.
+.TP
+.BR TYPST_FONT_PATHS ", " TYPST_IGNORE_SYSTEM_FONTS ", " TYPST_PACKAGE_PATH ", " TYPST_PACKAGE_CACHE_PATH
+Passed to typst.
+.SH FILES
+.TP
+.I $XDG_STATE_HOME/lazytypst/main-files
+The main file of each project.
+.TP
+.I $XDG_STATE_HOME/lazytypst/last-files
+The last file and its page for each project.
+.TP
+.I $TMPDIR/lazytypst-<process id>
+The private folder for the preview pages. The program deletes it at exit.
+.SH SEE ALSO
+.BR typst (1),
+.UR https://github.com/Orpheus-21/lazytypst
+the lazytypst project
+.UE

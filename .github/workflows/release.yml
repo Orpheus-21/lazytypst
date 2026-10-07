@@ -105,7 +105,7 @@ jobs:
           mkdir -p "dist/${name}"
           install -m 755 target/x86_64-unknown-linux-musl/release/lazytypst "dist/${name}/lazytypst"
           strip "dist/${name}/lazytypst"
-          install -m 644 README.md LICENSE "dist/${name}/"
+          install -m 644 README.md LICENSE docs/lazytypst.1 "dist/${name}/"
           # A fixed order, owner, and time make the archive the same when the files are the same.
           tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git log -1 --format=%ct)" -C dist -cf - "${name}" | gzip -n > "dist/${name}.tar.gz"
           (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
@@ -124,6 +124,7 @@ jobs:
           test -x "$check/${name}/lazytypst"
           test -f "$check/${name}/README.md"
           test -f "$check/${name}/LICENSE"
+          test -f "$check/${name}/lazytypst.1"
           # A static binary needs no shared library. Both kinds of static binary pass: with a dynamic section
           # that has no NEEDED entry (static PIE), and with no dynamic section at all.
           bin="$check/${name}/lazytypst"

@@ -2512,6 +2512,39 @@ mod tests {
     }
 
     #[test]
+    fn the_man_page_has_each_key_of_the_help_text() {
+        // In roff, a hyphen is `\-`, a backslash is `\e`, and `\&` is an empty mark.
+        let page = include_str!("../docs/lazytypst.1")
+            .replace("\\-", "-")
+            .replace("\\&", "")
+            .replace("\\e", "\\");
+        for entry in help::KEYS {
+            assert!(
+                page.contains(entry.keys),
+                "the man page lacks the keys {}",
+                entry.keys
+            );
+            assert!(
+                page.contains(entry.text),
+                "the man page lacks the text of {}",
+                entry.keys
+            );
+        }
+        for section in [
+            ".SH NAME",
+            ".SH SYNOPSIS",
+            ".SH DESCRIPTION",
+            ".SH OPTIONS",
+            ".SH KEYS",
+            ".SH ENVIRONMENT",
+            ".SH FILES",
+            ".SH SEE ALSO",
+        ] {
+            assert!(page.contains(section), "{section}");
+        }
+    }
+
+    #[test]
     fn a_file_that_cannot_be_read_shows_an_error_in_the_list() {
         let mut app = app("unreadable");
         fs::write(app.root.join("a.typ"), b"\xff\xfe").unwrap();
