@@ -57,5 +57,6 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - The variable `LAZYTYPST_TYPST` names the Typst program instead of `typst`.
 - A clear message and exit code 1 when the `typst` command is missing. The program checks this before it draws anything.
 - Safety with projects from other people: the list shows regular files only, an export never writes through a link, a compile stops after 60 seconds, and the memory of Typst is limited if `prlimit` is installed.
+- A warning when the project has a link that points outside it. No compile starts at open then.
 - A file with CRLF line ends keeps them after a save.
 - A temporary folder that only your user can open. The program deletes it when it ends, and the next start deletes folders that an earlier run left behind.

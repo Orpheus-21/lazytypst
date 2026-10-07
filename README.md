@@ -208,7 +208,7 @@ A project from the internet can hold files that harm you when a program opens th
 - The file list shows only regular files. A `.typ` link counts only if it points at a regular file inside the project. A pipe, a device, a dangling link, and a link to a file outside the project are not listed. The program opens a regular file of at most 16 MiB.
 - An export writes a new file next to the source and renames it onto the PDF. So a link such as `report.pdf` that points at another file of yours is replaced, and the other file stays.
 - A compile or an export stops after 60 seconds. The program keeps the first 1 MiB of the error text of Typst. If the `prlimit` program of util-linux is in `PATH`, it also limits the memory of Typst to 8 GiB, so a page of 500 cm by 500 cm cannot stop the machine.
-- The program compiles a file when you open it. Typst can read a file through a link inside the project, and the file can then show in the preview and in an exported PDF. This is a behavior of Typst, and lazytypst does not stop it. Do not share a PDF of a project that you did not read.
+- The program compiles a file when you open it. But Typst can read a file through a link inside the project, and the file can then show in the preview and in an exported PDF. So the program looks for links that point outside the project when it reads the folder. If it finds one, it shows a warning when a file opens, and it starts no compile then. `Ctrl-B` and the autosave after an edit still compile. This is a warning, and it does not stop Typst: do not share a PDF of a project that you did not read.
 - A document that imports a package from `@preview` makes Typst download the package.
 
 ## Colors
