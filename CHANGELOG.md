@@ -18,6 +18,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `/` filters the list while you type. The match ignores case. `Esc` removes the filter.
 - `r` reads the folder again, to show new files and to drop deleted files.
 - `n` makes a new `.typ` file from a path such as `chapters/two`. The program makes missing folders and refuses a name that leaves the project.
+- The list selects the file that you closed last time in the folder. Opening it shows the page of the preview that was open. The program keeps this outside the project folder.
 - `m` marks a main file. The live compile, `Ctrl-B`, and `Ctrl-E` then use the main file, whatever file you edit. The program remembers the main file of each project, and it keeps that choice outside the project folder.
 - A folder or a `.typ` file as the argument. A file opens in the editor at once, and its folder is the project root. Files in subfolders can import files from parent folders inside the root.
 - A text area with line numbers, long lines that wrap, and Emacs style editing keys. `Tab` inserts 2 spaces. The status line shows the cursor as `line:column`. If you close a file and open it again, the cursor comes back.
