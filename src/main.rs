@@ -119,6 +119,9 @@ enum Args {
 /// title again at the next prompt (the shell integration of Ghostty does this).
 const SAVE_TITLE: &str = "\x1b[22;0t";
 const RESTORE_TITLE: &str = "\x1b[23;0t";
+/// Bracketed paste: the terminal sends a paste as one event and not as one key for each character.
+const ENABLE_PASTE: &str = "\x1b[?2004h";
+const DISABLE_PASTE: &str = "\x1b[?2004l";
 
 fn write_to_terminal(text: &str) {
     use std::io::Write;
@@ -455,6 +458,13 @@ impl App {
         self.save_main_choice();
     }
 
+    /// Handles a paste. The editor inserts it. The list and the prompts ignore it.
+    fn handle_paste(&mut self, text: &str) {
+        if let Some(editor) = &mut self.editor {
+            editor.paste(text);
+        }
+    }
+
     /// Handles one key. Returns true when the program must quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         if let Some(editor) = &mut self.editor {
@@ -533,11 +543,13 @@ fn main() -> std::io::Result<()> {
     // ratatui::init also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
     write_to_terminal(SAVE_TITLE);
+    write_to_terminal(ENABLE_PASTE);
     // The panic hook of ratatui runs after this one, so a panic also deletes the page folder.
     let restore_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         compile::cleanup();
         write_to_terminal(RESTORE_TITLE);
+        write_to_terminal(DISABLE_PASTE);
         restore_hook(info);
     }));
     // The query needs the raw terminal, and it must run before the first key is read.
@@ -550,6 +562,7 @@ fn main() -> std::io::Result<()> {
     }
     let result = run(&mut terminal, &mut app);
     write_to_terminal(RESTORE_TITLE);
+    write_to_terminal(DISABLE_PASTE);
     ratatui::restore();
     compile::cleanup();
     result
@@ -580,11 +593,14 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
             continue;
         }
         redraw = true;
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if app.handle_key(key) {
-            return Ok(());
+        match event::read()? {
+            Event::Key(key) => {
+                if app.handle_key(key) {
+                    return Ok(());
+                }
+            }
+            Event::Paste(text) => app.handle_paste(&text),
+            _ => {}
         }
     }
 }
@@ -1734,6 +1750,21 @@ mod tests {
         assert!(quit, "Ctrl-Q must quit the program");
         let text = fs::read_to_string(app.root.join("a.typ")).unwrap();
         assert!(text.starts_with("Xtext of a"), "{text}");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_paste_goes_to_the_editor_and_the_list_ignores_it() {
+        let mut app = app("paste");
+        app.handle_paste("x\ny");
+        assert!(app.editor.is_none());
+        assert!(app.status.is_empty(), "{}", app.status);
+        press(&mut app, KeyCode::Enter);
+        app.handle_paste("P\nQ");
+        assert!(screen(&mut app).contains("PQ") || screen(&mut app).contains("P"));
+        press(&mut app, KeyCode::Esc);
+        let text = fs::read_to_string(app.root.join("a.typ")).unwrap();
+        assert!(text.starts_with("P\nQtext of a"), "{text}");
         fs::remove_dir_all(&app.root).unwrap();
     }
 

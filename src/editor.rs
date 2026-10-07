@@ -247,6 +247,18 @@ impl Editor {
         }
     }
 
+    /// Inserts pasted text at the cursor in one step, so one undo takes it back. A tab character stays a
+    /// tab character. Terminals send a line break as CR LF or as CR: both become one line break.
+    pub fn paste(&mut self, text: &str) {
+        self.close_armed = false;
+        self.message.clear();
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if self.textarea.insert_str(text) {
+            self.dirty = true;
+            self.last_edit = Some(Instant::now());
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         let armed = std::mem::take(&mut self.close_armed);
         self.message.clear();
@@ -1236,6 +1248,32 @@ mod tests {
         );
         assert!(matches!(editor.handle_key(ctrl('q')), Action::Quit));
         assert_eq!(fs::read_to_string(&path).unwrap(), "outside\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_paste_inserts_all_lines_at_once_and_one_undo_takes_it_back() {
+        let path = temp_file("paste", "end\n");
+        let mut editor = open(&path);
+        let pasted: String = (0..1000).map(|n| format!("line {n}\n")).collect();
+        editor.paste(&pasted);
+        assert_eq!(editor.textarea.lines().len(), 1001);
+        assert_eq!(editor.textarea.lines()[999], "line 999");
+        assert!(editor.dirty && editor.last_edit.is_some());
+        editor.handle_key(ctrl('u'));
+        assert_eq!(editor.textarea.lines().len(), 1, "one undo step");
+        assert_eq!(editor.textarea.lines()[0], "end");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_paste_keeps_tab_characters_and_turns_every_line_end_into_lf() {
+        let path = temp_file("pastetab", "");
+        let mut editor = open(&path);
+        editor.paste("a\tb\r\nc\rd\ne");
+        assert_eq!(editor.textarea.lines(), ["a\tb", "c", "d", "e"]);
+        editor.handle_key(key(KeyCode::Esc));
+        assert_eq!(fs::read(&path).unwrap(), b"a\tb\nc\nd\ne\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
