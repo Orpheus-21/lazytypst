@@ -25,6 +25,7 @@ use ratatui::{
 use ratatui_image::picker::Picker;
 use ratatui_textarea::{CursorMove, TextArea};
 
+use compile::Job;
 use editor::{Action, Editor};
 
 /// What the prompt asks for.
@@ -64,6 +65,8 @@ struct App {
     pages: HashMap<PathBuf, usize>,
     /// Text for the system clipboard that the list copied. See `take_clipboard`.
     clipboard: Option<String>,
+    /// The running PDF export of the list, and the PDF that it writes. `None` when no export runs.
+    export: Option<(Job, PathBuf)>,
     /// The prompt for a new file name, or for the filter. While it is open, it takes every key.
     prompt: Option<Prompt>,
     /// The part of a path that a file must have to show in the list. The match ignores case. Empty: no filter.
@@ -90,6 +93,7 @@ Keys in the file list:
   k or Up        Select the previous file.
   Enter          Open the selected file.
   n              Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
+  E              Export the PDF of the selected file next to it.
   y              Copy the absolute path of the selected file to the system clipboard.
   /              Filter the list. Type a part of a path. Enter keeps the filter, Esc removes it.
   r              Read the folder again, to show new files and to drop deleted files.
@@ -265,6 +269,7 @@ impl App {
             cursors: HashMap::new(),
             pages: HashMap::new(),
             clipboard: None,
+            export: None,
             editor: None,
         }
     }
@@ -519,6 +524,43 @@ impl App {
             .or_else(|| self.editor.as_mut().and_then(Editor::take_clipboard))
     }
 
+    /// Starts the PDF export of the selected file. The list stays usable while it runs. A new export
+    /// replaces a running export: dropping the old job kills its process.
+    fn export_selected(&mut self) {
+        let Some(file) = self.selected_file() else {
+            return;
+        };
+        let source = self.root.join(file);
+        let pdf = source.with_extension("pdf");
+        self.status = format!("Exporting {}...", pdf.display());
+        self.export = Some((Job::start_pdf(&source, &self.root, pdf.clone()), pdf));
+    }
+
+    /// Runs the work that the program does while no key arrives: the editor, and the export of the list.
+    /// Returns true when the screen must redraw.
+    fn tick(&mut self, now: Instant) -> bool {
+        let changed = self.editor.as_mut().is_some_and(|editor| editor.tick(now));
+        let Some((job, pdf)) = &mut self.export else {
+            return changed;
+        };
+        let Some(report) = job.try_report() else {
+            return changed;
+        };
+        let name = pdf.strip_prefix(&self.root).unwrap_or(pdf).display();
+        self.status = match report.first_error() {
+            _ if report.ok => format!("Exported {name}"),
+            Some(error) => format!(
+                "{}:{}: {}",
+                error.file.as_deref().unwrap_or(Path::new("")).display(),
+                error.line,
+                error.message
+            ),
+            None => format!("The export of {name} failed"),
+        };
+        self.export = None;
+        true
+    }
+
     /// Copies the absolute path of the selected file.
     fn copy_selected_path(&mut self) {
         let Some(file) = self.selected_file() else {
@@ -553,6 +595,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return true,
             KeyCode::Char('y') => self.copy_selected_path(),
+            KeyCode::Char('E') => self.export_selected(),
             KeyCode::Char('j') | KeyCode::Down if !self.files.is_empty() => self.list.select_next(),
             KeyCode::Char('k') | KeyCode::Up if !self.files.is_empty() => {
                 self.list.select_previous()
@@ -655,10 +698,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
         }
         // While no key arrives, every 50 ms the editor checks its autosave and its compile.
         if !event::poll(Duration::from_millis(50))? {
-            redraw = app
-                .editor
-                .as_mut()
-                .is_some_and(|editor| editor.tick(Instant::now()));
+            redraw = app.tick(Instant::now());
             continue;
         }
         redraw = true;
@@ -1918,6 +1958,42 @@ mod tests {
         assert_eq!(app.take_clipboard(), Some(expected.clone()));
         assert_eq!(app.status, format!("Copied {expected}"));
         assert_eq!(app.take_clipboard(), None);
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    /// Runs `tick` until the export of the list ends.
+    fn wait_for_export(app: &mut App) {
+        let start = Instant::now();
+        while app.export.is_some() {
+            app.tick(Instant::now());
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "the export did not end"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn capital_e_exports_the_pdf_of_the_selected_file_and_shows_the_path() {
+        let mut app = app("exportlist");
+        press(&mut app, KeyCode::Char('E'));
+        assert!(app.status.starts_with("Exporting"), "{}", app.status);
+        wait_for_export(&mut app);
+        assert_eq!(app.status, "Exported a.pdf");
+        assert_eq!(fs::read(app.root.join("a.pdf")).unwrap()[..4], *b"%PDF");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn capital_e_on_a_file_with_an_error_writes_no_pdf_and_shows_the_error_line() {
+        let mut app = app("exportbad");
+        fs::write(app.root.join("a.typ"), "#nope()\n").unwrap();
+        press(&mut app, KeyCode::Char('E'));
+        wait_for_export(&mut app);
+        assert!(app.status.starts_with("a.typ:1: "), "{}", app.status);
+        assert!(app.status.contains("unknown variable"), "{}", app.status);
+        assert!(!app.root.join("a.pdf").exists());
         fs::remove_dir_all(&app.root).unwrap();
     }
 
