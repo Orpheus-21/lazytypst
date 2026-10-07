@@ -213,6 +213,20 @@ lazytypst is one of several ways to work with Typst. This is how it differs from
 - The preview of the [tinymist](https://github.com/Myriad-Dreamin/tinymist) language service works in editors such as VS Code, Neovim, Emacs, Sublime Text, Helix, and Zed, and a language service gives more than a preview. lazytypst has no completion or other language features, but it needs no editor, plugin, or configuration.
 - The [typst.app](https://typst.app/) web app is an online editor for teams, with instant preview and collaboration. lazytypst works on files on your own machine and offline, except for the first download of a package.
 
+## FAQ
+
+**Why does lazytypst save my file while I type?** The preview follows the saved file, so the program saves 300 ms after your last key and then compiles. See [What it does](#what-it-does).
+
+**Can lazytypst lose my text?** It is built so that it does not. The program writes only when the text has edits. It does not overwrite a change that another program made, until you press `Ctrl-S`. It writes a temp file and renames it, so a crash cannot cut your file. See the save rules in [Usage](#usage).
+
+**Where do the preview pages go, and when are they deleted?** They go into a private folder `lazytypst-<process id>` in the temporary directory. The program deletes it when it ends, and the next start deletes the folders of earlier runs that crashed. See [Usage](#usage).
+
+**Why do the page keys use `Alt` with the arrow keys?** The plain arrow keys move the cursor in the text. `Alt-Down` and `Alt-Up` are free, and the terminal sends them as one key. See [Usage](#usage).
+
+**Why is the preview made of blocks in my terminal?** Your terminal reports no image protocol, so the program draws half blocks. Run `lazytypst --doctor` to see what the terminal reports. See [Troubleshooting](#troubleshooting).
+
+**Does lazytypst work without the internet?** Yes. Only the first compile of a document that imports a Typst package from `@preview` downloads the package. See [Fonts and packages](#fonts-and-packages).
+
 ## How it works
 
 - `src/browser.rs` finds the `.typ` files. `src/newfile.rs` checks the name of a new file and makes it.
