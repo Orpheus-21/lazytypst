@@ -191,13 +191,21 @@ pub fn remove_stale_dirs() {
     }
 }
 
-/// Deletes each folder `lazytypst-<pid>` in `tmp` that is a real folder (not a symlink),
-/// belongs to the user `uid`, and has no running process with that pid.
+/// Deletes each stale folder in `tmp`. See `stale_dirs_in`.
 fn remove_stale_dirs_in(tmp: &Path, uid: u32) {
+    for dir in stale_dirs_in(tmp, uid) {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+/// The folders `lazytypst-<pid>` in `tmp` that are real folders (not symlinks), belong to the user `uid`,
+/// and have no running process with that pid.
+pub fn stale_dirs_in(tmp: &Path, uid: u32) -> Vec<PathBuf> {
     use std::os::unix::fs::MetadataExt;
     let Ok(entries) = fs::read_dir(tmp) else {
-        return;
+        return Vec::new();
     };
+    let mut stale = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(pid) = name
@@ -213,9 +221,10 @@ fn remove_stale_dirs_in(tmp: &Path, uid: u32) {
             continue;
         };
         if meta.is_dir() && meta.uid() == uid && !Path::new("/proc").join(pid).exists() {
-            let _ = fs::remove_dir_all(entry.path());
+            stale.push(entry.path());
         }
     }
+    stale
 }
 
 /// Deletes the page folder. The program calls this when it exits.

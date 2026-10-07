@@ -1,6 +1,7 @@
 mod browser;
 mod clipboard;
 mod compile;
+mod doctor;
 mod editor;
 mod fsutil;
 mod newfile;
@@ -95,6 +96,7 @@ With a .typ file, lazytypst opens the file at once. The folder of the file is th
 Options:
   -h, --help     Show this help.
   -V, --version  Show the version of lazytypst and the version of typst.
+  --doctor       Check typst, the terminal image protocol, and the temporary folder.
 
 Keys in the file list:
   j or Down      Select the next file.
@@ -134,6 +136,7 @@ enum Args {
     Run(PathBuf),
     Help,
     Version,
+    Doctor,
 }
 
 /// The commands that save the window title of the terminal and bring it back (xterm window operations 22
@@ -304,6 +307,7 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, String> 
     match first.to_str() {
         Some("-h" | "--help") => Ok(Args::Help),
         Some("-V" | "--version") => Ok(Args::Version),
+        Some("--doctor") => Ok(Args::Doctor),
         Some(option) if option.starts_with('-') => Err(format!(
             "Unknown option: {option}. For a folder that starts with a dash, write ./{option}."
         )),
@@ -746,6 +750,40 @@ impl App {
     }
 }
 
+/// The image protocol that the terminal reports, or why the query failed. It is the same query as the
+/// start of the program makes. It needs the raw mode of a terminal.
+fn query_protocol() -> Result<ratatui_image::picker::ProtocolType, String> {
+    use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return Err("the input is not a terminal".into());
+    }
+    enable_raw_mode().map_err(|err| err.to_string())?;
+    let picker = Picker::from_query_stdio();
+    let _ = disable_raw_mode();
+    picker
+        .map(|picker| picker.protocol_type())
+        .map_err(|err| err.to_string())
+}
+
+/// Prints the report of `--doctor`. Returns the exit code: 0 if all checks pass, and 1 if not.
+fn run_doctor() -> i32 {
+    use std::os::unix::fs::MetadataExt;
+    let tmp = std::env::temp_dir();
+    let stale = std::fs::metadata("/proc/self")
+        .map(|own| compile::stale_dirs_in(&tmp, own.uid()).len())
+        .unwrap_or(0);
+    let checks = [
+        doctor::typst_check(compile::typst_version()),
+        doctor::terminal_check(query_protocol()),
+        doctor::temp_check(&tmp),
+        doctor::stale_check(stale),
+    ];
+    let (text, all_ok) = doctor::report(env!("CARGO_PKG_VERSION"), &checks);
+    print!("{text}");
+    i32::from(!all_ok)
+}
+
 fn main() -> std::io::Result<()> {
     let arg = match parse_args(std::env::args_os()) {
         Ok(Args::Run(arg)) => arg,
@@ -753,6 +791,7 @@ fn main() -> std::io::Result<()> {
             print!("{USAGE}");
             return Ok(());
         }
+        Ok(Args::Doctor) => std::process::exit(run_doctor()),
         Ok(Args::Version) => {
             print!(
                 "{}",
@@ -2566,6 +2605,7 @@ mod tests {
     #[test]
     fn help_and_version_have_a_long_and_a_short_form() {
         assert_eq!(args(&["lazytypst", "--help"]), Ok(Args::Help));
+        assert_eq!(args(&["lazytypst", "--doctor"]), Ok(Args::Doctor));
         assert_eq!(args(&["lazytypst", "-h"]), Ok(Args::Help));
         assert_eq!(args(&["lazytypst", "--version"]), Ok(Args::Version));
         assert_eq!(args(&["lazytypst", "-V"]), Ok(Args::Version));
