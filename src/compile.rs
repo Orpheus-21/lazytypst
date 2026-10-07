@@ -295,12 +295,25 @@ impl Job {
     /// Typst can read the files under `root`. So `file` can import files from parent folders inside `root`.
     /// Typst runs in `root`, so an error line names the file relative to `root`.
     /// `file` and `dir` must be absolute, or relative to `root`.
+    #[cfg(test)]
     pub fn start(file: &Path, root: &Path, dir: PathBuf, page: usize) -> Job {
-        Job::start_with(&typst_program(), file, root, dir, page)
+        Job::start_with(&typst_program(), file, root, dir, page, None)
     }
 
-    /// `start` with the program that runs Typst.
-    fn start_with(program: &str, file: &Path, root: &Path, dir: PathBuf, page: usize) -> Job {
+    /// `start` with a resolution in pixels per inch. `None` keeps the default of Typst, 144.
+    pub fn start_ppi(file: &Path, root: &Path, dir: PathBuf, page: usize, ppi: Option<u32>) -> Job {
+        Job::start_with(&typst_program(), file, root, dir, page, ppi)
+    }
+
+    /// `start_ppi` with the program that runs Typst.
+    fn start_with(
+        program: &str,
+        file: &Path,
+        root: &Path,
+        dir: PathBuf,
+        page: usize,
+        ppi: Option<u32>,
+    ) -> Job {
         if let Err(err) = fs::create_dir_all(&dir) {
             return Job::failed(format!("Cannot make {}: {err}", dir.display()), dir);
         }
@@ -317,9 +330,11 @@ impl Job {
             ])
             .arg(root)
             .arg("--pages")
-            .arg(page.to_string())
-            .arg(file)
-            .arg(dir.join("page-{p}-of-{t}.png"));
+            .arg(page.to_string());
+        if let Some(ppi) = ppi {
+            command.arg("--ppi").arg(ppi.to_string());
+        }
+        command.arg(file).arg(dir.join("page-{p}-of-{t}.png"));
         Job::spawn(command, dir)
     }
 
@@ -826,6 +841,7 @@ mod tests {
                 &root,
                 root.join("pages"),
                 1,
+                None,
             );
             let got = wait(&mut job);
             if got.lines.iter().any(|line| line.starts_with("Cannot run")) {
@@ -863,6 +879,7 @@ mod tests {
             &dir,
             dir.join("pages"),
             1,
+            None,
         );
         let report = wait(&mut job);
         assert!(!report.ok);

@@ -3,12 +3,31 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use image::DynamicImage;
 use ratatui::{
     Frame,
     layout::Rect,
     widgets::{Block, Paragraph},
 };
 use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
+
+/// The zoom steps in percent. Typst draws a page at 144 pixels per inch. At a zoom above 100, the
+/// program asks Typst for a page with more pixels, so that the part on screen stays sharp.
+const ZOOMS: [u32; 4] = [100, 150, 200, 300];
+const DEFAULT_PPI: u32 = 144;
+/// How far one arrow key moves the view, as a part of the way that the view can go.
+const PAN_STEP: f32 = 0.25;
+
+/// The part of an image that a zoom shows: `(x, y, width, height)` in pixels. `pan` is the place of
+/// the view, from 0.0 (left or top) to 1.0 (right or bottom), along the way that the view can go.
+fn crop_rect(width: u32, height: u32, zoom: u32, pan: (f32, f32)) -> (u32, u32, u32, u32) {
+    let view = |size: u32| (size * 100 / zoom.max(100)).max(1);
+    let (w, h) = (view(width), view(height));
+    let place = |size: u32, view: u32, pan: f32| {
+        ((size - view) as f32 * pan.clamp(0.0, 1.0)).round() as u32
+    };
+    (place(width, w, pan.0), place(height, h, pan.1), w, h)
+}
 
 /// The pane that shows one compiled page as an image.
 ///
@@ -28,6 +47,12 @@ pub struct Preview {
     wanted: usize,
     /// The last page that loaded. It stays on screen when a later compile fails.
     page: Option<StatefulProtocol>,
+    /// The picture of the last page that loaded, for the crop of a zoom.
+    image: Option<DynamicImage>,
+    /// The zoom, as an index into `ZOOMS`.
+    zoom: usize,
+    /// The place of the view in the page. See `crop_rect`.
+    pan: (f32, f32),
 }
 
 impl Preview {
@@ -39,6 +64,9 @@ impl Preview {
             shown: 1,
             wanted: 1,
             page: None,
+            image: None,
+            zoom: 0,
+            pan: (0.0, 0.0),
         }
     }
 
@@ -68,7 +96,8 @@ impl Preview {
         let path = dir.join(format!("page-{number}-of-{count}.png"));
         match image::open(&path) {
             Ok(image) => {
-                self.page = Some(self.picker.new_resize_protocol(image));
+                self.image = Some(image);
+                self.show_view();
                 self.shown = number;
                 self.wanted = number;
                 self.count = count;
@@ -109,6 +138,80 @@ impl Preview {
         std::mem::replace(&mut self.wanted, target) != target
     }
 
+    /// The zoom in percent.
+    pub fn zoom_percent(&self) -> u32 {
+        ZOOMS[self.zoom]
+    }
+
+    /// The resolution that the next compile needs, or `None` for the default.
+    pub fn ppi(&self) -> Option<u32> {
+        (self.zoom > 0).then(|| DEFAULT_PPI * self.zoom_percent() / 100)
+    }
+
+    /// Zooms one step in (`more`) or out. Returns true if the zoom changed. The caller must then start a
+    /// compile, because the page needs another resolution.
+    pub fn zoom_step(&mut self, more: bool) -> bool {
+        let next = if more {
+            (self.zoom + 1).min(ZOOMS.len() - 1)
+        } else {
+            self.zoom.saturating_sub(1)
+        };
+        self.set_zoom(next)
+    }
+
+    /// Shows the whole page again. Returns true if the zoom changed. See `zoom_step`.
+    pub fn zoom_fit(&mut self) -> bool {
+        self.set_zoom(0)
+    }
+
+    fn set_zoom(&mut self, zoom: usize) -> bool {
+        let changed = std::mem::replace(&mut self.zoom, zoom) != zoom;
+        if zoom == 0 {
+            self.pan = (0.0, 0.0);
+        }
+        self.show_view();
+        changed
+    }
+
+    /// Moves the view by one step in the direction `(dx, dy)`, each -1, 0, or 1. The whole page has
+    /// nowhere to go.
+    pub fn pan_by(&mut self, dx: i8, dy: i8) {
+        if self.zoom == 0 {
+            return;
+        }
+        let step = |pan: f32, d: i8| (pan + PAN_STEP * f32::from(d)).clamp(0.0, 1.0);
+        self.pan = (step(self.pan.0, dx), step(self.pan.1, dy));
+        self.show_view();
+    }
+
+    /// Moves the view to the top (`bottom` is false) or to the bottom of the page.
+    pub fn pan_to_edge(&mut self, bottom: bool) {
+        if self.zoom > 0 {
+            self.pan.1 = if bottom { 1.0 } else { 0.0 };
+            self.show_view();
+        }
+    }
+
+    /// The place of the view, for a test.
+    #[cfg(test)]
+    pub fn pan(&self) -> (f32, f32) {
+        self.pan
+    }
+
+    /// Makes the picture for the screen from the page and the zoom.
+    fn show_view(&mut self) {
+        let Some(image) = &self.image else {
+            return;
+        };
+        let (x, y, w, h) = crop_rect(image.width(), image.height(), self.zoom_percent(), self.pan);
+        let view = if self.zoom == 0 {
+            image.clone()
+        } else {
+            image.crop_imm(x, y, w, h)
+        };
+        self.page = Some(self.picker.new_resize_protocol(view));
+    }
+
     #[cfg(test)]
     pub fn has_page(&self) -> bool {
         self.page.is_some()
@@ -116,6 +219,14 @@ impl Preview {
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
         let title = match self.page {
+            Some(_) if self.zoom > 0 => {
+                format!(
+                    "Preview {}/{} {}%",
+                    self.shown,
+                    self.count,
+                    self.zoom_percent()
+                )
+            }
             Some(_) => format!("Preview {}/{}", self.shown, self.count),
             None => "Preview".to_string(),
         };
@@ -415,5 +526,65 @@ mod tests {
         );
         assert!(!screen.contains("No preview yet."));
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn the_crop_rectangle_follows_the_zoom_and_the_pan() {
+        // The whole page at 100%, wherever the pan is.
+        assert_eq!(crop_rect(1000, 2000, 100, (0.7, 0.7)), (0, 0, 1000, 2000));
+        // Half of the page at 200%: the pan moves the view along the other half.
+        assert_eq!(crop_rect(1000, 2000, 200, (0.0, 0.0)), (0, 0, 500, 1000));
+        assert_eq!(
+            crop_rect(1000, 2000, 200, (1.0, 1.0)),
+            (500, 1000, 500, 1000)
+        );
+        assert_eq!(crop_rect(1000, 2000, 200, (0.5, 0.0)), (250, 0, 500, 1000));
+        // A pan outside the range stays on the page.
+        assert_eq!(crop_rect(1000, 2000, 200, (3.0, -1.0)), (500, 0, 500, 1000));
+        // 150%: the view is two thirds of the page.
+        assert_eq!(crop_rect(900, 900, 150, (1.0, 0.0)), (300, 0, 600, 600));
+    }
+
+    #[test]
+    fn zoom_steps_stop_at_the_ends_and_zero_fits_the_page_again() {
+        let dir = red_page("zoom");
+        let mut preview = Preview::new(Picker::halfblocks());
+        preview.load(dir.clone()).unwrap();
+        assert_eq!((preview.zoom_percent(), preview.ppi()), (100, None));
+        assert!(preview.zoom_step(true));
+        assert!(preview.zoom_step(true));
+        assert_eq!((preview.zoom_percent(), preview.ppi()), (200, Some(288)));
+        assert!(preview.zoom_step(true));
+        assert!(!preview.zoom_step(true), "300% is the last step");
+        assert_eq!(preview.zoom_percent(), 300);
+        preview.pan_by(1, 1);
+        assert!(preview.zoom_fit());
+        assert_eq!((preview.zoom_percent(), preview.pan()), (100, (0.0, 0.0)));
+        assert!(!preview.zoom_step(false), "100% is the first step");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_arrow_keys_move_the_view_only_when_zoomed_and_stay_on_the_page() {
+        let dir = red_page("pan");
+        let mut preview = Preview::new(Picker::halfblocks());
+        preview.load(dir.clone()).unwrap();
+        preview.pan_by(1, 1);
+        assert_eq!(preview.pan(), (0.0, 0.0), "a whole page has nowhere to go");
+        preview.zoom_step(true);
+        preview.pan_by(0, 1);
+        assert_eq!(preview.pan(), (0.0, 0.25));
+        preview.pan_to_edge(true);
+        assert_eq!(preview.pan().1, 1.0);
+        preview.pan_by(0, 1);
+        assert_eq!(preview.pan().1, 1.0, "the bottom is the end");
+        preview.pan_to_edge(false);
+        assert_eq!(preview.pan().1, 0.0);
+        // A new page keeps the zoom and the place.
+        preview.pan_by(1, 0);
+        let again = red_page("pan2");
+        preview.load(again.clone()).unwrap();
+        assert_eq!((preview.zoom_percent(), preview.pan()), (150, (0.25, 0.0)));
+        fs::remove_dir_all(again).unwrap();
+        fs::remove_dir_all(dir).ok();
     }
 }

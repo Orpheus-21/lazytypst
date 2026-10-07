@@ -187,6 +187,8 @@ pub struct Editor {
     last_edit: Option<Instant>,
     /// Text that the user copied or cut. The main loop sends it to the system clipboard. See `take_clipboard`.
     clipboard: Option<String>,
+    /// True while the preview fills the screen and the text area is hidden. See `full_key`.
+    full: bool,
     /// The prompt `Search:` while it is open. It takes every key. See `search_key`.
     search: Option<TextArea<'static>>,
     /// The text of the last search, for the next prompt.
@@ -246,6 +248,7 @@ impl Editor {
             words: 0,
             colors: colors_wanted(),
             paused: false,
+            full: false,
             search: None,
             last_search: String::new(),
             close_armed: false,
@@ -362,6 +365,80 @@ impl Editor {
         }
     }
 
+    /// Handles `Alt-Down`, `Alt-Up`, `Alt-Home`, and `Alt-End`: they change the page. Returns true if the key
+    /// was one of them.
+    ///
+    /// Alt with an arrow key arrives as one escape sequence. Alt with a letter arrives as Esc and the
+    /// letter, so a fast Esc and n looked like Alt-n.
+    /// A page turn renders the new page with a new compile. It does not save: the file on disk is what the
+    /// compile reads, and a refused save (a file that another program changed) must not stop the turn.
+    /// The old page stays on screen until the new page is ready. The user's choice ends a recovery.
+    fn page_key(&mut self, key: KeyEvent) -> bool {
+        if !key.modifiers.contains(KeyModifiers::ALT) {
+            return false;
+        }
+        let changed = match key.code {
+            KeyCode::Down | KeyCode::Up => self.preview.turn(key.code == KeyCode::Down),
+            KeyCode::Home | KeyCode::End => self.preview.turn_to(key.code == KeyCode::End),
+            _ => return false,
+        };
+        if changed {
+            self.recover = None;
+            self.start_compile();
+        }
+        true
+    }
+
+    /// Handles a key while the preview fills the screen. Typing does nothing here, so no text changes by
+    /// accident. `F11` or `Esc` brings the editor back, and the page keys work as always. `+` and `-` zoom,
+    /// `0` shows the whole page, and the arrow keys, `Home`, and `End` move the view of a zoomed page.
+    fn full_key(&mut self, key: KeyEvent) -> Action {
+        let plain = !key.modifiers.contains(KeyModifiers::ALT);
+        let zoomed = match key.code {
+            KeyCode::F(11) | KeyCode::Esc => {
+                self.full = false;
+                return Action::Stay;
+            }
+            KeyCode::F(1) => return Action::Help,
+            KeyCode::Char('+' | '=') => self.preview.zoom_step(true),
+            KeyCode::Char('-') => self.preview.zoom_step(false),
+            KeyCode::Char('0') => self.preview.zoom_fit(),
+            KeyCode::Left if plain => {
+                self.preview.pan_by(-1, 0);
+                false
+            }
+            KeyCode::Right if plain => {
+                self.preview.pan_by(1, 0);
+                false
+            }
+            KeyCode::Up if plain => {
+                self.preview.pan_by(0, -1);
+                false
+            }
+            KeyCode::Down if plain => {
+                self.preview.pan_by(0, 1);
+                false
+            }
+            KeyCode::Home if plain => {
+                self.preview.pan_to_edge(false);
+                false
+            }
+            KeyCode::End if plain => {
+                self.preview.pan_to_edge(true);
+                false
+            }
+            _ => {
+                self.page_key(key);
+                false
+            }
+        };
+        if zoomed {
+            // The page needs another resolution, so a compile renders it again.
+            self.start_compile();
+        }
+        Action::Stay
+    }
+
     /// Handles a key while the prompt `Search:` is open. The text of the prompt is a regular expression.
     /// The matches show while you type. `Enter` or `Ctrl-F` moves the cursor to the next match, and the
     /// search wraps at the end of the file. `Esc` closes the prompt and keeps the cursor.
@@ -404,6 +481,13 @@ impl Editor {
             self.search_key(key);
             return Action::Stay;
         }
+        if self.full {
+            return self.full_key(key);
+        }
+        if key.code == KeyCode::F(11) {
+            self.full = true;
+            return Action::Stay;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('f') {
             let mut prompt = TextArea::new(vec![self.last_search.clone()]);
@@ -442,26 +526,7 @@ impl Editor {
                 self.exported = None;
                 self.message = "Exporting the PDF...".into();
             }
-        } else if key.modifiers.contains(KeyModifiers::ALT)
-            && matches!(key.code, KeyCode::Down | KeyCode::Up)
-        {
-            // Alt with an arrow key arrives as one escape sequence. Alt with a letter arrives as Esc and
-            // the letter, so a fast Esc and n looked like Alt-n.
-            // A page turn renders the new page with a new compile. It does not save: the file on disk is
-            // what the compile reads, and a refused save (a file that another program changed) must not
-            // stop the turn. The old page stays on screen until the new page is ready.
-            if self.preview.turn(key.code == KeyCode::Down) {
-                self.recover = None; // the user's choice wins
-                self.start_compile();
-            }
-        } else if key.modifiers.contains(KeyModifiers::ALT)
-            && matches!(key.code, KeyCode::Home | KeyCode::End)
-        {
-            // The same rules as for a page turn: no save, and the user's choice ends a recovery.
-            if self.preview.turn_to(key.code == KeyCode::End) {
-                self.recover = None;
-                self.start_compile();
-            }
+        } else if self.page_key(key) {
         } else if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('q')) {
             let quit = key.code != KeyCode::Esc;
             if armed || self.save(false) {
@@ -560,11 +625,12 @@ impl Editor {
         self.stop_compile();
         let target = self.compile_target().to_path_buf();
         let dir = compile::next_dir(&self.pages_root);
-        self.job = Some(Job::start(
+        self.job = Some(Job::start_ppi(
             &target,
             &self.root,
             dir,
             self.preview.wanted_page(),
+            self.preview.ppi(),
         ));
     }
 
@@ -786,6 +852,21 @@ impl Editor {
     pub fn draw(&mut self, frame: &mut Frame) {
         let [main, status] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+        if self.full {
+            self.preview.draw(frame, main);
+            let zoom = format!("{}%", self.preview.zoom_percent());
+            let width = u16::try_from(zoom.len() + 1).unwrap_or(u16::MAX);
+            let [hint, zoom_area] =
+                Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(status);
+            frame.render_widget(
+                Paragraph::new(
+                    "F11 back to editor  Alt-Up/Down page  + - 0 zoom  arrows move the view",
+                ),
+                hint,
+            );
+            frame.render_widget(Paragraph::new(zoom).alignment(Alignment::Right), zoom_area);
+            return;
+        }
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(main);
@@ -1799,6 +1880,110 @@ mod tests {
         type_in_search(&mut editor, "abc");
         assert_eq!(editor.textarea.lines(), ["text"]);
         assert!(!editor.dirty);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// Draws the editor on a `width` by 20 screen and returns the rows.
+    fn rows_at(editor: &mut Editor, width: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..20)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn f11_shows_the_preview_on_the_full_width_and_the_next_f11_shows_the_layout_again() {
+        let path = temp_file("full", "hello text\n");
+        let mut editor = open(&path);
+        let normal = rows_at(&mut editor, 100);
+        assert!(normal[0].contains("doc.typ"), "{}", normal[0]);
+        assert!(normal[0].contains("Preview"), "{}", normal[0]);
+        assert!(
+            normal[0].find("Preview") > Some(40),
+            "the preview is the right half"
+        );
+
+        editor.handle_key(key(KeyCode::F(11)));
+        let full = rows_at(&mut editor, 100);
+        assert!(full[0].starts_with("┌Preview"), "{}", full[0]);
+        assert!(
+            !full.iter().any(|row| row.contains("hello text")),
+            "the text is hidden"
+        );
+        assert!(full[19].contains("F11 back to editor"), "{}", full[19]);
+        assert!(full[19].trim_end().ends_with("100%"), "{}", full[19]);
+
+        editor.handle_key(key(KeyCode::F(11)));
+        assert_eq!(rows_at(&mut editor, 100), normal);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn typing_does_nothing_in_the_full_preview_and_esc_goes_back_to_the_editor_not_the_list() {
+        let path = temp_file("fulltype", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::F(11)));
+        for letter in "abc".chars() {
+            editor.handle_key(key(KeyCode::Char(letter)));
+        }
+        editor.handle_key(ctrl('x'));
+        assert_eq!(editor.textarea.lines(), ["text"]);
+        assert!(!editor.dirty);
+        assert!(matches!(editor.handle_key(key(KeyCode::Esc)), Action::Stay));
+        assert!(!editor.full, "Esc shows the editor again");
+        assert!(matches!(
+            editor.handle_key(key(KeyCode::Esc)),
+            Action::Close
+        ));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_page_keys_work_in_the_full_preview() {
+        let path = temp_file("fullpages", "= One\n#pagebreak()\n= Two\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        editor.handle_key(key(KeyCode::F(11)));
+        editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+        assert_eq!(editor.preview.wanted_page(), 2);
+        editor.stop_compile();
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn plus_zooms_a_compile_starts_at_the_new_resolution_and_zero_fits_the_page() {
+        let path = temp_file("fullzoom", "= One\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        editor.handle_key(key(KeyCode::F(11)));
+        editor.handle_key(key(KeyCode::Char('+')));
+        editor.handle_key(key(KeyCode::Char('+')));
+        assert_eq!(editor.preview.zoom_percent(), 200);
+        assert!(editor.job.is_some(), "the new zoom needs a new compile");
+        wait_for_report(&mut editor);
+        let rows = rows_at(&mut editor, 100);
+        assert!(rows[0].contains("Preview 1/1 200%"), "{}", rows[0]);
+        assert!(rows[19].trim_end().ends_with("200%"), "{}", rows[19]);
+
+        editor.handle_key(key(KeyCode::Down));
+        assert_eq!(editor.preview.pan(), (0.0, 0.25));
+        // A new compile keeps the zoom and the place. Typing is off in the full preview.
+        editor.handle_key(key(KeyCode::F(11)));
+        editor.handle_key(ctrl('b'));
+        wait_for_report(&mut editor);
+        assert_eq!(editor.preview.zoom_percent(), 200);
+        assert_eq!(editor.preview.pan(), (0.0, 0.25));
+
+        editor.handle_key(key(KeyCode::F(11)));
+        editor.handle_key(key(KeyCode::Char('0')));
+        assert_eq!(editor.preview.zoom_percent(), 100);
+        wait_for_report(&mut editor);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
