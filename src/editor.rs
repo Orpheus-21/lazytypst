@@ -27,9 +27,24 @@ const PANE_HEIGHT: u16 = 6;
 /// The time without a key after which the editor saves and compiles.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
+/// How often the editor looks at the modification time of the file while the buffer has no edits.
+const WATCH_EVERY: Duration = Duration::from_secs(1);
 const CONFLICT: &str = "The file changed on disk. Ctrl-S overwrites it with this text.";
 
 /// The modification time of the file, or `None` if the file cannot be read.
+/// A text area with the text and the settings of the editor.
+fn new_textarea(text: &str) -> TextArea<'static> {
+    let mut textarea = TextArea::new(text.lines().map(String::from).collect());
+    textarea.set_cursor_line_style(Style::default());
+    // A long line wraps on screen, at a word if possible. The file keeps the line as one line.
+    textarea.set_wrap_mode(WrapMode::WordOrGlyph);
+    // Typst code uses 2 spaces for each level. Tab inserts spaces: it never makes a tab character.
+    textarea.set_tab_length(2);
+    // Line numbers help with the error lines of Typst. A dim style keeps them from competing with the text.
+    textarea.set_line_number_style(Style::new().add_modifier(Modifier::DIM));
+    textarea
+}
+
 fn disk_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
@@ -146,6 +161,8 @@ pub struct Editor {
     conflict: bool,
     /// The time of the last edit that no save has covered yet.
     last_edit: Option<Instant>,
+    /// The time of the last look at the file on disk. See `watch_file`.
+    last_watch: Option<Instant>,
     /// True after an Esc that could not save the text. A second Esc closes without a save.
     close_armed: bool,
     message: String,
@@ -172,15 +189,7 @@ impl Editor {
         main: Option<PathBuf>,
         picker: Picker,
     ) -> io::Result<Self> {
-        let text = fs::read_to_string(&path)?;
-        let mut textarea = TextArea::new(text.lines().map(String::from).collect());
-        textarea.set_cursor_line_style(Style::default());
-        // A long line wraps on screen, at a word if possible. The file keeps the line as one line.
-        textarea.set_wrap_mode(WrapMode::WordOrGlyph);
-        // Typst code uses 2 spaces for each level. Tab inserts spaces: it never makes a tab character.
-        textarea.set_tab_length(2);
-        // Line numbers help with the error lines of Typst. A dim style keeps them from competing with the text.
-        textarea.set_line_number_style(Style::new().add_modifier(Modifier::DIM));
+        let textarea = new_textarea(&fs::read_to_string(&path)?);
         Ok(Self {
             disk_time: disk_time(&path),
             conflict: false,
@@ -190,6 +199,7 @@ impl Editor {
             textarea,
             dirty: false,
             last_edit: None,
+            last_watch: None,
             close_armed: false,
             message: String::new(),
             pages_root: compile::out_dir(),
@@ -377,9 +387,45 @@ impl Editor {
             self.save_and_compile();
             changed = true;
         }
+        changed |= self.watch_file(now);
         changed |= self.poll_compile();
         changed |= self.poll_export();
         changed
+    }
+
+    /// While the buffer has no edits, looks about once a second at the file on disk. If another program
+    /// changed it, loads the new text and starts a compile. The cursor keeps its line, or goes to the
+    /// last line if the file got shorter. With edits, the buffer stays: `save` shows the conflict.
+    /// Returns true when the screen must redraw.
+    fn watch_file(&mut self, now: Instant) -> bool {
+        if self.dirty
+            || self
+                .last_watch
+                .is_some_and(|last| now.saturating_duration_since(last) < WATCH_EVERY)
+        {
+            return false;
+        }
+        self.last_watch = Some(now);
+        let time = disk_time(&self.path);
+        if time == self.disk_time {
+            return false;
+        }
+        self.disk_time = time;
+        if time.is_none() {
+            self.message = "The file is gone. Ctrl-S writes it again.".into();
+            return true;
+        }
+        match fs::read_to_string(&self.path) {
+            Ok(text) => {
+                let place = self.cursor_position();
+                self.textarea = new_textarea(&text);
+                self.set_cursor_position(place);
+                self.message = "Loaded the change from disk".into();
+                self.start_compile();
+            }
+            Err(err) => self.message = format!("Cannot read the file: {err}"),
+        }
+        true
     }
 
     /// Takes the report of a finished compile. Returns true when the screen must redraw.
@@ -990,6 +1036,94 @@ mod tests {
             Action::Close
         ));
         assert_eq!(fs::read_to_string(&path).unwrap(), "Xtext\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// Writes the file and gives it a modification time that differs from the old one.
+    fn change_outside(path: &Path, text: &str, seconds: u64) {
+        fs::write(path, text).unwrap();
+        let file = fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(SystemTime::now() + Duration::from_secs(seconds))
+            .unwrap();
+    }
+
+    #[test]
+    fn an_outside_change_loads_without_edits_and_keeps_the_line() {
+        let path = temp_file("watch", "= One\nline two\nline three\n");
+        let mut editor = open(&path);
+        editor.textarea.move_cursor(CursorMove::Jump(2, 3));
+        change_outside(&path, "= New\nb\nc\nd\n", 5);
+
+        assert!(editor.tick(Instant::now() + Duration::from_secs(2)));
+        assert_eq!(editor.textarea.lines(), ["= New", "b", "c", "d"]);
+        assert_eq!(
+            editor.textarea.cursor(),
+            (2, 1),
+            "the line stays, the column fits"
+        );
+        assert!(editor.job.is_some(), "the change starts a compile");
+        assert!(!editor.dirty);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_shorter_file_puts_the_cursor_on_the_last_line() {
+        let path = temp_file("watchshort", "a\nb\nc\n");
+        let mut editor = open(&path);
+        editor.textarea.move_cursor(CursorMove::Jump(2, 0));
+        change_outside(&path, "x\n", 5);
+
+        editor.tick(Instant::now() + Duration::from_secs(2));
+        assert_eq!(editor.textarea.lines(), ["x"]);
+        assert_eq!(editor.textarea.cursor().0, 0);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn an_outside_change_does_not_replace_a_buffer_with_edits() {
+        let path = temp_file("watchdirty", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        change_outside(&path, "outside\n", 5);
+
+        editor.tick(Instant::now() + Duration::from_secs(2));
+        assert_eq!(editor.textarea.lines(), ["Xtext"]);
+        assert!(editor.dirty);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_file_is_checked_about_once_a_second() {
+        let path = temp_file("watchrate", "a\n");
+        let mut editor = open(&path);
+        let start = Instant::now();
+        editor.tick(start);
+        change_outside(&path, "b\n", 5);
+
+        editor.tick(start + Duration::from_millis(500));
+        assert_eq!(editor.textarea.lines(), ["a"], "too soon to look again");
+        editor.tick(start + Duration::from_millis(1100));
+        assert_eq!(editor.textarea.lines(), ["b"]);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_file_is_reported_once_and_does_not_crash() {
+        let path = temp_file("watchgone", "text\n");
+        let mut editor = open(&path);
+        fs::remove_file(&path).unwrap();
+
+        assert!(editor.tick(Instant::now() + Duration::from_secs(2)));
+        assert!(editor.message.contains("gone"), "{}", editor.message);
+        assert!(
+            !editor.tick(Instant::now() + Duration::from_secs(4)),
+            "no repeat"
+        );
+        assert_eq!(editor.textarea.lines(), ["text"], "the buffer stays");
+        // The file comes back: the editor loads it.
+        fs::write(&path, "back\n").unwrap();
+        editor.tick(Instant::now() + Duration::from_secs(6));
+        assert_eq!(editor.textarea.lines(), ["back"]);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
