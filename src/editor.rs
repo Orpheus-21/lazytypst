@@ -250,6 +250,29 @@ impl Editor {
         }
     }
 
+    /// Opens the last exported PDF with `program`. The program runs in the background with no input and
+    /// no output, so it cannot draw on the screen of the editor.
+    fn open_pdf(&mut self, program: &str) {
+        let Some(pdf) = &self.exported else {
+            self.message = "No PDF yet. Press Ctrl-E to export one.".into();
+            return;
+        };
+        let spawned = std::process::Command::new(program)
+            .arg(pdf)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        self.message = match spawned {
+            Ok(mut child) => {
+                // The thread reaps the process, so it does not stay as a zombie.
+                std::thread::spawn(move || child.wait());
+                format!("Opening {}", pdf.display())
+            }
+            Err(err) => format!("Cannot start {program}: {err}"),
+        };
+    }
+
     /// The text that the user copied since the last call, for the system clipboard.
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard.take()
@@ -292,6 +315,8 @@ impl Editor {
             self.save_and_compile();
         } else if ctrl && key.code == KeyCode::Char('g') {
             self.go_to_first_error();
+        } else if ctrl && key.code == KeyCode::Char('o') {
+            self.open_pdf("xdg-open");
         } else if ctrl && key.code == KeyCode::Char('e') {
             if self.save(false) {
                 // The new export replaces the old export. Dropping the old export kills its process.
@@ -1339,6 +1364,34 @@ mod tests {
         let mut editor = open(&path);
         editor.handle_key(ctrl('c'));
         assert_eq!(editor.take_clipboard(), None);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_o_before_an_export_says_so() {
+        let path = temp_file("openpdf", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('o'));
+        assert!(editor.message.contains("No PDF yet"), "{}", editor.message);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_viewer_that_cannot_start_shows_an_error_and_a_viewer_that_starts_shows_the_pdf() {
+        let path = temp_file("openpdf2", "text\n");
+        let mut editor = open(&path);
+        editor.exported = Some(path.with_extension("pdf"));
+        editor.open_pdf("lazytypst-no-such-viewer");
+        assert!(
+            editor
+                .message
+                .starts_with("Cannot start lazytypst-no-such-viewer"),
+            "{}",
+            editor.message
+        );
+        editor.open_pdf("true");
+        assert!(editor.message.starts_with("Opening "), "{}", editor.message);
+        assert!(editor.message.ends_with("doc.pdf"), "{}", editor.message);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

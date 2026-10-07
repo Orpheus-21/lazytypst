@@ -108,6 +108,7 @@ Keys in the editor:
   Ctrl-B         Save and compile the file.
   Ctrl-E         Save the file and export a PDF next to it.
   Ctrl-G         Go to the first error of the last compile.
+  Ctrl-O         Open the last exported PDF in the system viewer (xdg-open).
   Alt-Down       Show the next page.
   Alt-Up         Show the previous page.
   Alt-Home       Show the first page.
