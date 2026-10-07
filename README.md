@@ -135,6 +135,10 @@ Save rules:
 - A save writes the text to a hidden temp file next to the file. Then it renames the temp file over the file. A crash during a save leaves the old text or the new text, never a cut file. A symlink stays a symlink, and the permissions stay. A hard link to the file keeps the old text.
 - A save writes the text with LF line ends and one final newline. A file with CRLF line ends changes to LF when you edit it.
 
+## Colors
+
+The program honors the variable `NO_COLOR` (see https://no-color.org/). If `NO_COLOR` is set and not empty, the program uses no color for text and borders. An error line in the compile pane is bold, and a warning is plain. The title of the pane still says the state, for example `Compile (running)` or `Compile: 2 errors`. The file list uses reverse video for the selected file. The page preview is an image, and it keeps its colors. With `NO_COLOR` unset or empty, an error is red, a warning is yellow, and the border of the pane is green, red, or yellow.
+
 ## How it works
 
 - `src/browser.rs` finds the `.typ` files. `src/newfile.rs` checks the name of a new file and makes it.
