@@ -360,6 +360,17 @@ impl Editor {
         self.start_compile();
     }
 
+    /// Shows `text` in the status line until the next key.
+    pub fn say(&mut self, text: impl Into<String>) {
+        self.message = text.into();
+    }
+
+    /// True while a compile runs, for a test.
+    #[cfg(test)]
+    pub fn compiling(&self) -> bool {
+        self.job.is_some()
+    }
+
     /// The page that the preview shows or waits for, counted from 1.
     pub fn page(&self) -> usize {
         self.preview.wanted_page()

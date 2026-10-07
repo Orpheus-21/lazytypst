@@ -77,6 +77,8 @@ struct App {
     external: Option<(Vec<String>, PathBuf)>,
     /// The modification time of each file in the list. See `read_times`.
     times: HashMap<PathBuf, SystemTime>,
+    /// The links of the project that point outside it. See `browser::links_outside`.
+    outside_links: Vec<PathBuf>,
     /// True when the list shows the newest file first. False sorts by path.
     newest_first: bool,
     /// The prompt for a new file name, or for the filter. While it is open, it takes every key.
@@ -314,11 +316,13 @@ impl App {
             export: None,
             external: None,
             times: HashMap::new(),
+            outside_links: Vec::new(),
             newest_first: false,
             editor: None,
             help: None,
         };
         app.read_times();
+        app.outside_links = browser::links_outside(&app.root);
         app
     }
 
@@ -366,6 +370,7 @@ impl App {
         self.status = format!("Read the folder again: {} files", files.len());
         self.all_files = files;
         self.read_times();
+        self.outside_links = browser::links_outside(&self.root);
         self.set_filter(self.filter.clone()); // keeps the filter and the selection
         if self
             .main_file
@@ -418,15 +423,25 @@ impl App {
                 if let Some(place) = self.cursors.get(editor.path()) {
                     editor.set_cursor_position(*place);
                 }
-                // The preview shows at once: a compile starts, on the saved page if there is one.
-                match self
-                    .pages
-                    .get(editor.path())
-                    .copied()
-                    .filter(|page| *page > 1)
-                {
-                    Some(page) => editor.show_page(page),
-                    None => editor.compile_now(),
+                if let Some(first) = self.outside_links.first() {
+                    // Typst follows a link, so a document can read a file outside the project, and the
+                    // file shows in the preview. The user decides: Ctrl-B, or the first edit, compiles.
+                    editor.say(format!(
+                        "{} link(s) point outside the project, for example {}. No compile starts. Ctrl-B compiles.",
+                        self.outside_links.len(),
+                        first.display()
+                    ));
+                } else {
+                    // The preview shows at once: a compile starts, on the saved page if there is one.
+                    match self
+                        .pages
+                        .get(editor.path())
+                        .copied()
+                        .filter(|page| *page > 1)
+                    {
+                        Some(page) => editor.show_page(page),
+                        None => editor.compile_now(),
+                    }
                 }
                 self.editor = Some(editor);
                 String::new()
@@ -2588,6 +2603,40 @@ mod tests {
                 entry.keys
             );
         }
+    }
+
+    #[test]
+    fn a_project_with_a_link_that_leaves_it_starts_no_compile_at_open_and_says_so() {
+        let mut app = app("outsidelink");
+        let target = std::env::temp_dir().join(format!("lazytypst-secret-{}", std::process::id()));
+        fs::write(&target, "secret").unwrap();
+        std::os::unix::fs::symlink(&target, app.root.join("s.txt")).unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.outside_links, [PathBuf::from("s.txt")]);
+        press(&mut app, KeyCode::Enter);
+        let editor = app.editor.as_ref().unwrap();
+        assert!(!editor.compiling(), "no compile at open");
+        assert!(
+            screen(&mut app).contains("point outside the project"),
+            "{}",
+            screen(&mut app)
+        );
+        // Ctrl-B still compiles.
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('b'),
+            ratatui::crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(app.editor.as_ref().unwrap().compiling());
+        fs::remove_file(target).unwrap();
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_project_without_such_a_link_compiles_at_open() {
+        let mut app = app("insidelinks");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editor.as_ref().unwrap().compiling());
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[test]

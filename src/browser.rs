@@ -49,6 +49,64 @@ fn walk(
     Ok(())
 }
 
+/// How many entries `links_outside` looks at, and how deep. A project of a normal size is far below.
+const SCAN_LIMIT: usize = 50_000;
+const SCAN_DEPTH: usize = 16;
+
+/// The links in the project `root` that point at a file or a folder outside it, as paths relative to `root`.
+/// Typst follows a link, so a document of the project can read such a target (`#read("link")`). The target
+/// then shows in the preview and in a PDF. A link that points nowhere is not listed. The scan does not enter
+/// a linked folder and skips `.git`.
+pub fn links_outside(root: &Path) -> Vec<PathBuf> {
+    let Ok(canonical_root) = fs::canonicalize(root) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let mut left = SCAN_LIMIT;
+    scan_links(
+        root,
+        &canonical_root,
+        Path::new(""),
+        SCAN_DEPTH,
+        &mut left,
+        &mut found,
+    );
+    found.sort();
+    found
+}
+
+fn scan_links(
+    root: &Path,
+    canonical_root: &Path,
+    rel: &Path,
+    depth_left: usize,
+    left: &mut usize,
+    found: &mut Vec<PathBuf>,
+) {
+    let Ok(entries) = fs::read_dir(root.join(rel)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if *left == 0 {
+            return;
+        }
+        *left -= 1;
+        let path = rel.join(entry.file_name());
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            let leaves = fs::canonicalize(root.join(&path))
+                .is_ok_and(|target| !target.starts_with(canonical_root));
+            if leaves {
+                found.push(path);
+            }
+        } else if kind.is_dir() && depth_left > 0 && entry.file_name() != ".git" {
+            scan_links(root, canonical_root, &path, depth_left - 1, left, found);
+        }
+    }
+}
+
 /// True if the link `path` points at a regular file inside `canonical_root`.
 fn link_stays_inside(canonical_root: &Path, path: &Path) -> bool {
     fs::canonicalize(path)
@@ -121,5 +179,33 @@ mod tests {
             .map(PathBuf::from)
             .collect();
         assert_eq!(found, expected);
+    }
+    #[test]
+    fn links_outside_lists_only_links_that_leave_the_project() {
+        let base = std::env::temp_dir().join(format!("lazytypst-outside-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("project");
+        fs::create_dir_all(root.join("sub/deeper")).unwrap();
+        fs::create_dir_all(base.join("elsewhere")).unwrap();
+        fs::write(base.join("secret.txt"), "x").unwrap();
+        fs::write(root.join("real.txt"), "x").unwrap();
+        let link = |target: &Path, name: &str| {
+            std::os::unix::fs::symlink(target, root.join(name)).unwrap();
+        };
+        link(&base.join("secret.txt"), "s.txt");
+        link(&base.join("elsewhere"), "folder");
+        link(&base.join("secret.txt"), "sub/deeper/nested.txt");
+        link(&root.join("real.txt"), "inside.txt");
+        link(Path::new("real.txt"), "relative.txt");
+        link(Path::new("/no/such/file"), "dangling.txt");
+
+        let found = links_outside(&root);
+        fs::remove_dir_all(&base).unwrap();
+        let expected: Vec<PathBuf> = ["folder", "s.txt", "sub/deeper/nested.txt"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        assert_eq!(found, expected);
+        assert!(links_outside(Path::new("/no/such/folder")).is_empty());
     }
 }
