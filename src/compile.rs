@@ -266,16 +266,60 @@ fn program_from(value: Option<std::ffi::OsString>) -> String {
     )
 }
 
+/// How long a compile or an export may run. A document can take very long, or an endless time, and a
+/// project from the internet is not trusted. Typst then stops, and the report says why.
+const TIMEOUT: Duration = Duration::from_secs(60);
+/// The most that Typst may allocate, in bytes of address space. A page of 500 cm by 500 cm at 432 pixels
+/// per inch needs 29 GB, and that can stop the whole desktop.
+const MEMORY_LIMIT: u64 = 8 << 30;
+/// The most bytes of the error text that the program keeps. The program reads the rest and drops it.
+const STDERR_LIMIT: usize = 1 << 20;
+
+/// The command that runs `program`. If the `prlimit` program of util-linux is in `PATH`, it starts
+/// `program` with a limit on the memory (`prlimit` runs `program` in its own process, so the job
+/// that kills the process kills Typst too). Else `program` runs without a limit.
+fn limited_command(program: &str) -> Command {
+    match (find_in_path("prlimit"), find_in_path(program)) {
+        (Some(prlimit), Some(program)) => {
+            let mut command = Command::new(prlimit);
+            command
+                .arg(format!("--as={MEMORY_LIMIT}"))
+                .arg("--")
+                .arg(program);
+            command
+        }
+        _ => Command::new(program),
+    }
+}
+
+/// The path of the program `name`: `name` itself if it has a slash and it is a file, or else the first
+/// file with that name in a folder of `PATH`.
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    if name.contains('/') {
+        return Path::new(name).is_file().then(|| PathBuf::from(name));
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+
 /// The version line of the Typst program. See `version_of` and `typst_program`.
 pub fn typst_version() -> io::Result<String> {
     version_of(&typst_program())
 }
+
+static NEXT_EXPORT: AtomicUsize = AtomicUsize::new(0);
 
 /// A running command. Dropping the job kills the process, so a new job can replace an old one.
 pub struct Job {
     state: State,
     /// What the command writes: a folder of PNG pages, or one PDF file.
     output: PathBuf,
+    /// For a PDF export: the temp file that Typst writes, and the PDF that replaces it at the end.
+    /// Typst follows a symlink at the path that it writes. A project can hold a link such as
+    /// `report.pdf` that points at another file of the user. So Typst writes a new file with a new name,
+    /// and `rename` then replaces the link itself and never the file that the link points at.
+    export: Option<(PathBuf, PathBuf)>,
 }
 
 enum State {
@@ -285,6 +329,8 @@ enum State {
     Running {
         child: Child,
         stderr: Receiver<(Vec<u8>, Duration)>,
+        started: Instant,
+        timeout: Duration,
     },
 }
 
@@ -317,7 +363,7 @@ impl Job {
         if let Err(err) = fs::create_dir_all(&dir) {
             return Job::failed(format!("Cannot make {}: {err}", dir.display()), dir);
         }
-        let mut command = Command::new(program);
+        let mut command = limited_command(program);
         command
             .current_dir(root)
             .args([
@@ -346,7 +392,16 @@ impl Job {
 
     /// `start_pdf` with the program that runs Typst.
     fn start_pdf_with(program: &str, file: &Path, root: &Path, pdf: PathBuf) -> Job {
-        let mut command = Command::new(program);
+        // Typst writes a new file with a new name. The end of the job renames it onto `pdf`. See `Job::export`.
+        let tmp = pdf.with_file_name(format!(
+            ".lazytypst-{}-{}.pdf.tmp",
+            std::process::id(),
+            NEXT_EXPORT.fetch_add(1, Ordering::Relaxed)
+        ));
+        if fs::symlink_metadata(&tmp).is_ok() {
+            return Job::failed(format!("{} exists already", tmp.display()), pdf);
+        }
+        let mut command = limited_command(program);
         command
             .current_dir(root)
             .args([
@@ -359,11 +414,28 @@ impl Job {
             ])
             .arg(root)
             .arg(file)
-            .arg(&pdf);
-        Job::spawn(command, pdf)
+            .arg(&tmp);
+        let mut job = Job::spawn(command, pdf.clone());
+        job.export = Some((tmp, pdf));
+        job
     }
 
-    /// A job that ends at once with success and writes nothing. For tests only.
+    /// The same as `start_pdf`, with another time limit. For a test.
+    #[cfg(test)]
+    fn start_pdf_timeout(
+        program: &str,
+        file: &Path,
+        root: &Path,
+        pdf: PathBuf,
+        timeout: Duration,
+    ) -> Job {
+        let mut job = Job::start_pdf_with(program, file, root, pdf);
+        if let State::Running { timeout: limit, .. } = &mut job.state {
+            *limit = timeout;
+        }
+        job
+    }
+
     #[cfg(test)]
     pub fn ended_with_success(output: PathBuf) -> Job {
         Job::spawn(Command::new("true"), output)
@@ -378,6 +450,7 @@ impl Job {
         Job {
             state: State::Failed(Some(Report::failed(message))),
             output,
+            export: None,
         }
     }
 
@@ -398,8 +471,13 @@ impl Job {
         let mut pipe = child.stderr.take().expect("stderr is piped");
         let (tx, stderr) = mpsc::channel();
         thread::spawn(move || {
+            // The thread keeps the first bytes and reads the rest to drop it, so a full pipe never stops Typst.
             let mut bytes = Vec::new();
-            let _ = pipe.read_to_end(&mut bytes);
+            let mut chunk = [0u8; 8192];
+            while let Ok(n @ 1..) = pipe.read(&mut chunk) {
+                let keep = n.min(STDERR_LIMIT.saturating_sub(bytes.len()));
+                bytes.extend_from_slice(&chunk[..keep]);
+            }
             // The read ends when the process ends. So this is the time of the command, and not the time
             // until the main loop polls for the report.
             let elapsed = started.elapsed();
@@ -407,18 +485,61 @@ impl Job {
             let _ = tx.send((bytes, elapsed));
         });
         Job {
-            state: State::Running { child, stderr },
+            state: State::Running {
+                child,
+                stderr,
+                started,
+                timeout: TIMEOUT,
+            },
             output,
+            export: None,
         }
     }
 
-    /// Returns the report if the command has ended. Never waits.
+    /// Takes the report of the command if it has ended. Returns `None` while it runs.
+    /// A command that runs longer than the time limit is killed, and the report says so.
+    /// At the end of an export, the new PDF replaces the old file.
     pub fn try_report(&mut self) -> Option<Report> {
-        let (child, stderr) = match &mut self.state {
+        let report = self.poll()?;
+        let Some((tmp, pdf)) = self.export.take() else {
+            return Some(report);
+        };
+        if !report.ok {
+            let _ = fs::remove_file(&tmp);
+            return Some(report);
+        }
+        // `rename` replaces a symlink at `pdf` and not the file that the link points at.
+        match fs::rename(&tmp, &pdf) {
+            Ok(()) => Some(report),
+            Err(err) => {
+                let _ = fs::remove_file(&tmp);
+                Some(Report::failed(format!(
+                    "Cannot write {}: {err}",
+                    pdf.display()
+                )))
+            }
+        }
+    }
+
+    fn poll(&mut self) -> Option<Report> {
+        let (child, stderr, started, timeout) = match &mut self.state {
             State::Failed(report) => return report.take(),
-            State::Running { child, stderr } => (child, stderr),
+            State::Running {
+                child,
+                stderr,
+                started,
+                timeout,
+            } => (child, stderr, *started, *timeout),
         };
         let status = match child.try_wait() {
+            Ok(None) if started.elapsed() > timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Some(Report::failed(format!(
+                    "Typst ran for more than {} seconds, so lazytypst stopped it.",
+                    timeout.as_secs().max(1)
+                )));
+            }
             Ok(None) => return None,
             Ok(Some(status)) => status,
             Err(err) => return Some(report(Err(err), &[])),
@@ -434,6 +555,10 @@ impl Job {
 
 impl Drop for Job {
     fn drop(&mut self) {
+        if let Some((tmp, _)) = &self.export {
+            // The job ended before the rename, for example a new export replaced it.
+            let _ = fs::remove_file(tmp);
+        }
         if let State::Running { child, .. } = &mut self.state {
             // The process may have ended already. Then `kill` returns an error that does not matter.
             let _ = child.kill();
@@ -897,6 +1022,136 @@ mod tests {
         assert_eq!(program_from(None), "typst");
         assert_eq!(program_from(os("")), "typst");
         assert_eq!(program_from(os("/opt/typst-0.14")), "/opt/typst-0.14");
+    }
+
+    #[test]
+    fn an_export_replaces_a_symlink_and_never_the_file_that_it_points_at() {
+        let dir = std::env::temp_dir().join(format!("lazytypst-exportlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, "precious").unwrap();
+        fs::write(dir.join("a.typ"), "= Hi\n").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join("a.pdf")).unwrap();
+        // A dangling link must not make the target file either.
+        let outside = dir.join("never-made.txt");
+        fs::write(dir.join("b.typ"), "= Hi\n").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("b.pdf")).unwrap();
+
+        for name in ["a", "b"] {
+            let report = wait(&mut Job::start_pdf(
+                &dir.join(format!("{name}.typ")),
+                &dir,
+                dir.join(format!("{name}.pdf")),
+            ));
+            assert!(report.ok, "{:?}", report.lines);
+            let meta = fs::symlink_metadata(dir.join(format!("{name}.pdf"))).unwrap();
+            assert!(
+                meta.is_file(),
+                "{name}.pdf must be a new file and not a link"
+            );
+            assert_eq!(
+                fs::read(dir.join(format!("{name}.pdf"))).unwrap()[..4],
+                *b"%PDF"
+            );
+        }
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+        assert!(!outside.exists());
+        let stray: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().contains("lazytypst-"))
+            .collect();
+        assert!(stray.is_empty(), "no temp file stays: {stray:?}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_export_leaves_the_old_pdf_and_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("lazytypst-exportfail-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.typ"), "#nope()\n").unwrap();
+        fs::write(dir.join("a.pdf"), "old").unwrap();
+        let report = wait(&mut Job::start_pdf(
+            &dir.join("a.typ"),
+            &dir,
+            dir.join("a.pdf"),
+        ));
+        assert!(!report.ok);
+        assert_eq!(fs::read_to_string(dir.join("a.pdf")).unwrap(), "old");
+        let names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_compile_that_runs_too_long_is_stopped_and_the_report_says_so() {
+        let (program, dir) = fake_program("timeout", "sleep 30");
+        let file = dir.join("a.typ");
+        fs::write(&file, "").unwrap();
+        let mut report = None;
+        for _ in 0..50 {
+            let mut job = Job::start_pdf_timeout(
+                program.to_str().unwrap(),
+                &file,
+                &dir,
+                dir.join("a.pdf"),
+                Duration::from_millis(300),
+            );
+            let got = wait(&mut job);
+            if got.lines.iter().any(|line| line.starts_with("Cannot run")) {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            report = Some(got);
+            break;
+        }
+        let report = report.expect("the fake program must start");
+        assert!(!report.ok);
+        assert!(
+            report.lines[0].contains("ran for more than"),
+            "{:?}",
+            report.lines
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_huge_error_text_is_cut_and_never_stops_the_command() {
+        // 3 MB on stderr, in lines of 100 characters. The command must end, and the report is capped.
+        let (program, dir) = fake_program(
+            "bigerr",
+            "head -c 3000000 /dev/zero | tr '\\0' 'x' | fold -w 100 >&2; exit 1",
+        );
+        let file = dir.join("a.typ");
+        fs::write(&file, "").unwrap();
+        let mut report = None;
+        for _ in 0..50 {
+            let mut job = Job::start_pdf_timeout(
+                program.to_str().unwrap(),
+                &file,
+                &dir,
+                dir.join("a.pdf"),
+                Duration::from_secs(30),
+            );
+            let got = wait(&mut job);
+            if got.lines.iter().any(|line| line.starts_with("Cannot run")) {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            report = Some(got);
+            break;
+        }
+        let report = report.expect("the fake program must start");
+        let total: usize = report.lines.iter().map(String::len).sum();
+        assert!(total <= STDERR_LIMIT + 200, "{total}");
+        assert!(total > 100_000, "the first part is kept: {total}");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     /// A program for a test: a shell script in a new folder. Returns the path of the script and its folder.
