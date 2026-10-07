@@ -5,22 +5,22 @@ body:
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: What can the user not do, or what is slow? Say who has this problem.
+      label: "Problem"
+      description: "What can the user not do, or what is slow? Say who has this problem."
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposal
-      description: What should lazytypst do? Name the keys. Few keys and good defaults are better than settings.
+      label: "Proposal"
+      description: "What should lazytypst do? Name the keys. Few keys and good defaults are better than settings."
     validations:
       required: true
   - type: textarea
     id: criteria
     attributes:
-      label: Acceptance criteria
-      description: A list of checks that show the work is done.
+      label: "Acceptance criteria"
+      description: "A list of checks that show the work is done."
       placeholder: "- [ ] ..."
     validations:
       required: true
