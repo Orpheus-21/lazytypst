@@ -2,6 +2,8 @@
 
 lazytypst is a terminal program for Typst documents.
 
+![lazytypst in a terminal: the text of a Typst file on the left with syntax color, the compile pane under it, and the page preview on the right](docs/screenshot.png)
+
 ## Quick start
 
 1. Install lazytypst: `cargo install --locked --git https://github.com/Orpheus-21/lazytypst` (see [Install](#install)).
