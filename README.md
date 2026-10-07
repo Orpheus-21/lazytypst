@@ -227,6 +227,44 @@ lazytypst is one of several ways to work with Typst. This is how it differs from
 
 **Does lazytypst work without the internet?** Yes. Only the first compile of a document that imports a Typst package from `@preview` downloads the package. See [Fonts and packages](#fonts-and-packages).
 
+## Troubleshooting
+
+### Terminal support
+
+The page preview is an image. The terminal must have an image protocol. The program asks the terminal at start, and `lazytypst --doctor` prints the answer.
+
+| Terminal | Image method | State |
+|---|---|---|
+| Ghostty | kitty protocol | tested |
+| kitty | kitty protocol | not tested |
+| WezTerm | iTerm2 protocol, sixel, and the kitty protocol | not tested |
+| foot | sixel | not tested |
+| Konsole | not known | not tested |
+| Alacritty | none, so half blocks | not tested |
+| tmux | depends on the terminal and the settings | not tested |
+
+The program also works in a terminal with no image protocol. It then draws the page with half block characters.
+
+### The preview shows blocks
+
+The terminal has no image protocol, or the program could not read the answer of the terminal. The program then draws half blocks. Run `lazytypst --doctor`. If the line `terminal` says `half blocks`, use a terminal from the table that has an image method. Alacritty has no image protocol.
+
+### tmux
+
+tmux sits between the program and the terminal, and it can block the image data. I have not tested images in tmux. Newer versions of tmux have the option `allow-passthrough`, for example `set -g allow-passthrough on` in `~/.tmux.conf`. This fix is not tried.
+
+### Alt keys do nothing
+
+The page keys use `Alt`. Some terminals use `Alt` for their own keys, or they do not send it to the program. In Ghostty on Linux, `Alt` works. For other terminals, look for a setting that sends `Alt` as `Escape` or as the Meta key. This fix is not tried.
+
+### typst not found
+
+The program stops at start with a message that it cannot run `typst`. Install Typst (https://github.com/typst/typst#installation), and check that `typst --version` works in the same terminal. If the program is in another folder, give its path with `LAZYTYPST_TYPST`.
+
+### The program stops with a folder error at start
+
+The program makes the folder `lazytypst-<process id>` in the temporary directory, and only your user can open it. If a folder with that name exists and belongs to another user, the program stops with the message `Cannot make the folder`. It never deletes a folder of another user. The folder is safe to delete when no process with that number runs. Check with `ls /proc/<process id>`: if the command says that the file does not exist, delete the folder.
+
 ## How it works
 
 - `src/browser.rs` finds the `.typ` files. `src/newfile.rs` checks the name of a new file and makes it.
