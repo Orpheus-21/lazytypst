@@ -14,6 +14,7 @@ use ratatui::{
 };
 use ratatui_image::picker::Picker;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     compile::{self, Job, Report, Severity},
@@ -365,6 +366,45 @@ impl Editor {
         }
     }
 
+    /// How many times the text area must get `key` to move or delete one visible character (a grapheme
+    /// cluster): the length of the cluster in code points. It is 1 for any other key, at the end of a line,
+    /// and at the start of a line, where the text area joins or crosses lines.
+    fn grapheme_steps(&self, key: KeyEvent) -> usize {
+        let plain = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let forward = match key.code {
+            KeyCode::Right | KeyCode::Delete if plain => true,
+            KeyCode::Left | KeyCode::Backspace if plain => false,
+            _ => return 1,
+        };
+        let (row, column) = self.cursor_position();
+        let Some(line) = self.textarea.lines().get(row) else {
+            return 1;
+        };
+        // The character index at which each cluster starts, and the end of the line.
+        let mut starts: Vec<usize> = Vec::new();
+        let mut at = 0;
+        for cluster in line.graphemes(true) {
+            starts.push(at);
+            at += cluster.chars().count();
+        }
+        starts.push(at);
+        let steps = if forward {
+            starts
+                .iter()
+                .find(|start| **start > column)
+                .map(|end| end - column)
+        } else {
+            starts
+                .iter()
+                .rev()
+                .find(|start| **start < column)
+                .map(|start| column - start)
+        };
+        steps.unwrap_or(1).max(1)
+    }
+
     /// Handles `Alt-Down`, `Alt-Up`, `Alt-Home`, and `Alt-End`: they change the page. Returns true if the key
     /// was one of them.
     ///
@@ -544,10 +584,14 @@ impl Editor {
             let copying = ctrl
                 && matches!(key.code, KeyCode::Char('c' | 'x'))
                 && self.textarea.selection_range().is_some();
-            if self.textarea.input(key) {
-                self.dirty = true;
-                self.last_edit = Some(Instant::now());
-                self.count_words();
+            // A visible character can have many code points. The text area moves and deletes one code point
+            // for each key, so the key is repeated for the rest of the character.
+            for _ in 0..self.grapheme_steps(key) {
+                if self.textarea.input(key) {
+                    self.dirty = true;
+                    self.last_edit = Some(Instant::now());
+                    self.count_words();
+                }
             }
             if copying {
                 self.clipboard = Some(self.textarea.yank_text());
@@ -1549,7 +1593,7 @@ mod tests {
     }
 
     /// Texts in other scripts. Each has the length of the first visible character, in code points.
-    /// `Right` moves one code point, so for three of the texts it stops inside a visible character.
+    /// `Right` moves over one visible character: for these texts, that is `first` code points.
     const SCRIPTS: [(&str, &str, usize); 7] = [
         ("devanagari", "संस्कृतम्", 2),
         ("arabic", "العربية", 1),
@@ -1577,14 +1621,62 @@ mod tests {
     }
 
     #[test]
-    fn right_moves_over_one_code_point() {
-        for (name, text, _) in SCRIPTS {
+    fn right_moves_over_one_visible_character() {
+        for (name, text, first) in SCRIPTS {
             let path = temp_file(&format!("right-{name}"), &format!("{text}\n"));
             let mut editor = open(&path);
             editor.handle_key(key(KeyCode::Right));
-            assert_eq!(editor.cursor_position(), (0, 1), "{name}");
+            assert_eq!(editor.cursor_position(), (0, first), "{name}");
+            // Left goes back over the same character.
+            editor.handle_key(key(KeyCode::Left));
+            assert_eq!(editor.cursor_position(), (0, 0), "{name}: Left");
             fs::remove_dir_all(path.parent().unwrap()).unwrap();
         }
+    }
+
+    #[test]
+    fn backspace_and_delete_remove_one_visible_character() {
+        for (name, text, first) in SCRIPTS {
+            let chars = text.chars().count();
+            let path = temp_file(&format!("erase-{name}"), &format!("{text}\n"));
+            let mut editor = open(&path);
+            editor.handle_key(key(KeyCode::Delete));
+            assert_eq!(
+                editor.textarea.lines()[0].chars().count(),
+                chars - first,
+                "{name}: Delete"
+            );
+            let mut editor = open(&path);
+            editor.handle_key(key(KeyCode::End));
+            editor.handle_key(key(KeyCode::Backspace));
+            let left = editor.textarea.lines()[0].chars().count();
+            assert!(left < chars && chars - left >= 1, "{name}: Backspace");
+            assert!(text.starts_with(&editor.textarea.lines()[0]), "{name}");
+            fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn shift_right_selects_one_visible_character_and_the_arrows_still_cross_lines() {
+        let path = temp_file("shiftgraph", "e\u{301}x\nnext\n");
+        let mut editor = open(&path);
+        editor.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        editor.handle_key(ctrl('c'));
+        assert_eq!(editor.take_clipboard().as_deref(), Some("e\u{301}"));
+        editor.handle_key(key(KeyCode::End));
+        editor.handle_key(key(KeyCode::Right));
+        assert_eq!(
+            editor.cursor_position(),
+            (1, 0),
+            "Right at the end of a line"
+        );
+        editor.handle_key(key(KeyCode::Left));
+        assert_eq!(
+            editor.cursor_position(),
+            (0, 3),
+            "Left at the start of a line"
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
