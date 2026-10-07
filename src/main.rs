@@ -2568,6 +2568,26 @@ mod tests {
     }
 
     #[test]
+    fn the_website_has_each_key_of_the_help_text() {
+        let page = include_str!("../site/index.html")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&");
+        for entry in help::KEYS {
+            assert!(
+                page.contains(entry.keys),
+                "the site lacks the keys {}",
+                entry.keys
+            );
+            assert!(
+                page.contains(entry.text),
+                "the site lacks the text of {}",
+                entry.keys
+            );
+        }
+    }
+
+    #[test]
     fn a_file_that_cannot_be_read_shows_an_error_in_the_list() {
         let mut app = app("unreadable");
         fs::write(app.root.join("a.typ"), b"\xff\xfe").unwrap();

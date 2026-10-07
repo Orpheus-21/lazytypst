@@ -165,7 +165,7 @@ pub const KEYS: &[Key] = &[
     key(
         Scope::Editor,
         "F11",
-        "Show the preview on the full screen, and back. There, + and - zoom, 0 shows the whole page, and the arrow keys move the view. Typing does nothing there.",
+        "Show the preview on the full screen, and back. There, the plus key and the minus key zoom, 0 shows the whole page, and the arrow keys move the view. Typing does nothing there.",
         Some((KeyCode::F(11), NONE)),
     ),
     key(

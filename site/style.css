@@ -1,0 +1,106 @@
+/*
+  Design brief
+  Character: a small, quiet workbench for people who set type. A proof sheet, not a product page.
+  Type: Newsreader for text and headings (a text serif made for reading on screen, with real italics),
+        IBM Plex Mono for keys and commands (a plain mono that matches the terminal look).
+  Palette: warm paper ground #f6f2e9, ink #1d1b17, muted ink #645e52, rules #d9d2c1, one accent, the
+        oxblood #8c2f1f of a proofreader's pencil. Dark: the same paper at night (#16140f, #ece6d6, #e08a74).
+  Grid: one column of 38rem for prose with a margin column of 11rem at the right for keys, like the notes
+        in the margin of a proof. The screenshot and the key tables run wider than the prose.
+  Signature: marginal notes. Each part of the text has the keys that belong to it in the margin.
+*/
+:root {
+  --ground: #f6f2e9;
+  --ink: #1d1b17;
+  --muted: #645e52;
+  --rule: #d9d2c1;
+  --accent: #8c2f1f;
+  --code: #ece5d3;
+  --text: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #16140f;
+    --ink: #ece6d6;
+    --muted: #a39c8b;
+    --rule: #3a362c;
+    --accent: #e08a74;
+    --code: #1f1c15;
+  }
+}
+* { box-sizing: border-box; }
+html { font-size: 112.5%; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--text);
+  line-height: 1.55;
+}
+a { color: var(--accent); text-underline-offset: 0.18em; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.skip { position: absolute; left: -999px; }
+.skip:focus { left: 1rem; top: 1rem; background: var(--ground); padding: 0.4rem 0.7rem; z-index: 5; }
+
+header, main, footer { width: min(100% - 2rem, 62rem); margin-inline: auto; }
+
+header { padding-top: 3.2rem; }
+.name { font-family: var(--mono); font-size: 0.95rem; letter-spacing: 0.04em; color: var(--accent); margin: 0 0 0.6rem; }
+h1 {
+  font-size: clamp(2rem, 5.2vw, 3.3rem);
+  line-height: 1.08;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  margin: 0;
+  max-width: 24ch;
+}
+h1 em { font-style: italic; }
+.lede { max-width: 38rem; font-size: 1.15rem; color: var(--muted); margin: 1.1rem 0 0; }
+
+figure { margin: 2.4rem 0 0; }
+figure img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); }
+figcaption { font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; max-width: 46rem; }
+
+section { margin-top: 3.4rem; border-top: 1px solid var(--rule); padding-top: 1.1rem; }
+.grid { display: grid; grid-template-columns: minmax(0, 38rem) minmax(0, 12rem); gap: 0 3rem; }
+h2 { font-size: 1.5rem; font-weight: 500; margin: 0 0 1rem; line-height: 1.2; }
+h3 { font-family: var(--mono); font-size: 0.8rem; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin: 1.6rem 0 0.5rem; }
+p { margin: 0 0 0.9rem; }
+.margin { font-size: 0.82rem; color: var(--muted); line-height: 1.45; border-left: 1px solid var(--rule); padding-left: 0.8rem; align-self: start; }
+.margin b { display: block; font-family: var(--mono); font-weight: 500; color: var(--accent); font-size: 0.78rem; margin-bottom: 0.15rem; }
+.margin p { margin: 0 0 0.7rem; }
+
+code, kbd, pre { font-family: var(--mono); font-size: 0.82em; }
+code, kbd { background: var(--code); padding: 0.05em 0.3em; }
+pre { background: var(--code); padding: 0.8rem 1rem; overflow-x: auto; line-height: 1.5; margin: 0 0 1rem; border-left: 3px solid var(--accent); }
+pre code { background: none; padding: 0; font-size: 0.88rem; }
+
+/* The steps are the one part with another shape: large numbers, one action in each step. */
+ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; }
+ol.steps li { counter-increment: s; display: grid; grid-template-columns: 3.2rem 1fr; align-items: baseline; padding: 0.9rem 0; border-bottom: 1px solid var(--rule); }
+ol.steps li::before { content: counter(s); font-size: 2.6rem; line-height: 1; font-weight: 300; color: var(--accent); }
+ol.steps li > div { min-width: 0; }
+ol.steps li:last-child { border-bottom: 0; }
+
+dl.facts { display: grid; grid-template-columns: 11rem 1fr; gap: 0.7rem 1.4rem; margin: 0; }
+dl.facts dt { font-family: var(--mono); font-size: 0.82rem; color: var(--accent); padding-top: 0.12rem; }
+dl.facts dd { margin: 0; }
+
+.wide { width: 100%; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+caption { text-align: left; font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); padding: 1.2rem 0 0.4rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.38rem 1rem 0.38rem 0; border-top: 1px solid var(--rule); }
+th { font-family: var(--mono); font-weight: 500; font-size: 0.8rem; white-space: nowrap; width: 13rem; }
+tbody th { color: var(--ink); }
+
+footer { margin-top: 4rem; padding: 1.4rem 0 3rem; border-top: 1px solid var(--rule); font-size: 0.9rem; color: var(--muted); }
+footer a { margin-right: 1.2rem; }
+
+@media (max-width: 52rem) {
+  .grid { display: block; }
+  .margin { border-left: 0; border-top: 1px solid var(--rule); padding: 0.6rem 0 0; margin: 0.4rem 0 0; }
+  dl.facts { grid-template-columns: 1fr; gap: 0; }
+  dl.facts dd { margin-bottom: 0.8rem; }
+  th { width: auto; white-space: normal; }
+}

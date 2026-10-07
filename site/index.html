@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lazytypst, a terminal program for Typst</title>
+<meta name="description" content="lazytypst lists the .typ files of a folder, opens one in an editor, and shows the compiled page next to the text, in the terminal.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f6f2e9'/%3E%3Cpath d='M8 7h16v4h-6v14h-4V11H8z' fill='%238c2f1f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,400&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<header>
+  <p class="name">lazytypst</p>
+  <h1>Edit a Typst file in the terminal and <em>see the page</em> next to the text.</h1>
+  <p class="lede">lazytypst lists the <code>.typ</code> files of a folder, opens one in an editor, and runs the <code>typst</code> command each time you pause. The compiled page and the errors stay on the same screen.</p>
+  <figure>
+    <img src="screenshot.png" width="1600" height="992" alt="lazytypst in a terminal. On the left, the text of a Typst file with colored headings and math, and under it the compile pane that says OK in 297 ms. On the right, the compiled page with a heading, an equation, a list, and a table.">
+    <figcaption>The editor with the colored source, the compile pane, and the preview of page 1. The status line shows the word count and the cursor position.</figcaption>
+  </figure>
+</header>
+
+<main id="main">
+<section>
+  <div class="grid">
+    <div>
+      <h2>Start in three steps</h2>
+      <ol class="steps">
+        <li><div>Install it. The program needs the <code>typst</code> command in <code>PATH</code>.<pre><code>cargo install --locked --git https://github.com/Orpheus-21/lazytypst</code></pre></div></li>
+        <li><div>Start it in a folder with Typst files.<pre><code>lazytypst ~/my-typst-folder</code></pre></div></li>
+        <li><div>Select a file with <kbd>j</kbd> and <kbd>k</kbd>, press <kbd>Enter</kbd>, and type. The preview follows the text. Press <kbd>F1</kbd> to see all keys.</div></li>
+      </ol>
+    </div>
+    <aside class="margin" aria-label="Note">
+      <p><b>One file</b>A folder with exactly one <code>.typ</code> file opens that file at once.</p>
+      <p><b>Last time</b>The list selects the file that you closed last time, and the preview shows the page that was open.</p>
+    </aside>
+  </div>
+</section>
+
+<section>
+  <div class="grid">
+    <div>
+      <h2>What it does</h2>
+      <dl class="facts">
+        <dt>Browse</dt><dd>Lists the <code>.typ</code> files up to three folders deep. <kbd>/</kbd> filters the list, <kbd>s</kbd> sorts by the last change, and each line shows its age.</dd>
+        <dt>Edit</dt><dd>A text area with line numbers, wrapped lines, search, undo, and colors for headings, commands, strings, math, and comments. The status line shows an approximate word count.</dd>
+        <dt>Save</dt><dd>Saves 300 ms after your last key. It writes only when the text has edits, it refuses to overwrite a change that another program made, and it writes a temp file and renames it.</dd>
+        <dt>Compile</dt><dd>Runs <code>typst compile</code> after each save and shows the errors with their line numbers, the time, and the counts. A new compile stops the one that still runs.</dd>
+        <dt>Preview</dt><dd>Shows one page as an image, in the terminal. A page turn is one compile. The page of a book of 500 pages shows after 0.7 s in a release build. <kbd>F11</kbd> fills the screen, and <kbd>+</kbd> and <kbd>-</kbd> zoom.</dd>
+        <dt>Main file</dt><dd>Mark a main file with <kbd>m</kbd>. The compile and the export then use it, whatever chapter you edit. <kbd>Ctrl-G</kbd> opens the file of the first error at the error.</dd>
+        <dt>Export</dt><dd><kbd>Ctrl-E</kbd> writes the PDF next to the file, and <kbd>Ctrl-O</kbd> opens it. <kbd>E</kbd> in the list exports the selected file.</dd>
+      </dl>
+    </div>
+    <aside class="margin" aria-label="Note">
+      <p><b>Keys</b>Few keys, no configuration file, and <kbd>F1</kbd> lists every key.</p>
+      <p><b>Size</b>A static binary for x86_64 Linux, and a man page.</p>
+    </aside>
+  </div>
+</section>
+
+<section>
+  <div class="grid">
+    <div>
+      <h2>Install</h2>
+      <h3>With Cargo</h3>
+      <pre><code>cargo install --locked --git https://github.com/Orpheus-21/lazytypst</code></pre>
+      <p>Cargo puts the program in <code>~/.cargo/bin</code>. To update, run the command again.</p>
+      <h3>On Arch Linux</h3>
+      <p>The folder <code>packaging/aur/</code> of the repository has a <code>PKGBUILD</code> for <code>lazytypst-git</code>. Run <code>makepkg -si</code> in it. The package is not on the AUR yet.</p>
+      <h3>From a release</h3>
+      <p>The first release is not published yet. The releases page will have a static binary for x86_64 Linux and its checksum file.</p>
+      <h3>From a clone</h3>
+      <pre><code>git clone https://github.com/Orpheus-21/lazytypst.git
+cd lazytypst
+cargo build --release</code></pre>
+    </div>
+    <aside class="margin" aria-label="Note">
+      <p><b>Needs</b>Typst 0.12.0 or later (tested with 0.15.1), Rust 1.90 or later to build, and Linux.</p>
+      <p><b>Terminal</b>The page is an image. The program uses the kitty, sixel, or iTerm2 protocol when the terminal has one, and half blocks if not. Tested in Ghostty. Run <code>lazytypst --doctor</code> to see what your terminal reports.</p>
+    </aside>
+  </div>
+</section>
+
+<section>
+  <h2>All keys</h2>
+  <p>This is the text of <code>lazytypst --help</code>, and the window that <kbd>F1</kbd> opens. In that window, <kbd>Enter</kbd> on a line presses the key of that line.</p>
+  <div class="wide">
+<table>
+<caption>Keys in the file list</caption>
+<tbody>
+<tr><th scope="row">? or F1</th><td>Show this help window.</td></tr>
+<tr><th scope="row">j or Down</th><td>Select the next file.</td></tr>
+<tr><th scope="row">k or Up</th><td>Select the previous file.</td></tr>
+<tr><th scope="row">Enter</th><td>Open the selected file.</td></tr>
+<tr><th scope="row">n</th><td>Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.</td></tr>
+<tr><th scope="row">E</th><td>Export the PDF of the selected file next to it.</td></tr>
+<tr><th scope="row">e</th><td>Edit the selected file in $VISUAL or $EDITOR, then open it here.</td></tr>
+<tr><th scope="row">s</th><td>Switch the order: by path, or the newest change first.</td></tr>
+<tr><th scope="row">y</th><td>Copy the absolute path of the selected file to the system clipboard.</td></tr>
+<tr><th scope="row">/</th><td>Filter the list. Type a part of a path. Enter keeps the filter, Esc removes it.</td></tr>
+<tr><th scope="row">r</th><td>Read the folder again, to show new files and to drop deleted files.</td></tr>
+<tr><th scope="row">g or Home</th><td>Select the first file.</td></tr>
+<tr><th scope="row">G or End</th><td>Select the last file.</td></tr>
+<tr><th scope="row">m</th><td>Mark the selected file as the main file, or remove the mark. lazytypst then compiles the main file, whatever file you edit.</td></tr>
+<tr><th scope="row">q</th><td>Quit.</td></tr>
+</tbody>
+</table>
+<table>
+<caption>Keys in the editor</caption>
+<tbody>
+<tr><th scope="row">F1</th><td>Show this help window.</td></tr>
+<tr><th scope="row">Ctrl-S</th><td>Save the file.</td></tr>
+<tr><th scope="row">Ctrl-B</th><td>Save and compile the file.</td></tr>
+<tr><th scope="row">Ctrl-E</th><td>Save the file and export a PDF next to it.</td></tr>
+<tr><th scope="row">Ctrl-F</th><td>Search. Type a regular expression, then Enter or Ctrl-F for the next match. Esc closes.</td></tr>
+<tr><th scope="row">F11</th><td>Show the preview on the full screen, and back. There, the plus key and the minus key zoom, 0 shows the whole page, and the arrow keys move the view. Typing does nothing there.</td></tr>
+<tr><th scope="row">F5</th><td>Turn the live compile off or on. Autosave stays on.</td></tr>
+<tr><th scope="row">Ctrl-G</th><td>Go to the first error of the last compile.</td></tr>
+<tr><th scope="row">Ctrl-O</th><td>Open the last exported PDF in the system viewer (xdg-open).</td></tr>
+<tr><th scope="row">Alt-Down</th><td>Show the next page.</td></tr>
+<tr><th scope="row">Alt-Up</th><td>Show the previous page.</td></tr>
+<tr><th scope="row">Alt-Home</th><td>Show the first page.</td></tr>
+<tr><th scope="row">Alt-End</th><td>Show the last page.</td></tr>
+<tr><th scope="row">Esc</th><td>Save the file and go back to the file list.</td></tr>
+<tr><th scope="row">Ctrl-Q</th><td>Save the file and quit.</td></tr>
+</tbody>
+</table>
+<table>
+<caption>Editing keys in the editor</caption>
+<tbody>
+<tr><th scope="row">Ctrl-U</th><td>Undo.</td></tr>
+<tr><th scope="row">Ctrl-R</th><td>Redo.</td></tr>
+<tr><th scope="row">Shift with arrow keys</th><td>Select text.</td></tr>
+<tr><th scope="row">Ctrl-C</th><td>Copy the selection. It also goes to the system clipboard.</td></tr>
+<tr><th scope="row">Ctrl-X</th><td>Cut the selection. It also goes to the system clipboard.</td></tr>
+<tr><th scope="row">Ctrl-Y</th><td>Paste the text that the text area holds.</td></tr>
+<tr><th scope="row">Ctrl-W</th><td>Delete the word before the cursor.</td></tr>
+<tr><th scope="row">Ctrl-K</th><td>Delete to the end of the line.</td></tr>
+<tr><th scope="row">Ctrl-J</th><td>Delete to the start of the line.</td></tr>
+<tr><th scope="row">Alt-F, Alt-B</th><td>Move one word forward or back.</td></tr>
+<tr><th scope="row">Ctrl-A, End</th><td>Move to the start or the end of the line.</td></tr>
+<tr><th scope="row">Ctrl-V, Alt-V</th><td>Scroll one page down or up.</td></tr>
+<tr><th scope="row">Alt-&lt;, Alt-&gt;</th><td>Move to the first or the last line. The column stays.</td></tr>
+</tbody>
+</table>
+
+  </div>
+</section>
+
+<section>
+  <div class="grid">
+    <div>
+      <h2>Limits</h2>
+      <p>lazytypst edits one file at a time. It is not a file manager, a language server client, or a plugin host, and it has no completion. It does not replace the options of the Typst CLI with settings. See the <a href="https://github.com/Orpheus-21/lazytypst#scope">scope</a> in the README.</p>
+      <p>The tests run on Linux only. The sixel and iTerm2 protocols and terminals other than Ghostty are not tested.</p>
+    </div>
+    <aside class="margin" aria-label="Note">
+      <p><b>Variables</b><code>LAZYTYPST_TYPST</code> names another Typst program. <code>NO_COLOR</code> turns the colors off. The variables of Typst for fonts and packages work.</p>
+    </aside>
+  </div>
+</section>
+</main>
+
+<footer>
+  <a href="https://github.com/Orpheus-21/lazytypst">Source</a>
+  <a href="https://github.com/Orpheus-21/lazytypst/issues">Issues</a>
+  <a href="https://github.com/Orpheus-21/lazytypst/blob/main/LICENSE">License: GPL version 3 or later</a>
+  <a href="https://github.com/Orpheus-21/lazytypst#readme">README</a>
+</footer>
+</body>
+</html>
