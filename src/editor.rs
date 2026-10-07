@@ -1127,6 +1127,77 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
+    /// Texts in other scripts. Each has the length of the first visible character, in code points.
+    /// `Right` moves one code point, so for three of the texts it stops inside a visible character.
+    const SCRIPTS: [(&str, &str, usize); 7] = [
+        ("devanagari", "संस्कृतम्", 2),
+        ("arabic", "العربية", 1),
+        ("chinese", "中文", 1),
+        ("precomposed", "\u{e9}t\u{e9}", 1),
+        ("combining", "e\u{301}te\u{301}", 2),
+        ("math", "\u{1d465} \u{2211}", 1),
+        ("emoji", "👨\u{200d}👩\u{200d}👧\u{200d}👦", 7),
+    ];
+
+    #[test]
+    fn a_save_keeps_text_in_other_scripts_byte_for_byte() {
+        for (name, text, _) in SCRIPTS {
+            let path = temp_file(&format!("script-{name}"), &format!("{text}\n"));
+            let mut editor = open(&path);
+            editor.handle_key(key(KeyCode::Char('!')));
+            editor.handle_key(key(KeyCode::Esc));
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                format!("!{text}\n").into_bytes(),
+                "{name}"
+            );
+            fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn right_moves_over_one_code_point() {
+        for (name, text, _) in SCRIPTS {
+            let path = temp_file(&format!("right-{name}"), &format!("{text}\n"));
+            let mut editor = open(&path);
+            editor.handle_key(key(KeyCode::Right));
+            assert_eq!(editor.cursor_position(), (0, 1), "{name}");
+            fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn wrapping_keeps_text_in_other_scripts_whole() {
+        for (name, text, _) in SCRIPTS {
+            let line = format!("{text} {text} {text} {text}");
+            for width in [3, 5, 8, 20] {
+                let rows = wrap_rows(&line, width);
+                assert_eq!(
+                    rows.concat().replace(' ', ""),
+                    line.replace(' ', ""),
+                    "{name} at width {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_column_after_a_devanagari_word_is_the_column_of_typst() {
+        // Typst counts code points from 1. The cursor column counts code points from 0, plus 1 on screen.
+        let path = temp_file(
+            "script-column",
+            "\u{938}\u{902}\u{938}\u{94d}\u{915}\u{943}\u{924}\u{92e}\u{94d} #nope()\n",
+        );
+        let mut editor = open(&path);
+        editor.start_compile();
+        wait_for_report(&mut editor);
+        editor.handle_key(ctrl('g'));
+        let (row, column) = editor.cursor_position();
+        assert_eq!((row, column), (0, 10), "{}", editor.message);
+        assert!(editor.message.contains("1:11"), "{}", editor.message);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     #[test]
     fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
         let path = temp_file("escconflict", "text\n");
