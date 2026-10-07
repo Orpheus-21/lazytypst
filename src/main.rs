@@ -6,6 +6,7 @@ mod fsutil;
 mod newfile;
 mod preview;
 mod state;
+mod words;
 
 use std::{
     collections::HashMap,

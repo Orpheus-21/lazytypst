@@ -19,6 +19,7 @@ use crate::{
     compile::{self, Job, Report, Severity},
     fsutil,
     preview::{Preview, page_in},
+    words,
 };
 
 /// The height of the compile pane, with its border.
@@ -166,6 +167,8 @@ pub struct Editor {
     last_edit: Option<Instant>,
     /// Text that the user copied or cut. The main loop sends it to the system clipboard. See `take_clipboard`.
     clipboard: Option<String>,
+    /// The approximate word count of the text. See `words::count`.
+    words: usize,
     /// The time of the last look at the file on disk. See `watch_file`.
     last_watch: Option<Instant>,
     /// True after an Esc that could not save the text. A second Esc closes without a save.
@@ -195,7 +198,7 @@ impl Editor {
         picker: Picker,
     ) -> io::Result<Self> {
         let textarea = new_textarea(&fs::read_to_string(&path)?);
-        Ok(Self {
+        let mut editor = Self {
             disk_time: disk_time(&path),
             conflict: false,
             path,
@@ -206,6 +209,7 @@ impl Editor {
             last_edit: None,
             last_watch: None,
             clipboard: None,
+            words: 0,
             close_armed: false,
             message: String::new(),
             pages_root: compile::out_dir(),
@@ -215,7 +219,14 @@ impl Editor {
             report: None,
             recover: None,
             preview: Preview::new(picker),
-        })
+        };
+        editor.count_words();
+        Ok(editor)
+    }
+
+    /// Counts the words of the text again. It runs after each change of the text.
+    fn count_words(&mut self) {
+        self.words = words::count(&self.textarea.lines().join("\n"));
     }
 
     /// Writes the buffer to the file if it has edits. Returns false if the file was not written:
@@ -304,6 +315,7 @@ impl Editor {
         if self.textarea.insert_str(text) {
             self.dirty = true;
             self.last_edit = Some(Instant::now());
+            self.count_words();
         }
     }
 
@@ -374,6 +386,7 @@ impl Editor {
             if self.textarea.input(key) {
                 self.dirty = true;
                 self.last_edit = Some(Instant::now());
+                self.count_words();
             }
             if copying {
                 self.clipboard = Some(self.textarea.yank_text());
@@ -498,6 +511,7 @@ impl Editor {
             Ok(text) => {
                 let place = self.cursor_position();
                 self.textarea = new_textarea(&text);
+                self.count_words();
                 self.set_cursor_position(place);
                 self.message = "Loaded the change from disk".into();
                 self.start_compile();
@@ -668,7 +682,13 @@ impl Editor {
         // The cursor position is at the right end of the status line, also while a message shows. Line and
         // column start at 1, and the column counts characters, the same as the error lines of Typst.
         let cursor = self.textarea.cursor();
-        let position = format!("{}:{}", cursor.0 + 1, cursor.1 + 1);
+        let position = format!(
+            "{} {}  {}:{}",
+            self.words,
+            if self.words == 1 { "word" } else { "words" },
+            cursor.0 + 1,
+            cursor.1 + 1
+        );
         let width = u16::try_from(position.len() + 1).unwrap_or(u16::MAX);
         let [hint_area, position_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(status);
@@ -1726,6 +1746,21 @@ mod tests {
     /// The status line of the editor: the last row of the screen.
     fn status_row(editor: &mut Editor) -> String {
         screen_rows(editor).pop().unwrap()
+    }
+
+    #[test]
+    fn the_status_line_shows_the_word_count_and_it_follows_the_edits() {
+        let path = temp_file(
+            "wordcount",
+            "= Title\nHello brave world\n#set text(size: 11pt)\n",
+        );
+        let mut editor = open(&path);
+        assert!(status_row(&mut editor).contains("4 words"));
+        editor.paste("one two\n");
+        assert!(status_row(&mut editor).contains("6 words"));
+        editor.handle_key(key(KeyCode::Char('x')));
+        assert!(status_row(&mut editor).contains("7 words"));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
