@@ -205,6 +205,14 @@ lazytypst passes its environment to the `typst` command, so the variables of Typ
 
 An import such as `#import "@preview/..."` downloads the package at the first compile. That compile needs the internet and can take longer. The compile pane shows the download text of Typst. Later compiles use the cache.
 
+## Other ways to work
+
+lazytypst is one of several ways to work with Typst. This is how it differs from three others.
+
+- [`typst watch`](https://github.com/typst/typst) compiles a file again each time it changes, and it has incremental compilation. It shows no preview of its own: you open the PDF in a viewer. lazytypst has no incremental compilation, but it shows the page next to the text in the same terminal, and it shows the errors there.
+- The preview of the [tinymist](https://github.com/Myriad-Dreamin/tinymist) language service works in editors such as VS Code, Neovim, Emacs, Sublime Text, Helix, and Zed, and a language service gives more than a preview. lazytypst has no completion or other language features, but it needs no editor, plugin, or configuration.
+- The [typst.app](https://typst.app/) web app is an online editor for teams, with instant preview and collaboration. lazytypst works on files on your own machine and offline, except for the first download of a package.
+
 ## How it works
 
 - `src/browser.rs` finds the `.typ` files. `src/newfile.rs` checks the name of a new file and makes it.
