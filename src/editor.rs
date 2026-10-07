@@ -181,6 +181,10 @@ pub struct Editor {
     last_edit: Option<Instant>,
     /// Text that the user copied or cut. The main loop sends it to the system clipboard. See `take_clipboard`.
     clipboard: Option<String>,
+    /// The prompt `Search:` while it is open. It takes every key. See `search_key`.
+    search: Option<TextArea<'static>>,
+    /// The text of the last search, for the next prompt.
+    last_search: String,
     /// True when the user turned the live compile off with F5. The autosave still runs.
     paused: bool,
     /// False when the user turned colors off with `NO_COLOR`. The preview image keeps its colors.
@@ -215,7 +219,13 @@ impl Editor {
         main: Option<PathBuf>,
         picker: Picker,
     ) -> io::Result<Self> {
-        let textarea = new_textarea(&fs::read_to_string(&path)?);
+        let mut textarea = new_textarea(&fs::read_to_string(&path)?);
+        // The matches of a search stand out. Without colors, they are underlined.
+        textarea.set_search_style(if colors_wanted() {
+            Style::new().bg(Color::Blue)
+        } else {
+            Style::new().add_modifier(Modifier::UNDERLINED)
+        });
         let mut editor = Self {
             disk_time: disk_time(&path),
             conflict: false,
@@ -230,6 +240,8 @@ impl Editor {
             words: 0,
             colors: colors_wanted(),
             paused: false,
+            search: None,
+            last_search: String::new(),
             close_armed: false,
             message: String::new(),
             pages_root: compile::out_dir(),
@@ -339,11 +351,55 @@ impl Editor {
         }
     }
 
+    /// Handles a key while the prompt `Search:` is open. The text of the prompt is a regular expression.
+    /// The matches show while you type. `Enter` or `Ctrl-F` moves the cursor to the next match, and the
+    /// search wraps at the end of the file. `Esc` closes the prompt and keeps the cursor.
+    fn search_key(&mut self, key: KeyEvent) {
+        let Some(prompt) = &mut self.search else {
+            return;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let next = key.code == KeyCode::Enter || (ctrl && key.code == KeyCode::Char('f'));
+        if key.code == KeyCode::Esc {
+            self.search = None;
+            let _ = self.textarea.set_search_pattern("");
+            return;
+        }
+        if !next {
+            prompt.input(key);
+        }
+        let pattern = prompt.lines().join("");
+        self.last_search = pattern.clone();
+        match self.textarea.set_search_pattern(&pattern) {
+            Err(err) => {
+                // An invalid pattern keeps the old matches. The first line of the error says why.
+                let reason = err.to_string();
+                let reason = reason.lines().last().unwrap_or("").trim();
+                self.message = format!("Invalid pattern: {reason}");
+            }
+            Ok(()) if next && !pattern.is_empty() => {
+                if !self.textarea.search_forward(false) {
+                    self.message = format!("No match for {pattern}");
+                }
+            }
+            Ok(()) => {}
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         let armed = std::mem::take(&mut self.close_armed);
         self.message.clear();
+        if self.search.is_some() {
+            self.search_key(key);
+            return Action::Stay;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl && key.code == KeyCode::Char('s') {
+        if ctrl && key.code == KeyCode::Char('f') {
+            let mut prompt = TextArea::new(vec![self.last_search.clone()]);
+            prompt.set_cursor_line_style(Style::default());
+            prompt.move_cursor(CursorMove::End);
+            self.search = Some(prompt);
+        } else if ctrl && key.code == KeyCode::Char('s') {
             if !self.dirty {
                 self.message = "No changes to save".into();
             }
@@ -738,7 +794,20 @@ impl Editor {
         let width = u16::try_from(position.len() + 1).unwrap_or(u16::MAX);
         let [hint_area, position_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(status);
-        frame.render_widget(Paragraph::new(hint), hint_area);
+        if let Some(prompt) = &self.search {
+            let message_width = u16::try_from(self.message.len()).unwrap_or(u16::MAX);
+            let [label, input, message] = Layout::horizontal([
+                Constraint::Length(8),
+                Constraint::Min(1),
+                Constraint::Length(message_width),
+            ])
+            .areas(hint_area);
+            frame.render_widget(Paragraph::new("Search: "), label);
+            frame.render_widget(prompt, input);
+            frame.render_widget(Paragraph::new(self.message.as_str()), message);
+        } else {
+            frame.render_widget(Paragraph::new(hint), hint_area);
+        }
         frame.render_widget(
             Paragraph::new(position).alignment(Alignment::Right),
             position_area,
@@ -1587,6 +1656,91 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
+    fn type_in_search(editor: &mut Editor, text: &str) {
+        for letter in text.chars() {
+            editor.handle_key(key(KeyCode::Char(letter)));
+        }
+    }
+
+    #[test]
+    fn search_moves_to_the_next_match_wraps_and_the_same_key_goes_on() {
+        let path = temp_file("search", "Item one\nsecond\nItem two\nthird Item\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('f'));
+        assert!(
+            status_row(&mut editor).starts_with("Search:"),
+            "{}",
+            status_row(&mut editor)
+        );
+        type_in_search(&mut editor, "Item");
+        editor.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            editor.cursor_position(),
+            (2, 0),
+            "the first match after the cursor"
+        );
+        editor.handle_key(ctrl('f'));
+        assert_eq!(editor.cursor_position(), (3, 6), "Ctrl-F goes on");
+        editor.handle_key(key(KeyCode::Enter));
+        assert_eq!(editor.cursor_position(), (0, 0), "it wraps to the top");
+        editor.handle_key(key(KeyCode::Esc));
+        assert!(editor.search.is_none());
+        assert_eq!(editor.cursor_position(), (0, 0), "Esc keeps the cursor");
+        assert!(matches!(
+            editor.handle_key(key(KeyCode::Esc)),
+            Action::Close
+        ));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_pattern_with_no_match_says_so_and_the_cursor_stays() {
+        let path = temp_file("searchnone", "alpha\nbeta\n");
+        let mut editor = open(&path);
+        editor.textarea.move_cursor(CursorMove::Jump(1, 2));
+        editor.handle_key(ctrl('f'));
+        type_in_search(&mut editor, "zzz");
+        editor.handle_key(key(KeyCode::Enter));
+        assert_eq!(editor.message, "No match for zzz");
+        assert_eq!(editor.cursor_position(), (1, 2));
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn an_invalid_pattern_shows_the_error_and_does_not_crash() {
+        let path = temp_file("searchbad", "alpha (x\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('f'));
+        type_in_search(&mut editor, "(");
+        assert!(
+            editor.message.starts_with("Invalid pattern:"),
+            "{}",
+            editor.message
+        );
+        editor.handle_key(key(KeyCode::Enter));
+        assert!(editor.message.starts_with("Invalid pattern:"));
+        editor.handle_key(key(KeyCode::Backspace));
+        type_in_search(&mut editor, "\\(");
+        editor.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            editor.cursor_position(),
+            (0, 6),
+            "an escaped bracket matches"
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_prompt_takes_every_key_and_the_text_stays_unchanged() {
+        let path = temp_file("searchkeys", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('f'));
+        type_in_search(&mut editor, "abc");
+        assert_eq!(editor.textarea.lines(), ["text"]);
+        assert!(!editor.dirty);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     #[test]
     fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
         let path = temp_file("escconflict", "text\n");
@@ -1819,9 +1973,10 @@ mod tests {
 
     /// The first 50 columns of the rows that belong to the text area: the left half, without the border.
     fn text_area_rows(editor: &mut Editor) -> Vec<String> {
-        screen_rows(editor)
+        let rows = screen_rows(editor);
+        // Skip the top border and the status line.
+        rows[1..rows.len() - 1]
             .iter()
-            .skip(1)
             .map(|row| row.chars().skip(1).take(48).collect())
             .collect()
     }
@@ -2000,7 +2155,7 @@ mod tests {
             .map(|column| buffer[(column, 11)].symbol())
             .collect();
         assert!(row.trim_end().ends_with("1:1"), "{row:?}");
-        assert!(row.starts_with("Ctrl-S save"), "{row:?}");
+        assert!(row.starts_with("F1 help"), "{row:?}");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

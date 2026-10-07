@@ -158,6 +158,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "Ctrl-F",
+        "Search. Type a regular expression, then Enter or Ctrl-F for the next match. Esc closes.",
+        Some((KeyCode::Char('f'), CTRL)),
+    ),
+    key(
+        Scope::Editor,
         "F5",
         "Turn the live compile off or on. Autosave stays on.",
         Some((KeyCode::F(5), NONE)),
