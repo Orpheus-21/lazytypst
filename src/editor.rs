@@ -119,12 +119,24 @@ fn fit_rows(lines: Vec<(String, Style)>, width: usize, height: usize) -> Vec<Lin
 
 /// The style of a line of the compile report. The colors are the colors of the terminal palette, so they
 /// follow the theme of the user: errors are red, warnings are yellow, and other lines are dim.
-fn severity_style(severity: Severity) -> Style {
-    match severity {
-        Severity::Error => Style::new().fg(Color::Red),
-        Severity::Warning => Style::new().fg(Color::Yellow),
-        Severity::Other => Style::new().add_modifier(Modifier::DIM),
+fn severity_style(severity: Severity, colors: bool) -> Style {
+    match (severity, colors) {
+        (Severity::Error, true) => Style::new().fg(Color::Red),
+        (Severity::Warning, true) => Style::new().fg(Color::Yellow),
+        // Without color, an error is bold and a warning is plain. The text of the line says which it is.
+        (Severity::Error, false) => Style::new().add_modifier(Modifier::BOLD),
+        (Severity::Warning, false) => Style::new(),
+        (Severity::Other, _) => Style::new().add_modifier(Modifier::DIM),
     }
+}
+
+/// False when the variable `NO_COLOR` is set and not empty. See https://no-color.org/.
+fn colors_wanted() -> bool {
+    colors_wanted_for(std::env::var_os("NO_COLOR"))
+}
+
+fn colors_wanted_for(no_color: Option<std::ffi::OsString>) -> bool {
+    no_color.is_none_or(|value| value.is_empty())
 }
 
 /// The words for the number of errors and warnings, for the title of the compile pane:
@@ -167,6 +179,8 @@ pub struct Editor {
     last_edit: Option<Instant>,
     /// Text that the user copied or cut. The main loop sends it to the system clipboard. See `take_clipboard`.
     clipboard: Option<String>,
+    /// False when the user turned colors off with `NO_COLOR`. The preview image keeps its colors.
+    colors: bool,
     /// The approximate word count of the text. See `words::count`.
     words: usize,
     /// The time of the last look at the file on disk. See `watch_file`.
@@ -210,6 +224,7 @@ impl Editor {
             last_watch: None,
             clipboard: None,
             words: 0,
+            colors: colors_wanted(),
             close_armed: false,
             message: String::new(),
             pages_root: compile::out_dir(),
@@ -608,11 +623,17 @@ impl Editor {
                     None => ("OK".to_string(), plain),
                 });
                 // One line of the report has one diagnostic. The kind of the diagnostic decides the style.
-                let body = report
-                    .lines
-                    .iter()
-                    .zip(&report.diagnostics)
-                    .map(|(line, diagnostic)| (line.clone(), severity_style(diagnostic.severity)));
+                let body =
+                    report
+                        .lines
+                        .iter()
+                        .zip(&report.diagnostics)
+                        .map(|(line, diagnostic)| {
+                            (
+                                line.clone(),
+                                severity_style(diagnostic.severity, self.colors),
+                            )
+                        });
                 (color, head.into_iter().chain(body).collect())
             }
             None => (
@@ -641,9 +662,11 @@ impl Editor {
         if let Some(pdf) = &self.exported {
             lines.push((format!("Exported {}", pdf.display()), plain));
         }
-        let block = Block::bordered()
-            .title(title)
-            .border_style(Style::new().fg(color));
+        let block = Block::bordered().title(title).border_style(if self.colors {
+            Style::new().fg(color)
+        } else {
+            Style::new()
+        });
         let inner = block.inner(area);
         Paragraph::new(fit_rows(
             lines,
@@ -2109,6 +2132,45 @@ mod tests {
         assert_eq!(hint.fg, Color::Reset, "a hint has no color of its own");
         assert!(!error.modifier.contains(ratatui::style::Modifier::DIM));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn without_colors_no_cell_outside_the_preview_has_a_color_and_the_state_stays_clear() {
+        let path = temp_file("nocolor", "text\n");
+        let mut editor = open(&path);
+        editor.colors = false;
+        editor.report = report_with(
+            false,
+            &["a.typ:1:1: error: boom", "a.typ:2:1: warning: careful"],
+        );
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        for row in 0..24 {
+            for column in 0..50 {
+                let cell = &buffer[(column, row)];
+                assert_eq!(
+                    (cell.fg, cell.bg),
+                    (Color::Reset, Color::Reset),
+                    "cell {column},{row} {:?}",
+                    cell.symbol()
+                );
+            }
+        }
+        let text = screen_text(&mut editor);
+        assert!(text.contains("Compile: 1 error, 1 warning"), "{text}");
+        let error = pane_cell(&mut editor, "a.typ:1:1");
+        assert!(error.modifier.contains(ratatui::style::Modifier::BOLD));
+        editor.job = None;
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_variable_no_color_turns_colors_off_only_when_it_is_not_empty() {
+        let value = |text: &str| Some(std::ffi::OsString::from(text));
+        assert!(colors_wanted_for(None));
+        assert!(colors_wanted_for(value("")));
+        assert!(!colors_wanted_for(value("1")));
     }
 
     #[test]
