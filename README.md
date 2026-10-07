@@ -193,6 +193,18 @@ Save rules:
 
 The program honors the variable `NO_COLOR` (see https://no-color.org/). If `NO_COLOR` is set and not empty, the program uses no color for text and borders. An error line in the compile pane is bold, and a warning is plain. The title of the pane still says the state, for example `Compile (running)` or `Compile: 2 errors`. The file list uses reverse video for the selected file. The page preview is an image, and it keeps its colors. With `NO_COLOR` unset or empty, an error is red, a warning is yellow, and the border of the pane is green, red, or yellow.
 
+## Fonts and packages
+
+lazytypst passes its environment to the `typst` command, so the variables of Typst work. This section names the ones that matter for fonts and packages. The names come from `typst compile --help` of Typst 0.15.1.
+
+- `TYPST_FONT_PATHS`: extra folders with fonts. Example: `TYPST_FONT_PATHS=~/fonts lazytypst ~/book`. The fonts in `~/fonts` are then available to the document.
+- `TYPST_IGNORE_SYSTEM_FONTS`: use only the fonts of the folders above and the fonts that Typst has built in. Example: `TYPST_IGNORE_SYSTEM_FONTS=true lazytypst ~/book`. The value is `true` or `false`.
+- `TYPST_PACKAGE_PATH`: a folder with local packages. Example: `TYPST_PACKAGE_PATH=~/packages lazytypst ~/book`.
+- `TYPST_PACKAGE_CACHE_PATH`: the folder where Typst keeps the packages that it downloaded.
+- `TYPST_ROOT` has no effect, because lazytypst always gives `--root` with the folder of the list. An option on the command line wins over the variable.
+
+An import such as `#import "@preview/..."` downloads the package at the first compile. That compile needs the internet and can take longer. The compile pane shows the download text of Typst. Later compiles use the cache.
+
 ## How it works
 
 - `src/browser.rs` finds the `.typ` files. `src/newfile.rs` checks the name of a new file and makes it.
