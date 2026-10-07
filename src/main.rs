@@ -721,6 +721,16 @@ impl App {
             let action = editor.handle_key(key);
             if matches!(action, Action::Help) {
                 self.help = Some(Help::new(Scope::Editor));
+            } else if let Action::Goto { file, line, column } = action {
+                // The other file opens at the error. The compile target stays the same, so the preview
+                // shows the same document after the compile that starts here.
+                self.close_editor();
+                self.open_file(file);
+                if let Some(editor) = &mut self.editor {
+                    editor.go_to(line, column);
+                    editor.compile_now();
+                }
+                return false;
             } else if !matches!(action, Action::Stay) {
                 self.close_editor();
             }
@@ -2463,6 +2473,41 @@ mod tests {
                 entry.keys
             );
         }
+    }
+
+    #[test]
+    fn ctrl_g_opens_the_file_of_an_error_at_the_error_and_the_text_is_saved_first() {
+        let mut app = app("gotoerror");
+        // a.typ is the main file. It includes sub/b.typ, and the error is in sub/b.typ.
+        fs::write(app.root.join("sub").join("b.typ"), "line one\n#nope()\n").unwrap();
+        fs::write(app.root.join("a.typ"), "#include \"sub/b.typ\"\n").unwrap();
+        press(&mut app, KeyCode::Char('m')); // a.typ is the main file
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('X'));
+        app.editor.as_mut().unwrap().compile_now();
+        let start = Instant::now();
+        while !screen(&mut app).contains("unknown variable") {
+            app.tick(Instant::now());
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "no compile report"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('g'),
+            ratatui::crossterm::event::KeyModifiers::CONTROL,
+        ));
+        let editor = app.editor.as_ref().unwrap();
+        assert_eq!(editor.path(), app.root.join("sub").join("b.typ"));
+        assert_eq!(
+            editor.cursor_position(),
+            (1, 0),
+            "line 2, column 1 of b.typ"
+        );
+        let saved = fs::read_to_string(app.root.join("a.typ")).unwrap();
+        assert!(saved.starts_with("X#include"), "{saved}");
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[test]

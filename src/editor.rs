@@ -162,6 +162,12 @@ pub enum Action {
     Quit,
     /// Show the help window.
     Help,
+    /// Open another file of the project at `line` and `column`, counted from 1. The editor has saved its text.
+    Goto {
+        file: PathBuf,
+        line: usize,
+        column: usize,
+    },
 }
 
 pub struct Editor {
@@ -321,6 +327,11 @@ impl Editor {
         self.clipboard.take()
     }
 
+    /// Moves the cursor to `line` and `column`, counted from 1. A place beyond the end goes to the end.
+    pub fn go_to(&mut self, line: usize, column: usize) {
+        self.set_cursor_position((line.saturating_sub(1), column.saturating_sub(1)));
+    }
+
     /// Saves nothing and starts a compile of the file on disk now.
     pub fn compile_now(&mut self) {
         self.start_compile();
@@ -416,7 +427,7 @@ impl Editor {
         } else if ctrl && key.code == KeyCode::Char('b') {
             self.save_and_compile();
         } else if ctrl && key.code == KeyCode::Char('g') {
-            self.go_to_first_error();
+            return self.go_to_first_error();
         } else if ctrl && key.code == KeyCode::Char('o') {
             self.open_pdf("xdg-open");
         } else if ctrl && key.code == KeyCode::Char('e') {
@@ -502,16 +513,32 @@ impl Editor {
     /// Moves the cursor to the first error of the last report, if that error is in the open file.
     /// An error in another file only gets named: the cursor stays. The line and the column of the report
     /// are those of the text at the time of the compile. After more edits, a new compile makes them exact.
-    fn go_to_first_error(&mut self) {
+    fn go_to_first_error(&mut self) -> Action {
         let Some(error) = self.report.as_ref().and_then(Report::first_error) else {
             self.message = "No error to go to.".into();
-            return;
+            return Action::Stay;
         };
         let open_file = self.path.strip_prefix(&self.root).unwrap_or(&self.path);
         if error.file.as_deref() != Some(open_file) {
-            let file = error.file.as_deref().unwrap_or(open_file);
+            let file = error
+                .file
+                .clone()
+                .unwrap_or_else(|| open_file.to_path_buf());
+            let (line, column) = (error.line, error.column);
+            // A file of the project opens in the editor. A file outside the project, such as a package,
+            // only gets named.
+            let plain = file
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)));
+            if plain && self.root.join(&file).is_file() {
+                // The text goes to disk first. A refused save (see `save`) keeps the editor here.
+                if !self.save(false) {
+                    return Action::Stay;
+                }
+                return Action::Goto { file, line, column };
+            }
             self.message = format!("The first error is in {}.", file.display());
-            return;
+            return Action::Stay;
         }
         // Typst counts from 1. The text area counts from 0, in characters, and it stops at the end of the text.
         let to_index = |number: usize| u16::try_from(number.saturating_sub(1)).unwrap_or(u16::MAX);
@@ -519,6 +546,7 @@ impl Editor {
         self.textarea
             .move_cursor(CursorMove::Jump(to_index(line), to_index(column)));
         self.message = format!("Error at {line}:{column}: {}", error.message);
+        Action::Stay
     }
 
     fn save_and_compile(&mut self) {
@@ -1130,7 +1158,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_g_with_an_error_in_another_file_names_the_file_and_keeps_the_cursor() {
+    fn ctrl_g_with_an_error_in_another_file_of_the_project_asks_to_open_it_after_a_save() {
         let chapter = book("gotoother", "= One\n");
         let dir = chapter.parent().unwrap().parent().unwrap().to_path_buf();
         fs::write(
@@ -1143,10 +1171,43 @@ mod tests {
         editor.handle_key(key(KeyCode::Right));
         compile_and_wait(&mut editor);
 
-        editor.handle_key(ctrl('g'));
-        assert_eq!(editor.textarea.cursor(), (0, 2), "the cursor must stay");
-        assert!(editor.message.contains("main.typ"), "{}", editor.message);
+        editor.handle_key(key(KeyCode::Char('X')));
+        let action = editor.handle_key(ctrl('g'));
+        assert!(
+            matches!(&action, Action::Goto { file, line: 1, column: 1 } if file == Path::new("main.typ")),
+            "the error is in main.typ at 1:1"
+        );
+        assert_eq!(
+            fs::read_to_string(chapter).unwrap(),
+            "= XOne\n",
+            "the text is saved before the switch"
+        );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ctrl_g_with_an_error_in_a_package_file_names_the_file_and_opens_nothing() {
+        let path = temp_file("gotopackage", "text\n");
+        let mut editor = open(&path);
+        editor.report = report_with(false, &["@preview/cetz:0.2.0/src/lib.typ:5:3: error: boom"]);
+        let action = editor.handle_key(ctrl('g'));
+        assert!(matches!(action, Action::Stay));
+        assert!(
+            editor.message.contains("@preview/cetz:0.2.0/src/lib.typ"),
+            "{}",
+            editor.message
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_g_with_an_error_in_a_file_outside_the_project_does_not_open_it() {
+        let path = temp_file("gotooutside", "text\n");
+        let mut editor = open(&path);
+        editor.report = report_with(false, &["../outside.typ:1:1: error: boom"]);
+        assert!(matches!(editor.handle_key(ctrl('g')), Action::Stay));
+        assert!(editor.message.contains("outside.typ"), "{}", editor.message);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
