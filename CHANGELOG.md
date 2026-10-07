@@ -26,6 +26,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `y` copies the absolute path of the selected file to the system clipboard.
 - `m` marks a main file. The live compile, `Ctrl-B`, and `Ctrl-E` then use the main file, whatever file you edit. The program remembers the main file of each project, and it keeps that choice outside the project folder.
 - A folder or a `.typ` file as the argument. A file opens in the editor at once, and its folder is the project root. Files in subfolders can import files from parent folders inside the root.
+- The status line shows an approximate word count. It skips comments, math, and lines of code such as `#set` and `#import`.
 - A text area with line numbers, long lines that wrap, and Emacs style editing keys. `Tab` inserts 2 spaces. The status line shows the cursor as `line:column`. If you close a file and open it again, the cursor comes back.
 - An autosave 300 ms after the last key, and a live compile after each save. A new compile stops the compile that still runs.
 - A reload of the file when another program changes it and the text has no edits. The cursor keeps its line, and a compile starts.
