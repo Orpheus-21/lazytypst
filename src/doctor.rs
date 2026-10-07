@@ -53,7 +53,12 @@ pub fn terminal_check(protocol: Result<ProtocolType, String>) -> Check {
 /// The check that `tmp` is writable: the program makes a file there and deletes it.
 pub fn temp_check(tmp: &Path) -> Check {
     let probe = tmp.join(format!("lazytypst-doctor-{}", std::process::id()));
-    match std::fs::File::create(&probe) {
+    // `create_new` fails if the name exists, also as a link. So the probe never writes through a link.
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe);
             Check::new("temp folder", true, format!("{}, writable", tmp.display()))
