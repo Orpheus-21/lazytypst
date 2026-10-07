@@ -105,6 +105,7 @@ Keys in the file list:
 - `r`: read the folder again. New files appear and deleted files go. The selection stays on the same file if it is still there. A main file that is gone loses its mark.
 - `g` or `Home`: select the first file. `G` or `End`: select the last file.
 - `/`: filter the list. A prompt `Filter:` asks for a part of a path. The list shows only the files whose path contains that text, and the match ignores case. The list follows the text while you type. `Enter` keeps the filter, and the list title shows it, for example `lazytypst /chap`. `Esc` removes the filter, in the prompt and also in the list. If no file matches, the list says `No match`. `r` keeps the filter. A new file removes it, so that the file shows. The filter does not change the main file.
+- `E`: export the PDF of the selected file, with the same job as `Ctrl-E`. The PDF goes next to the file, for example `report.typ` becomes `report.pdf`. This key uses the selected file and not the main file. The list stays usable while the export runs. The status line shows `Exported report.pdf`, or the first error line of Typst. A new export stops an export that still runs.
 - `y`: copy the absolute path of the selected file to the system clipboard. The status line shows `Copied` and the path.
 - `m`: mark the selected file as the main file, or remove the mark.
 - `q`: quit.
