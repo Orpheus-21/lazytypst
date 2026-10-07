@@ -311,6 +311,16 @@ impl App {
         }
     }
 
+    /// Opens the file that the command line named. Without one, a folder with exactly one `.typ` file
+    /// opens that file, because the list would have nothing to choose. `Esc` still shows the list.
+    fn start(&mut self, open: Option<PathBuf>) {
+        match open {
+            Some(relative) => self.open_target(relative),
+            None if self.all_files.len() == 1 => self.open_selected(),
+            None => {}
+        }
+    }
+
     /// Opens the file that the command line named, and selects it in the list if the list shows it.
     /// A file that the list does not show, for example a hidden file, opens too.
     fn open_target(&mut self, relative: PathBuf) {
@@ -557,9 +567,7 @@ fn main() -> std::io::Result<()> {
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     let mut app = App::new(root, files, picker);
     app.load_state(state::default_state_file());
-    if let Some(relative) = open {
-        app.open_target(relative);
-    }
+    app.start(open);
     let result = run(&mut terminal, &mut app);
     write_to_terminal(RESTORE_TITLE);
     write_to_terminal(DISABLE_PASTE);
@@ -1765,6 +1773,31 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         let text = fs::read_to_string(app.root.join("a.typ")).unwrap();
         assert!(text.starts_with("P\nQtext of a"), "{text}");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_folder_with_one_typ_file_starts_in_the_editor_and_esc_shows_the_list() {
+        let app = app("onefile");
+        fs::remove_file(app.root.join("sub").join("b.typ")).unwrap();
+        let files = browser::find_typ_files(&app.root, browser::MAX_DEPTH).unwrap();
+        let mut app = App::new(app.root.clone(), files, Picker::halfblocks());
+        app.start(None);
+        assert!(app.editor.is_some(), "one file must open at once");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.editor.is_none());
+        assert!(screen(&mut app).contains("a.typ"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_folder_with_two_typ_files_or_none_starts_in_the_list() {
+        let mut app = app("twofiles");
+        app.start(None);
+        assert!(app.editor.is_none());
+        app.all_files.clear();
+        app.start(None);
+        assert!(app.editor.is_none());
         fs::remove_dir_all(&app.root).unwrap();
     }
 
