@@ -75,6 +75,11 @@ impl Preview {
         self.wanted
     }
 
+    /// The page on screen, counted from 1.
+    pub fn shown_page(&self) -> usize {
+        self.shown
+    }
+
     /// The number of pages of the document, as the last loaded page file named it.
     pub fn page_count(&self) -> usize {
         self.count
@@ -212,6 +217,12 @@ impl Preview {
         self.page = Some(self.picker.new_resize_protocol(view));
     }
 
+    /// The folder of the page on screen, for a test.
+    #[cfg(test)]
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
     #[cfg(test)]
     pub fn has_page(&self) -> bool {
         self.page.is_some()
@@ -239,6 +250,14 @@ impl Preview {
             // Upgrade: ratatui_image::thread::ThreadProtocol if pages get much larger.
             Some(page) => frame.render_stateful_widget(StatefulImage::default(), inner, page),
             None => frame.render_widget(Paragraph::new("No preview yet."), inner),
+        }
+    }
+}
+
+impl Drop for Preview {
+    fn drop(&mut self) {
+        if let Some(dir) = self.dir.take() {
+            let _ = fs::remove_dir_all(dir);
         }
     }
 }

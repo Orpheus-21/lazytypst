@@ -44,7 +44,21 @@ fn new_textarea(text: &str) -> TextArea<'static> {
     textarea.set_tab_length(2);
     // Line numbers help with the error lines of Typst. A dim style keeps them from competing with the text.
     textarea.set_line_number_style(Style::new().add_modifier(Modifier::DIM));
+    // The matches of a search stand out. Without colors, they are underlined.
+    textarea.set_search_style(if colors_wanted() {
+        Style::new().bg(Color::Blue)
+    } else {
+        Style::new().add_modifier(Modifier::UNDERLINED)
+    });
     textarea
+}
+
+/// The keys that work in the full preview as in the editor: save, compile, export, open the PDF, go to the
+/// error, quit, and the live compile switch. They do not change the text. `Ctrl-G` also shows the editor.
+fn full_passthrough(key: KeyEvent) -> bool {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    (ctrl && matches!(key.code, KeyCode::Char('s' | 'b' | 'e' | 'o' | 'g' | 'q')))
+        || key.code == KeyCode::F(5)
 }
 
 fn disk_time(path: &Path) -> Option<SystemTime> {
@@ -155,6 +169,13 @@ fn counts_text(errors: usize, warnings: usize) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
+impl Drop for Editor {
+    fn drop(&mut self) {
+        // The page folder of a running compile goes with the editor. The preview deletes its own folder.
+        self.stop_compile();
+    }
+}
+
 pub enum Action {
     Stay,
     /// Close the editor and go back to the file list.
@@ -188,6 +209,8 @@ pub struct Editor {
     last_edit: Option<Instant>,
     /// Text that the user copied or cut. The main loop sends it to the system clipboard. See `take_clipboard`.
     clipboard: Option<String>,
+    /// True if the file used CR LF line ends when it was read. The save then writes CR LF again.
+    crlf: bool,
     /// True while the preview fills the screen and the text area is hidden. See `full_key`.
     full: bool,
     /// The prompt `Search:` while it is open. It takes every key. See `search_key`.
@@ -228,14 +251,10 @@ impl Editor {
         main: Option<PathBuf>,
         picker: Picker,
     ) -> io::Result<Self> {
-        let mut textarea = new_textarea(&fsutil::read_text(&path)?);
-        // The matches of a search stand out. Without colors, they are underlined.
-        textarea.set_search_style(if colors_wanted() {
-            Style::new().bg(Color::Blue)
-        } else {
-            Style::new().add_modifier(Modifier::UNDERLINED)
-        });
+        let text = fsutil::read_text(&path)?;
+        let textarea = new_textarea(&text);
         let mut editor = Self {
+            crlf: text.contains("\r\n"),
             disk_time: disk_time(&path),
             conflict: false,
             path,
@@ -282,11 +301,11 @@ impl Editor {
             self.message = CONFLICT.into();
             return false;
         }
-        let mut text = self.textarea.lines().join("\n");
+        let end = if self.crlf { "\r\n" } else { "\n" };
+        let mut text = self.textarea.lines().join(end);
         if !text.is_empty() {
-            text.push('\n');
+            text.push_str(end);
         }
-        // CRLF line ends become LF.
         match fsutil::write_file(&self.path, text.as_bytes()) {
             Ok(()) => {
                 self.dirty = false;
@@ -358,6 +377,16 @@ impl Editor {
     pub fn paste(&mut self, text: &str) {
         self.close_armed = false;
         self.message.clear();
+        if self.full {
+            return; // typing is off in the full preview
+        }
+        if self.search.is_some() {
+            // The prompt takes the text of a paste, as one line.
+            for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
+                self.search_key(KeyEvent::from(KeyCode::Char(letter)));
+            }
+            return;
+        }
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         if self.textarea.insert_str(text) {
             self.dirty = true;
@@ -378,6 +407,10 @@ impl Editor {
             KeyCode::Left | KeyCode::Backspace if plain => false,
             _ => return 1,
         };
+        // A key with a selection deletes the selection or ends it. It is one step.
+        if self.textarea.selection_range().is_some() {
+            return 1;
+        }
         let (row, column) = self.cursor_position();
         let Some(line) = self.textarea.lines().get(row) else {
             return 1;
@@ -437,6 +470,11 @@ impl Editor {
         let zoomed = match key.code {
             KeyCode::F(11) | KeyCode::Esc => {
                 self.full = false;
+                // The split view cannot move the view, so it shows the whole page. A zoom would also
+                // make every autosave render a big page.
+                if self.preview.zoom_fit() {
+                    self.start_compile();
+                }
                 return Action::Stay;
             }
             KeyCode::F(1) => return Action::Help,
@@ -521,12 +559,15 @@ impl Editor {
             self.search_key(key);
             return Action::Stay;
         }
-        if self.full {
+        if self.full && !full_passthrough(key) {
             return self.full_key(key);
         }
         if key.code == KeyCode::F(11) {
             self.full = true;
             return Action::Stay;
+        }
+        if self.full && key.code == KeyCode::Char('g') {
+            self.full = false; // the error is in the text, so the text must show
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('f') {
@@ -548,6 +589,9 @@ impl Editor {
             } else {
                 "Live compile on".into()
             };
+            if !self.paused {
+                self.save_and_compile();
+            }
         } else if ctrl && key.code == KeyCode::Char('b') {
             self.save_and_compile();
         } else if ctrl && key.code == KeyCode::Char('g') {
@@ -737,7 +781,11 @@ impl Editor {
         match fsutil::read_text(&self.path) {
             Ok(text) => {
                 let place = self.cursor_position();
+                self.crlf = text.contains("\r\n");
                 self.textarea = new_textarea(&text);
+                if self.search.is_some() {
+                    let _ = self.textarea.set_search_pattern(&self.last_search);
+                }
                 self.count_words();
                 self.set_cursor_position(place);
                 self.message = "Loaded the change from disk".into();
@@ -802,7 +850,10 @@ impl Editor {
         let count = self.preview.page_count();
         if wanted > count {
             self.preview.want(count);
-            self.start_compile();
+            // If the page on screen is the last page already, there is nothing to render again.
+            if self.preview.shown_page() != count {
+                self.start_compile();
+            }
         }
     }
 
@@ -937,10 +988,13 @@ impl Editor {
             }
             while x < area.right() && *offset < chars.len() {
                 let ch = chars[*offset];
+                // The text area gives a tab the cells up to the next tab stop, counted from the start of the
+                // row, and a combining mark no cell.
                 let width = if ch == '\t' {
-                    usize::from(self.textarea.tab_length().max(1))
+                    let stop = usize::from(self.textarea.tab_length().max(1));
+                    stop - usize::from(x - area.left() - gutter) % stop
                 } else {
-                    Span::raw(ch.to_string()).width().max(1)
+                    Span::raw(ch.to_string()).width()
                 };
                 let width = u16::try_from(width).unwrap_or(1);
                 if let Some(part) = parts[*line]
@@ -2131,14 +2185,12 @@ mod tests {
 
         editor.handle_key(key(KeyCode::Down));
         assert_eq!(editor.preview.pan(), (0.0, 0.25));
-        // A new compile keeps the zoom and the place. Typing is off in the full preview.
-        editor.handle_key(key(KeyCode::F(11)));
+        // A new compile keeps the zoom and the place. Ctrl-B works in the full preview.
         editor.handle_key(ctrl('b'));
         wait_for_report(&mut editor);
         assert_eq!(editor.preview.zoom_percent(), 200);
         assert_eq!(editor.preview.pan(), (0.0, 0.25));
 
-        editor.handle_key(key(KeyCode::F(11)));
         editor.handle_key(key(KeyCode::Char('0')));
         assert_eq!(editor.preview.zoom_percent(), 100);
         wait_for_report(&mut editor);
@@ -2239,6 +2291,159 @@ mod tests {
         let paint = start.elapsed();
         eprintln!("draw of 4000 lines: {whole:?}, of which the color step: {paint:?}");
         assert!(paint < Duration::from_millis(100), "{paint:?}");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_paste_does_not_reach_the_text_while_the_search_prompt_or_the_full_preview_is_open() {
+        let path = temp_file("pastemodes", "hello\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('f'));
+        editor.paste("XY\nZ");
+        assert_eq!(
+            editor.textarea.lines(),
+            ["hello"],
+            "the prompt takes the paste"
+        );
+        assert_eq!(editor.search.as_ref().unwrap().lines(), ["XYZ"]);
+        assert!(!editor.dirty);
+        editor.handle_key(key(KeyCode::Esc));
+        editor.handle_key(key(KeyCode::F(11)));
+        editor.paste("XYZ");
+        assert_eq!(
+            editor.textarea.lines(),
+            ["hello"],
+            "typing is off in the full preview"
+        );
+        assert!(!editor.dirty);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn backspace_with_a_selection_deletes_only_the_selection() {
+        let path = temp_file("selback", "e\u{301}ab\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::End));
+        for _ in 0..2 {
+            editor.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        }
+        editor.handle_key(key(KeyCode::Backspace));
+        assert_eq!(editor.textarea.lines(), ["e\u{301}"]);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_colors_follow_a_tab_that_is_not_at_a_tab_stop_and_a_combining_mark() {
+        let path = temp_file("paintwidths", "a\t#set x\ne\u{301}#set y\n");
+        let mut editor = open(&path);
+        editor.colors = true;
+        editor.textarea.move_cursor(CursorMove::Jump(1, 7));
+        assert_eq!(
+            cell_of(&mut editor, "#set x").fg,
+            Color::Magenta,
+            "after a short tab"
+        );
+        assert_eq!(
+            cell_of(&mut editor, "#set y").fg,
+            Color::Magenta,
+            "after a combining mark"
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn leaving_the_full_preview_shows_the_whole_page_again_and_starts_a_compile() {
+        let path = temp_file("fullzoomexit", "= One\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        editor.handle_key(key(KeyCode::F(11)));
+        editor.handle_key(key(KeyCode::Char('+')));
+        wait_for_report(&mut editor);
+        assert_eq!(editor.preview.zoom_percent(), 150);
+        editor.handle_key(key(KeyCode::F(11)));
+        assert_eq!(editor.preview.zoom_percent(), 100);
+        assert!(
+            editor.job.is_some(),
+            "the page is rendered at the normal resolution"
+        );
+        wait_for_report(&mut editor);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_reload_keeps_the_search_style_and_the_pattern_of_an_open_prompt() {
+        let path = temp_file("reloadsearch", "alpha beta\n");
+        let mut editor = open(&path);
+        editor.handle_key(ctrl('f'));
+        type_in_search(&mut editor, "beta");
+        change_outside(&path, "alpha beta gamma\n", 5);
+        editor.tick(Instant::now() + Duration::from_secs(2));
+        assert_eq!(editor.textarea.lines(), ["alpha beta gamma"]);
+        assert_eq!(
+            editor.textarea.search_pattern().map(|p| p.as_str()),
+            Some("beta")
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn f5_turns_the_live_compile_on_and_a_compile_starts_at_once() {
+        let path = temp_file("f5on", "= One\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::F(5)));
+        assert!(editor.job.is_none());
+        editor.handle_key(key(KeyCode::F(5)));
+        assert!(editor.job.is_some(), "the preview follows the text again");
+        editor.stop_compile();
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_file_with_crlf_line_ends_keeps_them_after_a_save() {
+        let path = temp_file("crlf", "one\r\ntwo\r\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(key(KeyCode::Esc));
+        assert_eq!(fs::read(&path).unwrap(), b"Xone\r\ntwo\r\n");
+        // A file with LF line ends stays LF.
+        fs::write(&path, "one\ntwo\n").unwrap();
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(key(KeyCode::Esc));
+        assert_eq!(fs::read(&path).unwrap(), b"Xone\ntwo\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn closing_the_editor_deletes_its_page_folders() {
+        let path = temp_file("dropdirs", "= One\n");
+        let mut editor = open(&path);
+        compile_and_wait(&mut editor);
+        let dir = editor.preview.dir().unwrap().to_path_buf();
+        assert!(dir.exists());
+        editor.start_compile();
+        let running = editor.job.as_ref().unwrap().output().to_path_buf();
+        drop(editor);
+        assert!(!dir.exists(), "the folder of the page on screen");
+        assert!(!running.exists(), "the folder of the running compile");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_keys_that_save_compile_and_quit_work_in_the_full_preview_and_typing_does_not() {
+        let path = temp_file("fullkeys", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(key(KeyCode::F(11)));
+        editor.handle_key(ctrl('s'));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "Xtext\n",
+            "Ctrl-S saves"
+        );
+        editor.handle_key(key(KeyCode::Char('Y')));
+        assert_eq!(editor.textarea.lines(), ["Xtext"], "a letter does nothing");
+        assert!(matches!(editor.handle_key(ctrl('q')), Action::Quit));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

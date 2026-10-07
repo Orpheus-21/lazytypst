@@ -693,6 +693,9 @@ impl App {
 
     /// Handles a paste. The editor inserts it. The list and the prompts ignore it.
     fn handle_paste(&mut self, text: &str) {
+        if self.help.is_some() {
+            return; // the help window takes keys and nothing else
+        }
         if let Some(editor) = &mut self.editor {
             editor.paste(text);
         }
