@@ -199,7 +199,17 @@ Save rules:
 - Before the autosave, `Ctrl-B`, `Ctrl-E`, or `Esc` writes, the program compares the modification time of the file. If another program changed the file, the program does not write it and shows a warning. `Ctrl-S` then overwrites the file with your text. `Esc` twice closes the editor and keeps the version on disk. `Ctrl-Q` twice does the same and quits the program.
 - About once a second, while the text has no edits, the program compares the modification time of the file. If another program changed the file, the program loads the new text, keeps the cursor on the same line number, and starts a compile. If the file got shorter, the cursor goes to the last line. If another program deleted the file, the status line says that the file is gone, and the text stays in the editor. `Ctrl-S` writes it again.
 - A save writes the text to a hidden temp file next to the file. Then it renames the temp file over the file. A crash during a save leaves the old text or the new text, never a cut file. A symlink stays a symlink, and the permissions stay. A hard link to the file keeps the old text.
-- A save writes the text with LF line ends and one final newline. A file with CRLF line ends changes to LF when you edit it.
+- A save writes the text with one final line end. The line end is CR LF if the file had CR LF when the program read it, and LF if not. So a diff shows only your edits.
+
+## Safety with projects from other people
+
+A project from the internet can hold files that harm you when a program opens them. lazytypst limits these risks.
+
+- The file list shows only regular files. A `.typ` link counts only if it points at a regular file inside the project. A pipe, a device, a dangling link, and a link to a file outside the project are not listed. The program opens a regular file of at most 16 MiB.
+- An export writes a new file next to the source and renames it onto the PDF. So a link such as `report.pdf` that points at another file of yours is replaced, and the other file stays.
+- A compile or an export stops after 60 seconds. The program keeps the first 1 MiB of the error text of Typst. If the `prlimit` program of util-linux is in `PATH`, it also limits the memory of Typst to 8 GiB, so a page of 500 cm by 500 cm cannot stop the machine.
+- The program compiles a file when you open it. Typst can read a file through a link inside the project, and the file can then show in the preview and in an exported PDF. This is a behavior of Typst, and lazytypst does not stop it. Do not share a PDF of a project that you did not read.
+- A document that imports a package from `@preview` makes Typst download the package.
 
 ## Colors
 
