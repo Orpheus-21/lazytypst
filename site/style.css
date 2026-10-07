@@ -1,7 +1,7 @@
 /*
   Design brief
   Character: a small, quiet workbench for people who set type. A proof sheet, not a product page.
-  Type: Newsreader for text and headings (a text serif made for reading on screen, with real italics),
+  Type (self-hosted, no request to another site): Newsreader for text and headings (a text serif made for reading on screen, with real italics),
         IBM Plex Mono for keys and commands (a plain mono that matches the terminal look).
   Palette: warm paper ground #f6f2e9, ink #1d1b17, muted ink #645e52, rules #d9d2c1, one accent, the
         oxblood #8c2f1f of a proofreader's pencil. Dark: the same paper at night (#16140f, #ece6d6, #e08a74).
@@ -9,6 +9,11 @@
         in the margin of a proof. The screenshot and the key tables run wider than the prose.
   Signature: marginal notes. Each part of the text has the keys that belong to it in the margin.
 */
+@font-face { font-family: "Newsreader"; font-style: normal; font-weight: 300 500; font-display: swap; src: url("fonts/newsreader.woff2") format("woff2"); }
+@font-face { font-family: "Newsreader"; font-style: italic; font-weight: 400; font-display: swap; src: url("fonts/newsreader-italic.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/plexmono-400.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("fonts/plexmono-500.woff2") format("woff2"); }
+
 :root {
   --ground: #f6f2e9;
   --ink: #1d1b17;
