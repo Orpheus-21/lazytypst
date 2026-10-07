@@ -14,7 +14,7 @@ lazytypst lists the `.typ` files in a folder. The user opens one file, edits the
 
 Each compile renders only the page on screen, so a long document stays fast. In a release build, the page of a book of 500 pages appears after 0.7 s. When all 500 pages were rendered, it took 2.2 s. The cost is that a page turn needs one compile, about as long as a normal compile. The old page stays on screen until the new page is ready.
 
-The program saves the file 300 ms after the last key. Then it compiles the file. A new compile kills the compile that still runs. The preview follows the text.
+When you open a file, the program compiles it at once, so the preview shows without a key. The program saves the file 300 ms after the last key. Then it compiles the file. A new compile kills the compile that still runs. The preview follows the text.
 
 A project often has one main file, such as `main.typ`, that includes the other files. In the file list, press `m` to mark the selected file as the main file. The list shows `[main]` after its path. Then the live compile, `Ctrl-B`, and `Ctrl-E` use the main file, whatever file you edit. The autosave still saves the file that you edit. The editor title shows the main file. Press `m` on the main file again to remove the mark. Without a main file, the program compiles the open file.
 

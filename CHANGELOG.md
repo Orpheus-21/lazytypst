@@ -30,6 +30,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - The status line shows an approximate word count. It skips comments, math, and lines of code such as `#set` and `#import`.
 - Syntax color in the editor for headings, commands after `#`, strings in code, math, raw text, and comments. The colors come from the terminal palette.
 - A text area with line numbers, long lines that wrap, and Emacs style editing keys. `Tab` inserts 2 spaces. The status line shows the cursor as `line:column`. If you close a file and open it again, the cursor comes back.
+- A compile starts when a file opens, so the preview shows at once.
 - An autosave 300 ms after the last key, and a live compile after each save. A new compile stops the compile that still runs.
 - A reload of the file when another program changes it and the text has no edits. The cursor keeps its line, and a compile starts.
 - A safe save. The program writes the file only when the text has edits. It does not overwrite a change that another program made, until you press `Ctrl-S`. It writes a temp file and renames it, so a crash cannot cut the file. A symlink stays a symlink, and the permissions stay.
