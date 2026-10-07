@@ -103,6 +103,7 @@ Keys in the editor:
   Alt-Home       Show the first page.
   Alt-End        Show the last page.
   Esc            Save the file and go back to the file list.
+  Ctrl-Q         Save the file and quit.
 ";
 
 #[derive(Debug, PartialEq)]
@@ -457,12 +458,13 @@ impl App {
     /// Handles one key. Returns true when the program must quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         if let Some(editor) = &mut self.editor {
-            if matches!(editor.handle_key(key), Action::Close) {
+            let action = editor.handle_key(key);
+            if !matches!(action, Action::Stay) {
                 self.cursors
                     .insert(editor.path().to_path_buf(), editor.cursor_position());
                 self.editor = None;
             }
-            return false;
+            return matches!(action, Action::Quit);
         }
         if self.prompt.is_some() {
             self.handle_prompt_key(key);
@@ -1717,6 +1719,21 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert!(app.editor.is_none(), "Esc must save and close");
         assert!(press(&mut app, KeyCode::Char('q')));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn ctrl_q_in_the_editor_saves_and_quits_the_program() {
+        let mut app = app("ctrlq");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('X'));
+        let quit = app.handle_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            ratatui::crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(quit, "Ctrl-Q must quit the program");
+        let text = fs::read_to_string(app.root.join("a.typ")).unwrap();
+        assert!(text.starts_with("Xtext of a"), "{text}");
         fs::remove_dir_all(&app.root).unwrap();
     }
 

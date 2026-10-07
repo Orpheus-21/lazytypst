@@ -143,7 +143,10 @@ fn counts_text(errors: usize, warnings: usize) -> Option<String> {
 
 pub enum Action {
     Stay,
+    /// Close the editor and go back to the file list.
     Close,
+    /// Close the editor and quit the program.
+    Quit,
 }
 
 pub struct Editor {
@@ -289,13 +292,18 @@ impl Editor {
                 self.recover = None;
                 self.start_compile();
             }
-        } else if key.code == KeyCode::Esc {
+        } else if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('q')) {
+            let quit = key.code != KeyCode::Esc;
             if armed || self.save(false) {
-                return Action::Close;
+                return if quit { Action::Quit } else { Action::Close };
             }
             // `save` put the reason in the message.
             self.close_armed = true;
-            self.message.push_str(" Esc again closes without a save.");
+            self.message.push_str(if quit {
+                " Ctrl-Q again quits without a save."
+            } else {
+                " Esc again closes without a save."
+            });
         } else if self.textarea.input(key) {
             self.dirty = true;
             self.last_edit = Some(Instant::now());
@@ -1195,6 +1203,39 @@ mod tests {
         let (row, column) = editor.cursor_position();
         assert_eq!((row, column), (0, 10), "{}", editor.message);
         assert!(editor.message.contains("1:11"), "{}", editor.message);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_q_saves_and_quits() {
+        let path = temp_file("ctrlq", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        assert!(matches!(editor.handle_key(ctrl('q')), Action::Quit));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "Xtext\n");
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_q_in_a_conflict_warns_then_quits_and_keeps_the_disk_version() {
+        let path = temp_file("ctrlqconflict", "text\n");
+        let mut editor = open(&path);
+        editor.handle_key(key(KeyCode::Char('X')));
+        fs::write(&path, "outside\n").unwrap();
+
+        assert!(matches!(editor.handle_key(ctrl('q')), Action::Stay));
+        assert!(
+            editor.message.contains("changed on disk"),
+            "{}",
+            editor.message
+        );
+        assert!(
+            editor.message.contains("Ctrl-Q again"),
+            "{}",
+            editor.message
+        );
+        assert!(matches!(editor.handle_key(ctrl('q')), Action::Quit));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "outside\n");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
