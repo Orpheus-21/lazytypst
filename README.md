@@ -99,6 +99,7 @@ At start, the program makes the folder `lazytypst-<process id>` in the temporary
 
 Keys in the file list. Each line shows the time since the last change of the file at the right end, in a dim style: `now`, `5 min`, `2 h`, `3 d`, `4 mo`, or `2 y`. The program hides all ages if one would cut the longest path. The list reads the times again when you press `r`, when you press `s`, and when you close the editor.
 
+- `?` or `F1`: open the help window. The window lists all keys of the list, the editor, and the text area, the same list as `lazytypst --help`. `j` and `k` or the arrow keys select a line. `Enter` closes the window and presses the key of the line, so the window also works as a menu of actions. `Esc`, `q`, `?`, or `F1` closes it. While it is open, no other key acts. In the editor, `?` types a question mark, and `F1` opens the window.
 - `j` or `Down`: select the next file.
 - `k` or `Up`: select the previous file.
 - `Enter`: open the selected file in the editor.
@@ -127,7 +128,25 @@ Keys in the editor:
 - `Ctrl-C`: copy the selected text. `Ctrl-X`: cut it. Select text with `Shift` and the arrow keys. Both keys also put the text on the system clipboard with the OSC 52 escape sequence, so you can paste it in another program. `Ctrl-Y` pastes the text that the text area holds. A terminal without OSC 52 support leaves the system clipboard unchanged.
 - `Esc`: save the text and go back to the file list. The program remembers where the cursor was in each file until you quit. If you open the same file again, the cursor goes back to that place. If the file got shorter, the cursor goes to the end of the last line. A new start begins at line 1. If the save is not possible, the program shows the reason. A second `Esc` then closes the editor without a save. Closing the editor kills a compile that still runs.
 
-All other keys edit the text. A long line wraps on screen, at a word if possible. The file keeps it as one line. The editor shows a dim line number at the left edge of each line. A line that wraps shows its number on the first row only. The right end of the status line shows an approximate word count, such as `1234 words`, and then the cursor position as `line:column`. The count is approximate. A word is a part of the text between spaces that has at least one letter or digit, so a heading mark `=` is not a word. The count skips comments (`//` and `/* */`), math between `$` signs, and lines that start with `#set`, `#show`, `#import`, `#let`, `#include`, `#pagebreak`, `#colbreak`, `#bibliography`, `#outline`, `#context`, or `#counter`. If such a line opens a bracket that it does not close, the count also skips the lines up to the closing bracket. A function call in the middle of a line still adds its parts. The count updates after each change of the text. Both numbers of the cursor position start at 1, and the column counts characters, the same as the error lines of Typst. `Tab` goes to the next stop of 2 columns, so at the start of a line it inserts 2 spaces. It inserts spaces and never a tab character. Tab characters that are already in a file stay. A paste arrives as one piece: the program asks the terminal for bracketed paste. One undo takes back a whole paste. A tab character in pasted text stays a tab character, and a line end in pasted text becomes LF. The file list ignores a paste. The text area uses the Emacs-style keys of the `ratatui-textarea` crate. `Ctrl-B` and `Ctrl-E` do the jobs above and not the Emacs jobs. Use `Left` and `End` instead.
+All other keys edit the text. A long line wraps on screen, at a word if possible. The file keeps it as one line. The editor shows a dim line number at the left edge of each line. A line that wraps shows its number on the first row only. The right end of the status line shows an approximate word count, such as `1234 words`, and then the cursor position as `line:column`. The count is approximate. A word is a part of the text between spaces that has at least one letter or digit, so a heading mark `=` is not a word. The count skips comments (`//` and `/* */`), math between `$` signs, and lines that start with `#set`, `#show`, `#import`, `#let`, `#include`, `#pagebreak`, `#colbreak`, `#bibliography`, `#outline`, `#context`, or `#counter`. If such a line opens a bracket that it does not close, the count also skips the lines up to the closing bracket. A function call in the middle of a line still adds its parts. The count updates after each change of the text. Both numbers of the cursor position start at 1, and the column counts characters, the same as the error lines of Typst. `Tab` goes to the next stop of 2 columns, so at the start of a line it inserts 2 spaces. It inserts spaces and never a tab character. Tab characters that are already in a file stay. A paste arrives as one piece: the program asks the terminal for bracketed paste. One undo takes back a whole paste. A tab character in pasted text stays a tab character, and a line end in pasted text becomes LF. The file list ignores a paste. The text area uses the Emacs-style keys of the `ratatui-textarea` crate. `Ctrl-B` and `Ctrl-E` do the jobs above and not the Emacs jobs. Use `Left` and `End` instead. These editing keys work. A test of the project checks each one.
+
+| Key | Action |
+|---|---|
+| `Ctrl-U` | Undo. |
+| `Ctrl-R` | Redo. |
+| `Shift` with the arrow keys | Select text. |
+| `Ctrl-C` | Copy the selection. |
+| `Ctrl-X` | Cut the selection. |
+| `Ctrl-Y` | Paste the text that the text area holds. |
+| `Ctrl-W` | Delete the word before the cursor. |
+| `Ctrl-K` | Delete to the end of the line. |
+| `Ctrl-J` | Delete to the start of the line. |
+| `Alt-F`, `Alt-B` | Move one word forward or back. |
+| `Ctrl-A`, `End` | Move to the start or the end of the line. |
+| `Ctrl-V`, `Alt-V` | Scroll one page down or up. |
+| `Alt-<`, `Alt->` | Move to the first or the last line. The column stays. |
+
+`Alt` with a letter arrives as `Esc` and the letter. A terminal that sends both at once gives the program the `Alt` key. `F1` shows the same table in the help window.
 
 Save rules:
 
