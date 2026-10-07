@@ -13,6 +13,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 ### Added
 
 - A list of the `.typ` files in a folder, up to three folders deep. Hidden folders are skipped.
+- A folder with exactly one `.typ` file opens that file in the editor at start. `Esc` shows the list.
 - Keys in the list: `j` and `k` or the arrow keys, `g` and `G` or `Home` and `End`, `Enter` to open a file, and `q` to quit.
 - `/` filters the list while you type. The match ignores case. `Esc` removes the filter.
 - `r` reads the folder again, to show new files and to drop deleted files.
