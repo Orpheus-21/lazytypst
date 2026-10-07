@@ -41,6 +41,7 @@ The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested wi
 - `Ctrl-Q` saves the file and quits the program from the editor.
 - `Ctrl-C` and `Ctrl-X` also put the selected text on the system clipboard, with the OSC 52 escape sequence.
 - `F5` turns the live compile off and on. The autosave stays on.
+- `Ctrl-F` searches with a regular expression. `Enter` or `Ctrl-F` goes to the next match, and the search wraps. `Esc` closes the prompt.
 - `Ctrl-G` moves the cursor to the first error of the last compile.
 - `Ctrl-B` compiles at once, and `Ctrl-E` exports a PDF next to the file that was compiled.
 - The title of the terminal window names the folder or the open file.
