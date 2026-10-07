@@ -160,6 +160,8 @@ pub enum Action {
     Close,
     /// Close the editor and quit the program.
     Quit,
+    /// Show the help window.
+    Help,
 }
 
 pub struct Editor {
@@ -346,6 +348,8 @@ impl Editor {
                 self.message = "No changes to save".into();
             }
             self.save(true);
+        } else if key.code == KeyCode::F(1) {
+            return Action::Help;
         } else if key.code == KeyCode::F(5) {
             self.paused = !self.paused;
             self.message = if self.paused {
@@ -717,7 +721,7 @@ impl Editor {
         frame.render_widget(self.compile_pane(pane), pane);
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
-            "Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Ctrl-G error  Alt-Down/Alt-Up page  Esc back"
+            "F1 help  Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Ctrl-G error  Alt-Up/Down page  Esc back"
         } else {
             &self.message
         };
@@ -1488,6 +1492,98 @@ mod tests {
         editor.tick(Instant::now() + Duration::from_secs(1));
         assert!(editor.job.is_some(), "the next pause compiles");
         editor.stop_compile();
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// Each editing key that the README and the help text list. If a key changes in `ratatui-textarea`,
+    /// this test fails, and the list must change.
+    #[test]
+    fn the_listed_editing_keys_work_as_listed() {
+        let alt = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        let text = "one two three\nsecond line\nthird\n";
+        let path = temp_file("editkeys", text);
+        let mut editor = open(&path);
+        let lines = |editor: &Editor| editor.textarea.lines().join("/");
+        let at = |editor: &mut Editor, row: u16, column: u16| {
+            editor.textarea.move_cursor(CursorMove::Jump(row, column));
+        };
+
+        editor.handle_key(key(KeyCode::Char('X')));
+        editor.handle_key(ctrl('u'));
+        assert_eq!(
+            lines(&editor),
+            "one two three/second line/third",
+            "Ctrl-U undoes"
+        );
+        editor.handle_key(ctrl('r'));
+        assert_eq!(
+            lines(&editor),
+            "Xone two three/second line/third",
+            "Ctrl-R redoes"
+        );
+        editor.handle_key(ctrl('u'));
+
+        at(&mut editor, 0, 13);
+        editor.handle_key(ctrl('w'));
+        assert_eq!(lines(&editor), "one two /second line/third", "Ctrl-W");
+        editor.handle_key(ctrl('u'));
+
+        at(&mut editor, 0, 4);
+        editor.handle_key(ctrl('k'));
+        assert_eq!(lines(&editor), "one /second line/third", "Ctrl-K");
+        editor.handle_key(ctrl('u'));
+
+        at(&mut editor, 0, 4);
+        editor.handle_key(ctrl('j'));
+        assert_eq!(lines(&editor), "two three/second line/third", "Ctrl-J");
+        editor.handle_key(ctrl('u'));
+
+        at(&mut editor, 0, 4);
+        editor.handle_key(alt('f'));
+        assert_eq!(editor.cursor_position(), (0, 8), "Alt-F");
+        editor.handle_key(alt('b'));
+        assert_eq!(editor.cursor_position(), (0, 4), "Alt-B");
+        editor.handle_key(ctrl('a'));
+        assert_eq!(editor.cursor_position(), (0, 0), "Ctrl-A");
+        editor.handle_key(key(KeyCode::End));
+        assert_eq!(editor.cursor_position(), (0, 13), "End");
+        editor.handle_key(alt('>'));
+        assert_eq!(editor.cursor_position().0, 2, "Alt-> goes to the last line");
+        editor.handle_key(alt('<'));
+        assert_eq!(
+            editor.cursor_position().0,
+            0,
+            "Alt-< goes to the first line"
+        );
+
+        // Select with Shift and the arrows, copy with Ctrl-C, paste with Ctrl-Y.
+        at(&mut editor, 0, 0);
+        for _ in 0..3 {
+            editor.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        }
+        editor.handle_key(ctrl('c'));
+        editor.handle_key(key(KeyCode::End));
+        editor.handle_key(ctrl('y'));
+        assert_eq!(
+            lines(&editor),
+            "one two threeone/second line/third",
+            "Ctrl-C, Ctrl-Y"
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ctrl_v_and_alt_v_scroll_one_page() {
+        let text: String = (0..100).map(|n| format!("line {n}\n")).collect();
+        let path = temp_file("editpages", &text);
+        let mut editor = open(&path);
+        let _ = screen_text(&mut editor); // the text area learns the height of the screen
+        editor.handle_key(ctrl('v'));
+        let down = editor.cursor_position().0;
+        assert!(down > 5, "Ctrl-V moves down a page: {down}");
+        editor.handle_key(ctrl('v'));
+        editor.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
+        assert!(editor.cursor_position().0 < 2 * down, "Alt-V moves up");
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

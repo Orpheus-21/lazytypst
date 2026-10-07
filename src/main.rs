@@ -4,6 +4,7 @@ mod compile;
 mod doctor;
 mod editor;
 mod fsutil;
+mod help;
 mod newfile;
 mod preview;
 mod state;
@@ -30,6 +31,7 @@ use ratatui_textarea::{CursorMove, TextArea};
 
 use compile::Job;
 use editor::{Action, Editor};
+use help::{Help, Scope};
 
 /// What the prompt asks for.
 #[derive(Clone, Copy, PartialEq)]
@@ -84,9 +86,16 @@ struct App {
     all_files: Vec<PathBuf>,
     /// The open file. The browser shows while this is `None`.
     editor: Option<Editor>,
+    /// The help window. While it is open, it takes every key.
+    help: Option<Help>,
 }
 
-const USAGE: &str = "\
+/// The text of `--help`. The key lists come from `help::KEYS`, the same as the help window.
+fn usage() -> String {
+    format!("{USAGE_HEAD}{}", help::usage_keys())
+}
+
+const USAGE_HEAD: &str = "\
 Usage: lazytypst [FOLDER | FILE.typ]
 
 lazytypst lists the .typ files in FOLDER and opens them in an editor with a live preview.
@@ -98,37 +107,6 @@ Options:
   -V, --version  Show the version of lazytypst and the version of typst.
   --doctor       Check typst, the terminal image protocol, and the temporary folder.
 
-Keys in the file list:
-  j or Down      Select the next file.
-  k or Up        Select the previous file.
-  Enter          Open the selected file.
-  n              Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
-  E              Export the PDF of the selected file next to it.
-  e              Edit the selected file in $VISUAL or $EDITOR, then open it here.
-  s              Switch the order: by path, or the newest change first.
-  y              Copy the absolute path of the selected file to the system clipboard.
-  /              Filter the list. Type a part of a path. Enter keeps the filter, Esc removes it.
-  r              Read the folder again, to show new files and to drop deleted files.
-  g or Home      Select the first file.
-  G or End       Select the last file.
-  m              Mark the selected file as the main file, or remove the mark.
-                 lazytypst then compiles the main file, whatever file you edit.
-  q              Quit.
-
-Keys in the editor:
-  Ctrl-S         Save the file.
-  Ctrl-B         Save and compile the file.
-  Ctrl-E         Save the file and export a PDF next to it.
-  F5             Turn the live compile off or on. Autosave stays on.
-  Ctrl-G         Go to the first error of the last compile.
-  Ctrl-O         Open the last exported PDF in the system viewer (xdg-open).
-  Alt-Down       Show the next page.
-  Alt-Up         Show the previous page.
-  Alt-Home       Show the first page.
-  Alt-End        Show the last page.
-  Esc            Save the file and go back to the file list.
-  Ctrl-C, Ctrl-X Copy or cut the selected text. It also goes to the system clipboard.
-  Ctrl-Q         Save the file and quit.
 ";
 
 #[derive(Debug, PartialEq)]
@@ -337,6 +315,7 @@ impl App {
             times: HashMap::new(),
             newest_first: false,
             editor: None,
+            help: None,
         };
         app.read_times();
         app
@@ -711,11 +690,38 @@ impl App {
         }
     }
 
+    /// Handles a key while the help window is open. `Esc`, `q`, `?`, and `F1` close it. The arrow keys
+    /// select a line, and `Enter` closes the window and presses the key of the line. Returns true when
+    /// that key quits the program.
+    fn handle_help_key(&mut self, key: KeyEvent) -> bool {
+        let Some(help) = &mut self.help else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | '?') | KeyCode::F(1) => self.help = None,
+            KeyCode::Down | KeyCode::Char('j') => help.select(1),
+            KeyCode::Up | KeyCode::Char('k') => help.select(-1),
+            KeyCode::Enter => {
+                if let Some(pressed) = help.enter() {
+                    self.help = None;
+                    return self.handle_key(pressed);
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
     /// Handles one key. Returns true when the program must quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if self.help.is_some() {
+            return self.handle_help_key(key);
+        }
         if let Some(editor) = &mut self.editor {
             let action = editor.handle_key(key);
-            if !matches!(action, Action::Stay) {
+            if matches!(action, Action::Help) {
+                self.help = Some(Help::new(Scope::Editor));
+            } else if !matches!(action, Action::Stay) {
                 self.close_editor();
             }
             return matches!(action, Action::Quit);
@@ -726,6 +732,7 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') => return true,
+            KeyCode::Char('?') | KeyCode::F(1) => self.help = Some(Help::new(Scope::List)),
             KeyCode::Char('y') => self.copy_selected_path(),
             KeyCode::Char('E') => self.export_selected(),
             KeyCode::Char('s') => self.toggle_sort(),
@@ -788,7 +795,7 @@ fn main() -> std::io::Result<()> {
     let arg = match parse_args(std::env::args_os()) {
         Ok(Args::Run(arg)) => arg,
         Ok(Args::Help) => {
-            print!("{USAGE}");
+            print!("{}", usage());
             return Ok(());
         }
         Ok(Args::Doctor) => std::process::exit(run_doctor()),
@@ -800,7 +807,7 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
         Err(message) => {
-            eprint!("{message}\n\n{USAGE}");
+            eprint!("{message}\n\n{}", usage());
             std::process::exit(2);
         }
     };
@@ -897,6 +904,13 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
 }
 
 fn draw(frame: &mut Frame, app: &mut App) {
+    draw_screen(frame, app);
+    if let Some(help) = &mut app.help {
+        help.draw(frame);
+    }
+}
+
+fn draw_screen(frame: &mut Frame, app: &mut App) {
     if let Some(editor) = &mut app.editor {
         editor.draw(frame);
         return;
@@ -970,7 +984,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
             .highlight_symbol("> ");
         frame.render_stateful_widget(list, body, &mut app.list);
     }
-    frame.render_widget(Paragraph::new(app.status.as_str()), status);
+    let hint = if app.status.is_empty() {
+        "? help  Enter open  n new  / filter  s sort  q quit"
+    } else {
+        app.status.as_str()
+    };
+    frame.render_widget(Paragraph::new(hint), status);
     if let Some(prompt) = &app.prompt {
         let label_text = prompt.kind.label();
         let label_width = u16::try_from(label_text.len()).unwrap_or(u16::MAX);
@@ -2349,6 +2368,101 @@ mod tests {
         assert!(narrow.contains(long), "the path stays whole");
         assert!(!narrow.contains("2 h"), "the age is hidden");
         fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn question_mark_opens_the_help_in_the_list_and_every_closing_key_closes_it_with_the_screen_unchanged()
+     {
+        let mut app = app("helplist");
+        let before = screen(&mut app);
+        for closing in [
+            KeyCode::Esc,
+            KeyCode::Char('q'),
+            KeyCode::Char('?'),
+            KeyCode::F(1),
+        ] {
+            press(&mut app, KeyCode::Char('?'));
+            let open = screen(&mut app);
+            assert!(
+                open.contains("Help") && open.contains("Keys in the file list:"),
+                "{open}"
+            );
+            assert!(!press(&mut app, closing), "a closing key must not quit");
+            assert!(app.help.is_none(), "{closing:?}");
+            assert_eq!(screen(&mut app), before, "{closing:?}");
+        }
+        press(&mut app, KeyCode::F(1));
+        assert!(app.help.is_some(), "F1 opens it in the list too");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn while_the_help_is_open_no_other_key_acts() {
+        let mut app = app("helpmodal");
+        press(&mut app, KeyCode::Char('?'));
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.prompt.is_none(), "n and / must not open a prompt");
+        assert!(app.help.is_some());
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn f1_in_the_editor_opens_the_help_and_a_question_mark_types() {
+        let mut app = app("helpeditor");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('?'));
+        assert!(app.help.is_none(), "? types in the editor");
+        assert!(screen(&mut app).contains("?text of a"));
+        press(&mut app, KeyCode::F(1));
+        assert!(screen(&mut app).contains("Keys in the editor:"));
+        press(&mut app, KeyCode::F(1));
+        assert!(app.help.is_none());
+        assert!(app.editor.is_some(), "the editor stays open");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn enter_on_a_line_of_the_window_runs_the_key_of_that_line() {
+        let mut app = app("helprun");
+        press(&mut app, KeyCode::Char('?'));
+        app.help.as_mut().unwrap().select_keys("E");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.help.is_none(), "Enter closes the window");
+        assert!(app.status.starts_with("Exporting"), "{}", app.status);
+        wait_for_export(&mut app);
+        assert_eq!(app.status, "Exported a.pdf");
+
+        press(&mut app, KeyCode::Char('?'));
+        app.help.as_mut().unwrap().select_keys("q");
+        assert!(press(&mut app, KeyCode::Enter), "the line Quit quits");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn enter_in_the_window_of_the_editor_runs_an_editor_key() {
+        let mut app = app("helprun2");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('X'));
+        press(&mut app, KeyCode::F(1));
+        app.help.as_mut().unwrap().select_keys("Esc");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editor.is_none(), "Esc saved and closed the editor");
+        let text = fs::read_to_string(app.root.join("a.typ")).unwrap();
+        assert!(text.starts_with("Xtext"), "{text}");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_help_text_and_the_window_come_from_the_same_list() {
+        let text = usage();
+        for entry in help::KEYS {
+            assert!(
+                text.contains(entry.keys) && text.contains(entry.text),
+                "{}",
+                entry.keys
+            );
+        }
     }
 
     #[test]
