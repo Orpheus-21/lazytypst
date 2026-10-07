@@ -11,7 +11,7 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use ratatui::{
@@ -19,6 +19,7 @@ use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEvent},
     layout::{Constraint, Layout},
     style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, List, ListState, Paragraph},
 };
 
@@ -69,6 +70,10 @@ struct App {
     export: Option<(Job, PathBuf)>,
     /// The command that the main loop runs in the terminal, and the file that it edits. See `edit_selected`.
     external: Option<(Vec<String>, PathBuf)>,
+    /// The modification time of each file in the list. See `read_times`.
+    times: HashMap<PathBuf, SystemTime>,
+    /// True when the list shows the newest file first. False sorts by path.
+    newest_first: bool,
     /// The prompt for a new file name, or for the filter. While it is open, it takes every key.
     prompt: Option<Prompt>,
     /// The part of a path that a file must have to show in the list. The match ignores case. Empty: no filter.
@@ -97,6 +102,7 @@ Keys in the file list:
   n              Make a new .typ file. Type a path such as chapters/two. The ending .typ is added.
   E              Export the PDF of the selected file next to it.
   e              Edit the selected file in $VISUAL or $EDITOR, then open it here.
+  s              Switch the order: by path, or the newest change first.
   y              Copy the absolute path of the selected file to the system clipboard.
   /              Filter the list. Type a part of a path. Enter keeps the filter, Esc removes it.
   r              Read the folder again, to show new files and to drop deleted files.
@@ -183,6 +189,20 @@ fn run_external(command: &[String], file: &Path) -> std::io::Result<std::process
     write_to_terminal(ENABLE_PASTE);
     back?;
     result
+}
+
+/// The time since the last change of a file, in a few characters: `now`, `5 min`, `2 h`, `3 d`, `4 mo`, `2 y`.
+fn age_text(age: Duration) -> String {
+    let seconds = age.as_secs();
+    let days = seconds / 86_400;
+    match seconds {
+        0..60 => "now".to_string(),
+        60..3_600 => format!("{} min", seconds / 60),
+        3_600..86_400 => format!("{} h", seconds / 3_600),
+        _ if days < 30 => format!("{days} d"),
+        _ if days < 365 => format!("{} mo", days / 30),
+        _ => format!("{} y", days / 365),
+    }
 }
 
 fn window_title(root: &Path, open: Option<&Path>) -> String {
@@ -292,7 +312,7 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, String> 
 impl App {
     fn new(root: PathBuf, files: Vec<PathBuf>, picker: Picker) -> Self {
         let first = (!files.is_empty()).then_some(0);
-        App {
+        let mut app = App {
             root,
             picker,
             all_files: files.clone(),
@@ -308,8 +328,12 @@ impl App {
             clipboard: None,
             export: None,
             external: None,
+            times: HashMap::new(),
+            newest_first: false,
             editor: None,
-        }
+        };
+        app.read_times();
+        app
     }
 
     /// Sets the state file and takes the saved main file of this project. A saved file that is not in the list
@@ -355,6 +379,7 @@ impl App {
         };
         self.status = format!("Read the folder again: {} files", files.len());
         self.all_files = files;
+        self.read_times();
         self.set_filter(self.filter.clone()); // keeps the filter and the selection
         if self
             .main_file
@@ -488,6 +513,30 @@ impl App {
 
     /// Sets the filter and shows the files that match. The selection stays on the same file if the filter
     /// still shows it, and moves to the first file if not.
+    /// Reads the modification time of each file of the list. The list sort and the ages use them. A file
+    /// that cannot be read has no time: it sorts last and shows no age.
+    fn read_times(&mut self) {
+        self.times = self
+            .all_files
+            .iter()
+            .filter_map(|path| {
+                let time = std::fs::metadata(self.root.join(path))
+                    .ok()?
+                    .modified()
+                    .ok()?;
+                Some((path.clone(), time))
+            })
+            .collect();
+    }
+
+    /// Switches between the order by path and the order by last change, newest first.
+    /// The selection stays on the same file.
+    fn toggle_sort(&mut self) {
+        self.newest_first = !self.newest_first;
+        self.read_times();
+        self.set_filter(self.filter.clone());
+    }
+
     fn set_filter(&mut self, filter: String) {
         self.filter = filter;
         let selected = self.selected_file().cloned();
@@ -500,6 +549,12 @@ impl App {
             })
             .cloned()
             .collect();
+        if self.newest_first {
+            // The sort is stable: files with the same time stay in the order by path.
+            let times = &self.times;
+            self.files
+                .sort_by_key(|path| std::cmp::Reverse(times.get(path).copied()));
+        }
         let index = selected.and_then(|path| self.files.iter().position(|file| *file == path));
         self.list
             .select((!self.files.is_empty()).then_some(index.unwrap_or(0)));
@@ -540,6 +595,9 @@ impl App {
             return;
         };
         let path = editor.path().to_path_buf();
+        // The save changed the time of the file, so the sort and the age need the new time.
+        self.read_times();
+        self.set_filter(self.filter.clone());
         self.cursors.insert(path.clone(), editor.cursor_position());
         self.pages.insert(path.clone(), editor.page());
         let (Some(state), Ok(relative)) = (&self.state_file, path.strip_prefix(&self.root)) else {
@@ -664,6 +722,7 @@ impl App {
             KeyCode::Char('q') => return true,
             KeyCode::Char('y') => self.copy_selected_path(),
             KeyCode::Char('E') => self.export_selected(),
+            KeyCode::Char('s') => self.toggle_sort(),
             KeyCode::Char('e') => {
                 self.edit_selected(std::env::var_os("VISUAL"), std::env::var_os("EDITOR"));
             }
@@ -808,24 +867,61 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Length(prompt_height),
     ])
     .areas(frame.area());
-    let title = if app.filter.is_empty() {
+    let mut title = if app.filter.is_empty() {
         "lazytypst".to_string()
     } else {
         format!("lazytypst /{}", app.filter)
     };
+    if app.newest_first {
+        title.push_str(" (newest first)");
+    }
     let block = Block::bordered().title(title);
     if app.all_files.is_empty() {
         frame.render_widget(Paragraph::new("No .typ files").block(block), body);
     } else if app.files.is_empty() {
         frame.render_widget(Paragraph::new("No match").block(block), body);
     } else {
-        let items = app.files.iter().map(|path| {
-            let mark = if app.main_file.as_ref() == Some(path) {
-                " [main]"
+        let now = SystemTime::now();
+        let names: Vec<String> = app
+            .files
+            .iter()
+            .map(|path| {
+                let mark = if app.main_file.as_ref() == Some(path) {
+                    " [main]"
+                } else {
+                    ""
+                };
+                format!("{}{mark}", path.display())
+            })
+            .collect();
+        let ages: Vec<String> = app
+            .files
+            .iter()
+            .map(|path| {
+                app.times
+                    .get(path)
+                    .map(|time| age_text(now.duration_since(*time).unwrap_or_default()))
+                    .unwrap_or_default()
+            })
+            .collect();
+        // Two columns for the highlight symbol and two for the border.
+        let inner = usize::from(body.width.saturating_sub(4));
+        let width_of = |text: &String| Span::raw(text.as_str()).width();
+        let longest = names.iter().map(width_of).max().unwrap_or(0);
+        let age_width = ages.iter().map(width_of).max().unwrap_or(0);
+        // The age is hidden, for all files, when it would cut the longest path.
+        let show_ages = age_width > 0 && longest + 2 + age_width <= inner;
+        let items = names.iter().zip(&ages).map(|(name, age)| {
+            if show_ages {
+                let gap = inner.saturating_sub(width_of(name) + width_of(age));
+                Line::from(vec![
+                    Span::raw(name.clone()),
+                    Span::raw(" ".repeat(gap)),
+                    Span::styled(age.clone(), Style::new().add_modifier(Modifier::DIM)),
+                ])
             } else {
-                ""
-            };
-            format!("{}{mark}", path.display())
+                Line::from(name.clone())
+            }
         });
         let list = List::new(items)
             .block(block)
@@ -1572,7 +1668,16 @@ mod tests {
                     .map(|column| buffer[(column, row)].symbol())
                     .collect::<String>()
             })
-            .map(|row| row.trim().trim_start_matches('>').trim().to_string())
+            // The age sits after a gap of spaces at the right end.
+            .map(|row| {
+                row.trim()
+                    .trim_start_matches('>')
+                    .trim()
+                    .split("  ")
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
             .filter(|row| row.ends_with(".typ") || row.contains(".typ ["))
             .collect()
     }
@@ -2127,6 +2232,81 @@ mod tests {
             "{}",
             app.status
         );
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    /// Sets the modification time of `file` to `hours` hours ago.
+    fn set_age(file: &Path, hours: u64) {
+        let handle = fs::File::options().write(true).open(file).unwrap();
+        handle
+            .set_modified(SystemTime::now() - Duration::from_secs(hours * 3_600))
+            .unwrap();
+    }
+
+    /// Draws the app on a screen that is `width` columns wide.
+    fn screen_at(app: &mut App, width: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn the_age_text_uses_short_units() {
+        let secs = |n: u64| age_text(Duration::from_secs(n));
+        assert_eq!(secs(0), "now");
+        assert_eq!(secs(59), "now");
+        assert_eq!(secs(5 * 60), "5 min");
+        assert_eq!(secs(2 * 3_600), "2 h");
+        assert_eq!(secs(23 * 3_600), "23 h");
+        assert_eq!(secs(3 * 86_400), "3 d");
+        assert_eq!(secs(4 * 30 * 86_400), "4 mo");
+        assert_eq!(secs(2 * 365 * 86_400), "2 y");
+    }
+
+    #[test]
+    fn s_sorts_by_last_change_newest_first_keeps_the_selection_and_s_again_restores_the_order() {
+        let mut app = app("sort");
+        set_age(&app.root.join("a.typ"), 5);
+        set_age(&app.root.join("sub").join("b.typ"), 1);
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(
+            app.files,
+            [PathBuf::from("sub/b.typ"), PathBuf::from("a.typ")]
+        );
+        assert_eq!(
+            app.selected_file(),
+            Some(&PathBuf::from("a.typ")),
+            "the selected file stays selected"
+        );
+        assert!(screen(&mut app).contains("lazytypst (newest first)"));
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(
+            app.files,
+            [PathBuf::from("a.typ"), PathBuf::from("sub/b.typ")]
+        );
+        assert_eq!(app.selected_file(), Some(&PathBuf::from("a.typ")));
+        assert!(!screen(&mut app).contains("newest first"));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_list_shows_the_age_and_hides_it_in_a_narrow_terminal() {
+        let mut app = app("age");
+        let long = "a-rather-long-file-name-here.typ";
+        fs::write(app.root.join(long), "").unwrap();
+        set_age(&app.root.join(long), 2);
+        press(&mut app, KeyCode::Char('r'));
+        let wide = screen_at(&mut app, 100);
+        assert!(wide.contains("2 h"), "{wide}");
+        let narrow = screen_at(&mut app, 40);
+        assert!(narrow.contains(long), "the path stays whole");
+        assert!(!narrow.contains("2 h"), "the age is hidden");
         fs::remove_dir_all(&app.root).unwrap();
     }
 
