@@ -309,13 +309,15 @@ The file `CHANGELOG.md` lists the changes that a user can see, for each version.
 
 A tag that starts with `v`, for example `v0.1.0`, starts the workflow `.github/workflows/release.yml`. The workflow stops with an error if the tag and the version in `Cargo.toml` differ, or if `CHANGELOG.md` has no entry for the version, or if that entry still says that the version is not yet released. Then the workflow runs the tests, builds a static binary for x86_64 Linux, and checks the archive that it packs. At last, it makes a GitHub release with the archive, its checksum file, and the changelog entry as the text of the release.
 
-A manual run of the workflow is a dry run. It builds and checks the archive and keeps it as an artifact for 7 days. It makes no release.
+A manual run of the workflow is a dry run. It builds and checks the archive and keeps it as an artifact for 7 days. It makes no release. If you start the manual run with the choice `test_release`, the workflow also runs the step that makes the release as a test: it makes a draft release with a throwaway name, checks that the draft has the archive and its checksum file, and deletes the draft. Other people cannot see a draft.
 
 ## Tests
 
 `cargo test` runs the tests. Many tests run the real `typst` command, so `typst` must be in `PATH`. The tests run on Linux only, because some of them read `/proc`. `cargo clippy --all-targets -- -D warnings` must show no warning, and `cargo fmt --check` must pass.
 
 GitHub Actions runs both on each push and on each pull request to `main`. The workflow is the file `.github/workflows/ci.yml`. It installs Typst 0.15.1 from the release page of Typst and checks the file against a fixed SHA-256 hash. It runs `cargo test` with the current stable version of Rust and with Rust 1.90. It runs clippy and `cargo fmt --check` with the stable version only. The run with Rust 1.90 is the check for the minimum Rust version in the requirements above.
+
+Two more workflows exist. `.github/workflows/audit.yml` checks the crates in `Cargo.lock` against the RustSec advisory database each week and when `Cargo.lock` or `Cargo.toml` changes. `.github/workflows/pages.yml` publishes the folder `site/` to GitHub Pages when a push changes it.
 
 ## Measuring
 
