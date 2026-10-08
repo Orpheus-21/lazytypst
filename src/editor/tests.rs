@@ -1386,6 +1386,115 @@ fn the_search_prompt_and_the_full_preview_exclude_each_other() {
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
+/// What a key can change in the editor. A key that changes none of these did nothing.
+#[derive(Debug, PartialEq)]
+struct Snapshot {
+    text: Vec<String>,
+    mode: &'static str,
+    cursor: (usize, usize),
+    message: String,
+    compiling: bool,
+    exporting: bool,
+    paused: bool,
+    page: usize,
+    left: bool,
+}
+
+fn snapshot(editor: &Editor, left: bool) -> Snapshot {
+    Snapshot {
+        text: editor.textarea.lines().to_vec(),
+        mode: match editor.mode {
+            Mode::Edit => "edit",
+            Mode::Search(_) => "search",
+            Mode::Full => "full",
+        },
+        cursor: editor.cursor_position(),
+        message: editor.message.clone(),
+        compiling: editor.job.is_some(),
+        exporting: editor.export.is_some(),
+        paused: editor.paused,
+        page: editor.preview.wanted_page(),
+        left,
+    }
+}
+
+/// An editor in the mode `mode`. With `with_page`, a compile of page 2 of 3 has finished, so that the
+/// page keys have a page to turn. Without it, no compile runs, which keeps the test fast.
+fn editor_in_mode(name: &str, mode: &str, with_page: bool) -> (Editor, PathBuf) {
+    let path = temp_file(name, "= One\n#pagebreak()\n= Two\n#pagebreak()\n= Three\n");
+    let mut editor = open(&path);
+    if with_page {
+        editor.preview.want(2);
+        editor.start_compile();
+        wait_for_report(&mut editor);
+        assert_eq!(editor.preview.wanted_page(), 2);
+    }
+    match mode {
+        "search" => {
+            editor.handle_key(ctrl('f'));
+        }
+        "full" => {
+            editor.handle_key(key(KeyCode::F(11)));
+        }
+        _ => {}
+    }
+    (editor, path)
+}
+
+fn key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent::new(code, modifiers)
+}
+
+/// Each key of the editor in the help list works in the text, is typed into the prompt in the search
+/// mode, and works or is ignored on purpose in the full preview. If a key drifts, this test names it.
+#[test]
+fn every_key_of_the_help_list_does_what_the_mode_says() {
+    use crate::help::{KEYS, Scope};
+    let mut ignored_in_full = Vec::new();
+    for entry in KEYS.iter().filter(|entry| entry.scope == Scope::Editor) {
+        let Some((code, modifiers)) = entry.press else {
+            continue;
+        };
+        for mode in ["edit", "search", "full"] {
+            let page_key = modifiers.contains(KeyModifiers::ALT);
+            let (mut editor, path) = editor_in_mode(&format!("allkeys-{mode}"), mode, page_key);
+            let before = snapshot(&editor, false);
+            let action = editor.handle_key(key_event(code, modifiers));
+            let after = snapshot(&editor, !matches!(action, Action::Stay));
+            let acted = before != after;
+            match mode {
+                "edit" => assert!(acted, "{} does nothing in the text", entry.keys),
+                "search" => {
+                    assert_eq!(
+                        before.text, after.text,
+                        "{} changes the text in the search prompt",
+                        entry.keys
+                    );
+                    assert!(
+                        matches!(action, Action::Stay),
+                        "{} acts in the search prompt",
+                        entry.keys
+                    );
+                }
+                _ => {
+                    if !acted {
+                        ignored_in_full.push(entry.keys);
+                    }
+                    assert_eq!(
+                        before.text, after.text,
+                        "{} changes the text in the full preview",
+                        entry.keys
+                    );
+                }
+            }
+            drop(editor);
+            fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+    // Only the search key does nothing in the full preview. A new entry in this list is a decision.
+    assert_eq!(ignored_in_full, ["Ctrl-F"]);
+}
+
 #[test]
 fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
     let path = temp_file("escconflict", "text\n");
