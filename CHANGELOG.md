@@ -6,6 +6,10 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 ## [Unreleased]
 
+### Added
+
+- The release archive has a build attestation. `gh attestation verify` checks that GitHub built it from this repository. The release is built with a fixed version of Rust.
+
 ## [0.1.0] (2026-10-09)
 
 The first version. It needs Typst 0.12.0 or later in `PATH`, and it is tested with Typst 0.15.1. It needs Rust 1.90 or later to build. It is tested on Linux, with the kitty image protocol in Ghostty and with half blocks. The sixel and iTerm2 protocols are not tested.

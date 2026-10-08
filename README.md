@@ -93,6 +93,8 @@ This way needs no Rust. The release 0.1.0 is the first one.
    install -m 755 lazytypst-<version>-x86_64-linux/lazytypst ~/.local/bin/
    ```
 
+To check where the archive comes from, run `gh attestation verify lazytypst-<version>-x86_64-linux.tar.gz --repo Orpheus-21/lazytypst`. The command needs the GitHub CLI. It checks that GitHub built the archive from this repository with the workflow `release.yml`, and it names the commit. A changed archive fails the check. The archives of releases after 0.1.0 have this attestation. The archive of 0.1.0 has none, and the checksum file is the only check for it.
+
 The archive also holds the man page `lazytypst.1`. To install it, run `install -D -m 644 lazytypst-<version>-x86_64-linux/lazytypst.1 ~/.local/share/man/man1/lazytypst.1`. Then `man lazytypst` shows it.
 
 The program in the archive is a static binary. It runs on any x86_64 Linux system, and it does not depend on the C library of the system. It still needs the `typst` command in `PATH`.
@@ -307,7 +309,7 @@ The file `CHANGELOG.md` lists the changes that a user can see, for each version.
 
 ## Releases
 
-A tag that starts with `v`, for example `v0.1.0`, starts the workflow `.github/workflows/release.yml`. The workflow stops with an error if the tag and the version in `Cargo.toml` differ, or if `CHANGELOG.md` has no entry for the version, or if that entry still says that the version is not yet released. Then the workflow runs the tests, builds a static binary for x86_64 Linux, and checks the archive that it packs. At last, it makes a GitHub release with the archive, its checksum file, and the changelog entry as the text of the release.
+A tag that starts with `v`, for example `v0.1.0`, starts the workflow `.github/workflows/release.yml`. The workflow stops with an error if the tag and the version in `Cargo.toml` differ, or if `CHANGELOG.md` has no entry for the version, or if that entry still says that the version is not yet released. Then the workflow runs the tests, builds a static binary for x86_64 Linux with Rust 1.99.0 (the version is fixed in the file, so a new stable version cannot change a release), and checks the archive that it packs. At last, it makes a GitHub release with the archive, its checksum file, and the changelog entry as the text of the release.
 
 A manual run of the workflow is a dry run. It builds and checks the archive and keeps it as an artifact for 7 days. It makes no release. If you start the manual run with the choice `test_release`, the workflow also runs the step that makes the release as a test: it makes a draft release with a throwaway name, checks that the draft has the archive and its checksum file, and deletes the draft. Other people cannot see a draft.
 
