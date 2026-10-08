@@ -140,7 +140,31 @@ pub fn out_dir() -> PathBuf {
 }
 
 fn out_dir_path() -> PathBuf {
-    std::env::temp_dir().join(format!("lazytypst-{}", std::process::id()))
+    base_dir().join(format!("lazytypst-{}", std::process::id()))
+}
+
+/// The folder that holds the page folder of each run: `$XDG_RUNTIME_DIR`, or else the temporary directory.
+/// `$XDG_RUNTIME_DIR` is made for this: it belongs to one user, only that user can open it, and the system
+/// removes it at the last logout. The temporary directory is shared, so another user could take the name
+/// `lazytypst-<process id>` first. A value that is not an absolute path to a folder of the user is ignored.
+pub fn base_dir() -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    base_dir_from(
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        std::env::temp_dir(),
+        fs::metadata("/proc/self").map(|own| own.uid()).ok(),
+    )
+}
+
+fn base_dir_from(runtime: Option<std::ffi::OsString>, tmp: PathBuf, uid: Option<u32>) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    runtime
+        .map(PathBuf::from)
+        .filter(|dir| {
+            dir.is_absolute()
+                && fs::metadata(dir).is_ok_and(|meta| meta.is_dir() && Some(meta.uid()) == uid)
+        })
+        .unwrap_or(tmp)
 }
 
 /// The tests use the page folder of the program, and nothing else deletes it at the end of a test run. Each
@@ -227,8 +251,21 @@ fn make_private_dir(path: &Path) -> io::Result<()> {
 pub fn remove_stale_dirs() {
     use std::os::unix::fs::MetadataExt;
     if let Ok(own) = fs::metadata(out_dir()) {
-        remove_stale_dirs_in(&std::env::temp_dir(), own.uid());
+        // Earlier versions made their folder in the temporary directory, so look there too.
+        for dir in scan_dirs() {
+            remove_stale_dirs_in(&dir, own.uid());
+        }
     }
+}
+
+/// The folders in which stale page folders can be: the base folder, and the temporary directory.
+pub fn scan_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![base_dir()];
+    let tmp = std::env::temp_dir();
+    if !dirs.contains(&tmp) {
+        dirs.push(tmp);
+    }
+    dirs
 }
 
 /// Deletes each stale folder in `tmp`. See `stale_dirs_in`.
@@ -980,6 +1017,50 @@ mod tests {
             report.lines
         );
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_runtime_folder_is_the_base_if_it_is_a_folder_of_the_user_and_else_the_temporary_directory()
+     {
+        let tmp = PathBuf::from("/tmp");
+        let (dir, uid) = test_dir("basedir");
+        let os = |path: &Path| Some(path.as_os_str().to_owned());
+        assert_eq!(base_dir_from(os(&dir), tmp.clone(), Some(uid)), dir);
+        // A value that is no good is ignored.
+        assert_eq!(base_dir_from(None, tmp.clone(), Some(uid)), tmp);
+        assert_eq!(
+            base_dir_from(Some("relative/dir".into()), tmp.clone(), Some(uid)),
+            tmp
+        );
+        assert_eq!(
+            base_dir_from(os(&dir.join("missing")), tmp.clone(), Some(uid)),
+            tmp
+        );
+        fs::write(dir.join("file"), "").unwrap();
+        assert_eq!(
+            base_dir_from(os(&dir.join("file")), tmp.clone(), Some(uid)),
+            tmp
+        );
+        // A folder of another user is not trusted.
+        assert_eq!(base_dir_from(os(&dir), tmp.clone(), Some(uid + 1)), tmp);
+        assert_eq!(base_dir_from(os(&dir), tmp.clone(), None), tmp);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_page_folder_is_inside_the_base_folder() {
+        assert_eq!(out_dir().parent(), Some(base_dir().as_path()));
+        assert!(
+            scan_dirs().contains(&std::env::temp_dir()),
+            "folders of older versions are found"
+        );
+        assert!(
+            out_dir()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("lazytypst-")
+        );
     }
 
     /// A new empty folder for a test, and the user id of its owner.

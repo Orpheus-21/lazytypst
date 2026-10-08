@@ -817,9 +817,14 @@ fn query_protocol() -> doctor::Query {
 /// Prints the report of `--doctor`. Returns the exit code: 0 if all checks pass, and 1 if not.
 fn run_doctor() -> i32 {
     use std::os::unix::fs::MetadataExt;
-    let tmp = std::env::temp_dir();
+    let tmp = compile::base_dir();
     let stale = std::fs::metadata("/proc/self")
-        .map(|own| compile::stale_dirs_in(&tmp, own.uid()).len())
+        .map(|own| {
+            compile::scan_dirs()
+                .iter()
+                .map(|dir| compile::stale_dirs_in(dir, own.uid()).len())
+                .sum()
+        })
         .unwrap_or(0);
     let checks = [
         doctor::typst_check(compile::typst_version()),
