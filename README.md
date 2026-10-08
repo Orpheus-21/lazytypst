@@ -68,7 +68,7 @@ The folder `packaging/aur/` has a `PKGBUILD` for the package `lazytypst-git`. It
 
 ### Download a release
 
-This way needs no Rust. The first release is not published yet.
+This way needs no Rust. The release 0.1.0 is the first one.
 
 1. Download these two files from the page of the release, https://github.com/Orpheus-21/lazytypst/releases:
 
