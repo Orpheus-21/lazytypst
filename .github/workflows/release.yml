@@ -29,6 +29,9 @@ env:
   TYPST_VERSION: "0.15.1"
   TYPST_SHA256: a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c
   TYPST_IGNORE_SYSTEM_FONTS: "true"
+  # The release is built with this exact Rust version, the one that built the release 0.1.0. A new stable
+  # version then cannot change a release, or break it, without a change in this file.
+  RUST_VERSION: "1.99.0"
 
 jobs:
   build:
@@ -42,8 +45,8 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install "${RUST_VERSION}" --profile minimal
+          rustup default "${RUST_VERSION}"
           # A static binary has no dependency on the C library of the machine, so it runs on old systems too.
           rustup target add x86_64-unknown-linux-musl
           rustc --version
