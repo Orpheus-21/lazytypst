@@ -134,7 +134,47 @@ impl Diagnostic {
 
 /// The folder that holds the PNG pages of this run.
 pub fn out_dir() -> PathBuf {
+    #[cfg(test)]
+    tests_clean_up::watch();
+    out_dir_path()
+}
+
+fn out_dir_path() -> PathBuf {
     std::env::temp_dir().join(format!("lazytypst-{}", std::process::id()))
+}
+
+/// The tests use the page folder of the program, and nothing else deletes it at the end of a test run. Each
+/// test thread that asks for the folder holds a guard. When the last guard goes, the folder goes too. A test
+/// that runs later makes it again.
+#[cfg(test)]
+mod tests_clean_up {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+    struct Guard;
+
+    impl Guard {
+        fn new() -> Self {
+            ACTIVE.fetch_add(1, Ordering::SeqCst);
+            Guard
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if ACTIVE.fetch_sub(1, Ordering::SeqCst) == 1 {
+                let _ = std::fs::remove_dir_all(super::out_dir_path());
+            }
+        }
+    }
+
+    pub fn watch() {
+        thread_local! {
+            static GUARD: Guard = Guard::new();
+        }
+        GUARD.with(|_| {});
+    }
 }
 
 static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
