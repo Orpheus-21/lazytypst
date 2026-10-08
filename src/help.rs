@@ -6,7 +6,7 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::{Constraint, Flex, Layout},
     style::{Modifier, Style},
-    text::Line,
+    text::{Line, Text},
     widgets::{Block, Clear, List, ListState},
 };
 
@@ -303,6 +303,34 @@ pub fn usage_keys() -> String {
         .join("\n")
 }
 
+/// The width of the column of keys in the window. "Shift with arrow keys" is the longest.
+const KEYS_WIDTH: usize = 22;
+
+/// Breaks `text` into lines of at most `width` characters, at spaces. A word that is longer than a line is
+/// cut. No word is lost.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_string();
+        while word.chars().count() > width {
+            let cut: String = word.chars().take(width).collect();
+            word = word.chars().skip(width).collect();
+            lines.push(cut);
+        }
+        match lines.last_mut() {
+            Some(line) if line.chars().count() + 1 + word.chars().count() <= width => {
+                line.push(' ');
+                line.push_str(&word);
+            }
+            _ => lines.push(word),
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
 /// One row of the window: a title, or a key.
 enum Row {
     Title(Scope),
@@ -401,11 +429,26 @@ impl Help {
             .flex(Flex::Center)
             .areas(area);
         frame.render_widget(Clear, area);
+        // The text column starts after two spaces, the keys, and a space. A long text wraps there, so that
+        // no word is cut at the right edge. One item has many lines, and the selection marks all of them.
+        let inner = usize::from(area.width.saturating_sub(2));
+        let text_width = inner.saturating_sub(KEYS_WIDTH + 4).max(10);
         let items = self.rows.iter().map(|row| match row {
-            Row::Title(scope) => {
-                Line::styled(scope.title(), Style::new().add_modifier(Modifier::BOLD))
+            Row::Title(scope) => Text::from(Line::styled(
+                scope.title(),
+                Style::new().add_modifier(Modifier::BOLD),
+            )),
+            Row::Key(entry) => {
+                let mut lines = wrap(entry.text, text_width).into_iter();
+                let first = lines.next().unwrap_or_default();
+                let mut text = vec![Line::from(format!(
+                    "  {:<width$} {first}",
+                    entry.keys,
+                    width = KEYS_WIDTH
+                ))];
+                text.extend(lines.map(|line| Line::from(format!("  {:<KEYS_WIDTH$} {line}", ""))));
+                Text::from(text)
             }
-            Row::Key(entry) => Line::from(format!("  {:<22} {}", entry.keys, entry.text)),
         });
         let list = List::new(items)
             .block(
@@ -468,5 +511,75 @@ mod tests {
         // A line that is only information has no key.
         let help = Help::new(Scope::List);
         assert_eq!(help.enter(), None, "the help line");
+    }
+    /// Draws the window on a screen of `width` by `height` and returns all the text on it.
+    fn drawn(width: u16, height: u16) -> String {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut help = Help::new(Scope::List);
+        terminal.draw(|frame| help.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn wrap_breaks_at_spaces_and_loses_no_word() {
+        assert_eq!(wrap("one two three", 7), ["one two", "three"]);
+        assert_eq!(wrap("", 5), [""]);
+        assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
+        let text = "a bb ccc dddd eeeee ffffff";
+        for width in [3, 6, 10, 40] {
+            let joined = wrap(text, width).join(" ");
+            assert_eq!(
+                joined.replace(' ', ""),
+                text.replace(' ', ""),
+                "width {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_word_of_every_text_shows_in_the_window_at_100_and_at_60_columns() {
+        for width in [100, 60] {
+            let screen = drawn(width, 140);
+            // Take the text of the window without the border and the keys, line by line.
+            let words: std::collections::HashSet<&str> = screen.split_whitespace().collect();
+            for entry in KEYS {
+                for word in entry.text.split_whitespace() {
+                    let shown = words.contains(word) || screen.contains(word);
+                    assert!(
+                        shown,
+                        "the word {word:?} of {:?} is cut at {width} columns",
+                        entry.keys
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_text_touches_the_right_border_of_the_window() {
+        for width in [100u16, 60] {
+            let screen = drawn(width, 140);
+            let window = usize::from(width) * 90 / 100;
+            let left = (usize::from(width) - window) / 2;
+            let last_inner = left + window - 2;
+            for (number, row) in screen.lines().enumerate().skip(1).take(100) {
+                let chars: Vec<char> = row.chars().collect();
+                if chars.get(last_inner + 1) == Some(&'\u{2502}') {
+                    assert_eq!(
+                        chars[last_inner], ' ',
+                        "row {number} at {width} columns: {row}"
+                    );
+                }
+            }
+        }
     }
 }
