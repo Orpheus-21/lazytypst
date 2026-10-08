@@ -1,6 +1,6 @@
 # Contributing to lazytypst
 
-This guide tells you how to change lazytypst and how to send the change.
+This guide tells you how to change lazytypst and how to send the change. Everyone who takes part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Before you start
 

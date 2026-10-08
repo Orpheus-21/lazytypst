@@ -299,7 +299,7 @@ The program makes the folder `lazytypst-<process id>` in the temporary directory
 
 ## Contributing
 
-The file `CONTRIBUTING.md` tells you how to build the program, which rules the code follows, and how a commit and a pull request must look. The page `site/index.html` is the source of the website. A test checks that it lists every key of `lazytypst --help`, so a change to a key changes the page too. The workflow `.github/workflows/pages.yml` publishes the folder `site/` when a push changes it.
+The project follows the code of conduct in `CODE_OF_CONDUCT.md`. A report goes through GitHub only. The file `CONTRIBUTING.md` tells you how to build the program, which rules the code follows, and how a commit and a pull request must look. The page `site/index.html` is the source of the website. A test checks that it lists every key of `lazytypst --help`, so a change to a key changes the page too. The workflow `.github/workflows/pages.yml` publishes the folder `site/` when a push changes it.
 
 ## Changes
 
