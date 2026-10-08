@@ -35,17 +35,32 @@ pub fn typst_check(version: io::Result<String>) -> Check {
     }
 }
 
-/// The check of the terminal. `protocol` is what the image query found, or why it failed.
-/// Half blocks always work, so they are not a failure.
-pub fn terminal_check(protocol: Result<ProtocolType, String>) -> Check {
-    let text = match protocol {
-        Ok(ProtocolType::Kitty) => "kitty graphics".to_string(),
-        Ok(ProtocolType::Sixel) => "sixel graphics".to_string(),
-        Ok(ProtocolType::Iterm2) => "iTerm2 graphics".to_string(),
-        Ok(ProtocolType::Halfblocks) => {
+/// What the image query of the terminal gave.
+#[derive(Debug)]
+pub enum Query {
+    /// The terminal reported this protocol (or none, as half blocks).
+    Protocol(ProtocolType),
+    /// The input or the output is not a terminal, so the program did not ask. A pipe or a file has no
+    /// image protocol, and the query would go into the file.
+    NotATerminal,
+    /// The program asked, and the query failed.
+    Failed(String),
+}
+
+/// The check of the terminal. Half blocks always work, so they are not a failure. If the program could not
+/// ask, the line says so and does not guess.
+pub fn terminal_check(query: Query) -> Check {
+    let text = match query {
+        Query::Protocol(ProtocolType::Kitty) => "kitty graphics".to_string(),
+        Query::Protocol(ProtocolType::Sixel) => "sixel graphics".to_string(),
+        Query::Protocol(ProtocolType::Iterm2) => "iTerm2 graphics".to_string(),
+        Query::Protocol(ProtocolType::Halfblocks) => {
             "half blocks (the terminal reports no image protocol)".to_string()
         }
-        Err(reason) => format!("half blocks (the query failed: {reason})"),
+        Query::NotATerminal => {
+            "unknown (the input or the output is not a terminal, so the program did not ask. Run it without a pipe or a redirect)".to_string()
+        }
+        Query::Failed(reason) => format!("half blocks (the query failed: {reason})"),
     };
     Check::new("terminal", true, text)
 }
@@ -111,16 +126,20 @@ mod tests {
     #[test]
     fn the_terminal_line_names_the_protocol_and_half_blocks_are_not_a_failure() {
         assert_eq!(
-            terminal_check(Ok(ProtocolType::Kitty)).text,
+            terminal_check(Query::Protocol(ProtocolType::Kitty)).text,
             "kitty graphics"
         );
         assert_eq!(
-            terminal_check(Ok(ProtocolType::Sixel)).text,
+            terminal_check(Query::Protocol(ProtocolType::Sixel)).text,
             "sixel graphics"
         );
-        let blocks = terminal_check(Err("not a terminal".into()));
+        let blocks = terminal_check(Query::Failed("no answer".into()));
         assert!(blocks.ok);
-        assert!(blocks.text.contains("half blocks") && blocks.text.contains("not a terminal"));
+        assert!(blocks.text.contains("half blocks") && blocks.text.contains("no answer"));
+        let unknown = terminal_check(Query::NotATerminal);
+        assert!(unknown.ok);
+        assert!(unknown.text.starts_with("unknown"), "{}", unknown.text);
+        assert!(!unknown.text.contains("half blocks"));
     }
 
     #[test]

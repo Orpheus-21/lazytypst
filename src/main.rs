@@ -793,20 +793,25 @@ impl App {
     }
 }
 
-/// The image protocol that the terminal reports, or why the query failed. It is the same query as the
-/// start of the program makes. It needs the raw mode of a terminal.
-fn query_protocol() -> Result<ratatui_image::picker::ProtocolType, String> {
+/// The image protocol that the terminal reports, or why the program did not get one. It is the same
+/// query as the start of the program makes. It needs a terminal for the input and for the output, because
+/// the query goes out on the output and the answer comes in on the input.
+fn query_protocol() -> doctor::Query {
+    use doctor::Query;
     use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode};
     use std::io::IsTerminal;
-    if !std::io::stdin().is_terminal() {
-        return Err("the input is not a terminal".into());
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Query::NotATerminal;
     }
-    enable_raw_mode().map_err(|err| err.to_string())?;
+    if let Err(err) = enable_raw_mode() {
+        return Query::Failed(err.to_string());
+    }
     let picker = Picker::from_query_stdio();
     let _ = disable_raw_mode();
-    picker
-        .map(|picker| picker.protocol_type())
-        .map_err(|err| err.to_string())
+    match picker {
+        Ok(picker) => Query::Protocol(picker.protocol_type()),
+        Err(err) => Query::Failed(err.to_string()),
+    }
 }
 
 /// Prints the report of `--doctor`. Returns the exit code: 0 if all checks pass, and 1 if not.
