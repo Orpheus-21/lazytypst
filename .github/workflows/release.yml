@@ -5,7 +5,14 @@ on:
   push:
     tags: ["v*"]
   # A manual run is a dry run: it builds and checks the archive and keeps it as an artifact. It makes no release.
+  # With test_release, it also runs the release step as a test: it makes a draft release with a throwaway
+  # name, checks its files, and deletes it. A draft cannot be seen by other people.
   workflow_dispatch:
+    inputs:
+      test_release:
+        description: "Also test the step that makes the release, with a draft that the run deletes"
+        type: boolean
+        default: false
 
 # The jobs only read the repository, except the job that makes the release.
 permissions:
@@ -152,8 +159,8 @@ jobs:
   release:
     name: Make the GitHub release
     needs: build
-    # Only a tag makes a release. A manual run stops after the build job.
-    if: github.ref_type == 'tag'
+    # Only a tag makes a release. A manual run stops after the build job, unless it is the release test.
+    if: github.ref_type == 'tag' || inputs.test_release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -167,9 +174,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
+          REF_TYPE: ${{ github.ref_type }}
           TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           # The artifact keeps the folder dist/, so the archive and its checksum file are in ./dist/.
           ls -lR
-          gh release create "$TAG" --repo "$REPOSITORY" --verify-tag --title "lazytypst ${VERSION}" --notes-file release-notes.md ./dist/*.tar.gz ./dist/*.sha256
+          files=(./dist/*.tar.gz ./dist/*.sha256)
+          if [ "$REF_TYPE" = tag ]; then
+            gh release create "$TAG" --repo "$REPOSITORY" --verify-tag --title "lazytypst ${VERSION}" --notes-file release-notes.md "${files[@]}"
+          else
+            # The test: the same command with the same files, as a draft with a throwaway name.
+            name="test-release-${RUN_ID}"
+            gh release create "$name" --repo "$REPOSITORY" --draft --target "$SHA" --title "lazytypst ${VERSION} (test)" --notes-file release-notes.md "${files[@]}"
+            assets=$(gh release view "$name" --repo "$REPOSITORY" --json assets --jq '.assets | length')
+            gh release delete "$name" --repo "$REPOSITORY" --yes
+            echo "The draft had $assets files, and it is deleted."
+            test "$assets" = 2
+          fi
