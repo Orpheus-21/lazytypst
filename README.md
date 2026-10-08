@@ -137,7 +137,7 @@ The program searches the folder and its subfolders, three levels deep. It skips 
 
 The program sets the title of the terminal window to `lazytypst: <folder name>` in the file list, and to `lazytypst: <path of the file>` in the editor. The path is relative to the project root. A control character in a name becomes a question mark, because the title travels inside an escape sequence. When the program starts, it sends the command that saves the window title, and when it ends, it sends the command that restores it. Terminals that follow xterm restore your old title. Ghostty 1.3.1 ignores both commands. In Ghostty, the title that the program set stays until your shell sets it again, which the shell integration of Ghostty does at the next prompt.
 
-At start, the program makes the folder `lazytypst-<process id>` in the temporary directory, with access for your user only. If that path exists already, the program stops with an error. There is one exception: a real folder of yours with this name was left by an earlier run to which the system had given the same process id. The program deletes that folder and makes it new. A link, a file, or a folder of another user still stops the program with an error. The program deletes the folder when it quits or panics. A closed terminal window or a kill can leave the folder behind. The next start deletes each such folder that belongs to you and has no running process.
+At start, the program makes the folder `lazytypst-<process id>` with access for your user only. The folder is inside `$XDG_RUNTIME_DIR` (for example `/run/user/1000`), because only your user can open that folder, and the system removes it at the last logout. If `XDG_RUNTIME_DIR` is not set, or it is not a folder of yours, the folder is in the temporary directory. The temporary directory is shared with other users, who could take the name first. If that path exists already, the program stops with an error. There is one exception: a real folder of yours with this name was left by an earlier run to which the system had given the same process id. The program deletes that folder and makes it new. A link, a file, or a folder of another user still stops the program with an error. The program deletes the folder when it quits or panics. A closed terminal window or a kill can leave the folder behind. The next start deletes each such folder that belongs to you and has no running process, in `$XDG_RUNTIME_DIR` and in the temporary directory (earlier versions made the folder there).
 
 Keys in the file list. Each line shows the time since the last change of the file at the right end, in a dim style: `now`, `5 min`, `2 h`, `3 d`, `4 mo`, or `2 y`. The program hides all ages if one would cut the longest path. The list reads the times again when you press `r`, when you press `s`, and when you close the editor.
 
@@ -243,7 +243,7 @@ lazytypst is one of several ways to work with Typst. This is how it differs from
 
 **Can lazytypst lose my text?** It is built so that it does not. The program writes only when the text has edits. It does not overwrite a change that another program made, until you press `Ctrl-S`. It writes a temp file and renames it, so a crash cannot cut your file. See the save rules in [Usage](#usage).
 
-**Where do the preview pages go, and when are they deleted?** They go into a private folder `lazytypst-<process id>` in the temporary directory. The program deletes it when it ends, and the next start deletes the folders of earlier runs that crashed. See [Usage](#usage).
+**Where do the preview pages go, and when are they deleted?** They go into a private folder `lazytypst-<process id>` in `$XDG_RUNTIME_DIR`, or in the temporary directory if that is not set. The program deletes it when it ends, and the next start deletes the folders of earlier runs that crashed. See [Usage](#usage).
 
 **Why do the page keys use `Alt` with the arrow keys?** The plain arrow keys move the cursor in the text. `Alt-Down` and `Alt-Up` are free, and the terminal sends them as one key. See [Usage](#usage).
 
@@ -287,7 +287,7 @@ The program stops at start with a message that it cannot run `typst`. Install Ty
 
 ### The program stops with a folder error at start
 
-The program makes the folder `lazytypst-<process id>` in the temporary directory, and only your user can open it. If a folder with that name exists and belongs to another user, the program stops with the message `Cannot make the folder`. It never deletes a folder of another user. The folder is safe to delete when no process with that number runs. Check with `ls /proc/<process id>`: if the command says that the file does not exist, delete the folder.
+The program makes the folder `lazytypst-<process id>` in `$XDG_RUNTIME_DIR`, or in the temporary directory if that is not set, and only your user can open it. If a folder with that name exists and belongs to another user, the program stops with the message `Cannot make the folder`. It never deletes a folder of another user. The folder is safe to delete when no process with that number runs. Check with `ls /proc/<process id>`: if the command says that the file does not exist, delete the folder.
 
 ## How it works
 

@@ -8,6 +8,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 ### Added
 
+- The page folder is made in `$XDG_RUNTIME_DIR` when it is a folder of the user, and in the temporary directory if not. The next start also deletes stale folders of older versions in the temporary directory.
 - The release archive has a build attestation. `gh attestation verify` checks that GitHub built it from this repository. The release is built with a fixed version of Rust.
 
 ## [0.1.0] (2026-10-09)
