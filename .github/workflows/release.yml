@@ -38,6 +38,11 @@ jobs:
     name: Build the archive
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The attestation needs a short-lived identity token and the right to write the attestation.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -148,6 +153,15 @@ jobs:
           "$check/${name}/lazytypst" --version | tee version.txt
           test "$(sed -n 1p version.txt)" = "lazytypst ${VERSION}"
           sed -n 2p version.txt | grep -q '^typst '
+
+      # The attestation says that GitHub built this archive from this repository, this commit, and this
+      # workflow. A user checks it with: gh attestation verify <archive> --repo Orpheus-21/lazytypst
+      # It is made for a tag, and for the release test, so that the test shows that it works.
+      - name: Attest where the archive comes from
+        if: github.ref_type == 'tag' || inputs.test_release
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
