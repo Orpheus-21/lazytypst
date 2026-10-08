@@ -6,10 +6,10 @@ use std::{
 use image::DynamicImage;
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Rect, Size},
     widgets::{Block, Paragraph},
 };
-use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
+use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulProtocol};
 
 /// The zoom steps in percent. Typst draws a page at 144 pixels per inch. At a zoom above 100, the
 /// program asks Typst for a page with more pixels, so that the part on screen stays sharp.
@@ -248,7 +248,10 @@ impl Preview {
             // ponytail: the image is resized and encoded on the UI thread, inside this call.
             // Measured in a release build: 13 ms for a page of 1191 by 1684 pixels.
             // Upgrade: ratatui_image::thread::ThreadProtocol if pages get much larger.
-            Some(page) => frame.render_stateful_widget(StatefulImage::default(), inner, page),
+            Some(page) => {
+                let area = centered(page.size_for(Resize::Fit(None), inner.as_size()), inner);
+                frame.render_stateful_widget(StatefulImage::default(), area, page);
+            }
             None => frame.render_widget(Paragraph::new("No preview yet."), inner),
         }
     }
@@ -260,6 +263,19 @@ impl Drop for Preview {
             let _ = fs::remove_dir_all(dir);
         }
     }
+}
+
+/// The area of `size` in the middle of `outer`. The picture keeps its aspect ratio, so it is smaller than the
+/// pane in one direction. Without this, it sits at the top left and the rest of the pane is empty.
+fn centered(size: Size, outer: Rect) -> Rect {
+    let width = size.width.min(outer.width);
+    let height = size.height.min(outer.height);
+    Rect::new(
+        outer.x + (outer.width - width) / 2,
+        outer.y + (outer.height - height) / 2,
+        width,
+        height,
+    )
 }
 
 /// Finds the file `page-<p>-of-<t>.png` in `dir`. Returns `(p, t)`, with `1 <= p <= t`.
@@ -605,5 +621,48 @@ mod tests {
         assert_eq!((preview.zoom_percent(), preview.pan()), (150, (0.25, 0.0)));
         fs::remove_dir_all(again).unwrap();
         fs::remove_dir_all(dir).ok();
+    }
+    #[test]
+    fn centered_puts_a_smaller_area_in_the_middle_and_keeps_a_bigger_one_inside() {
+        let outer = Rect::new(10, 5, 41, 21);
+        assert_eq!(centered(Size::new(10, 20), outer), Rect::new(25, 5, 10, 20));
+        assert_eq!(
+            centered(Size::new(41, 10), outer),
+            Rect::new(10, 10, 41, 10)
+        );
+        assert_eq!(
+            centered(Size::new(100, 100), outer),
+            outer,
+            "never outside the pane"
+        );
+        assert_eq!(centered(Size::new(0, 0), outer), Rect::new(30, 15, 0, 0));
+    }
+
+    #[test]
+    fn the_page_is_drawn_in_the_middle_of_a_wide_pane() {
+        let dir = red_page("middle");
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        let mut preview = Preview::new(Picker::halfblocks());
+        preview.load(dir.clone()).unwrap();
+        terminal
+            .draw(|frame| preview.draw(frame, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let red = Color::Rgb(255, 0, 0);
+        let columns: Vec<u16> = (1..79)
+            .filter(|column| (1..11).any(|row| buffer[(*column, row)].bg == red))
+            .collect();
+        let (first, last) = (*columns.first().unwrap(), *columns.last().unwrap());
+        // The inner area is the columns 1 to 78. The gap at the left and the gap at the right differ by one at most.
+        let (left_gap, right_gap) = (first - 1, 78 - last);
+        assert!(
+            left_gap > 5,
+            "the page must not sit at the left edge: {first}"
+        );
+        assert!(
+            left_gap.abs_diff(right_gap) <= 1,
+            "{left_gap} and {right_gap}"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }
