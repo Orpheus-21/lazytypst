@@ -170,5 +170,6 @@ jobs:
           TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
-          ls -l
-          gh release create "$TAG" --repo "$REPOSITORY" --verify-tag --title "lazytypst ${VERSION}" --notes-file release-notes.md ./*.tar.gz ./*.sha256
+          # The artifact keeps the folder dist/, so the archive and its checksum file are in ./dist/.
+          ls -lR
+          gh release create "$TAG" --repo "$REPOSITORY" --verify-tag --title "lazytypst ${VERSION}" --notes-file release-notes.md ./dist/*.tar.gz ./dist/*.sha256
