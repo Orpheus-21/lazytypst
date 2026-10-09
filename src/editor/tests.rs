@@ -2837,6 +2837,24 @@ fn the_replace_prompt_takes_a_paste_and_remembers_the_text_and_esc_leaves_the_te
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
+#[test]
+fn the_replace_prompt_shows_its_text_in_a_narrow_window_and_keeps_it_after_the_window_grows() {
+    let (path, mut editor) = replace_prompt("replacenarrow", "cat\n", "cat");
+    let last_row = |editor: &mut Editor, width: u16| {
+        let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        terminal.draw(|frame| editor.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buffer[(x, 19)].symbol())
+            .collect::<String>()
+    };
+    last_row(&mut editor, 56);
+    type_text(&mut editor, "dog");
+    assert!(last_row(&mut editor, 56).contains("Replace with: dog"));
+    assert!(last_row(&mut editor, 100).contains("Replace with: dog"));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
 fn pane_rows(editor: &mut Editor) -> Vec<String> {
     // The pane stands under the text area: the last 6 rows above the status line.

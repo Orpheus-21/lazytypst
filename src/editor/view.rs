@@ -404,11 +404,20 @@ impl Editor {
             _ => None,
         } {
             let shown = if self.message.is_empty() && matches!(self.mode, Mode::Replace(_)) {
-                "Enter: replace  Alt-A: all  Esc: stop"
+                "Enter: replace, Alt-A: all"
             } else {
                 self.message.as_str()
             };
-            let message_width = u16::try_from(shown.len()).unwrap_or(u16::MAX);
+            // The prompt keeps at least 12 columns. A prompt in a narrow area would scroll its text out of
+            // sight, and the text would stay out of sight when the area grows again.
+            let room = usize::from(hint_area.width).saturating_sub(label_text.len() + 12);
+            // The hint is shown whole or not at all. A message is cut by the area.
+            let shown = if self.message.is_empty() && shown.len() > room {
+                ""
+            } else {
+                shown
+            };
+            let message_width = u16::try_from(shown.len().min(room)).unwrap_or(u16::MAX);
             let [label, input, message] = Layout::horizontal([
                 Constraint::Length(u16::try_from(label_text.len()).unwrap_or(u16::MAX)),
                 Constraint::Min(1),
