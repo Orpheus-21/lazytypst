@@ -285,6 +285,10 @@ The terminal has no image protocol, or the program could not read the answer of 
 
 tmux sits between the program and the terminal, and it can block the image data. Images in tmux are not tested. Newer versions of tmux have the option `allow-passthrough`, for example `set -g allow-passthrough on` in `~/.tmux.conf`. This fix is not tried. In tmux with half blocks, the status line and `lazytypst --doctor` show this hint.
 
+### The window shows only one line
+
+The window is under 60 columns or 16 rows. The line says `Make the window bigger (60x16)`. Make the window bigger. Nothing is lost. The program shows the same screen again.
+
 ### Alt keys do nothing
 
 The page keys use `Alt`. Some terminals use `Alt` for their own keys, or they do not send it to the program. The `Alt` keys are tested with a test terminal. The settings of other terminals are not tested. Look for a setting that sends `Alt` as `Escape` or as the Meta key. This fix is not tried.
