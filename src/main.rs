@@ -6,6 +6,7 @@ mod editor;
 mod fsutil;
 mod help;
 mod highlight;
+mod history;
 mod newfile;
 mod preview;
 mod state;
@@ -520,6 +521,12 @@ impl App {
         self.status = match opened {
             Ok(mut editor) => {
                 editor.set_arrangement(self.layout);
+                editor.set_history(
+                    self.state_file
+                        .as_deref()
+                        .and_then(Path::parent)
+                        .map(|state| state.join("history")),
+                );
                 if let Some(place) = self.cursors.get(editor.path()) {
                     editor.set_cursor_position(*place);
                 }

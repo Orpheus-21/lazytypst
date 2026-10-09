@@ -19,7 +19,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     compile::{self, Job, Report, Severity},
-    fsutil, highlight,
+    fsutil, highlight, history,
     preview::{Preview, page_in},
     switcher::{Outcome, Switcher},
     words,
@@ -317,6 +317,8 @@ enum Mode {
     Line(Box<TextArea<'static>>),
     /// The prompt `Replace with:` in the status line. It takes every key and every paste. See `replace_key`.
     Replace(Box<TextArea<'static>>),
+    /// The history popup: the saved versions of the file, the newest first. See `open_history`.
+    History(Box<Switcher<history::Version>>),
     /// The outline popup. It takes every key and every paste. See `outline_key`. Each entry is the line of a
     /// heading, counted from 0.
     Outline(Box<Switcher<usize>>),
@@ -376,6 +378,8 @@ pub struct Editor {
     last_search: String,
     /// A compile that waits after a save: when it starts, and how long the wait is. See `compile_wait`.
     compile_at: Option<(Instant, Duration)>,
+    /// The folder of the local history, in the state folder. `None`: no history.
+    history: Option<PathBuf>,
     /// The layout that the user chose with F10. `None`: the width of the window decides.
     arrangement: Option<Arrangement>,
     /// The width of the window at the last draw, for F10.
@@ -448,6 +452,7 @@ impl Editor {
             last_replace: String::new(),
             replaced: None,
             arrangement: None,
+            history: None,
             compile_at: None,
             width: 0,
             search_regex: false,
@@ -481,13 +486,10 @@ impl Editor {
             self.message = CONFLICT.into();
             return false;
         }
-        let end = if self.crlf { "\r\n" } else { "\n" };
-        let mut text = self.textarea.lines().join(end);
-        if !text.is_empty() {
-            text.push_str(end);
-        }
+        let text = self.file_text();
         match fsutil::write_file(&self.path, text.as_bytes()) {
             Ok(()) => {
+                self.keep_version(&text, false);
                 self.dirty = false;
                 self.conflict = false;
                 self.disk_time = disk_time(&self.path);
@@ -500,6 +502,111 @@ impl Editor {
                 false
             }
         }
+    }
+
+    /// The text of the buffer as the file holds it: the line ends of the file, and one at the end.
+    fn file_text(&self) -> String {
+        let end = if self.crlf { "\r\n" } else { "\n" };
+        let mut text = self.textarea.lines().join(end);
+        if !text.is_empty() {
+            text.push_str(end);
+        }
+        text
+    }
+
+    /// Keeps `text` in the local history. A failure is not an error for the user: the history is a help.
+    fn keep_version(&self, text: &str, force: bool) {
+        if let Some(history) = &self.history {
+            let _ = history::record(history, &self.path, text, SystemTime::now(), force);
+        }
+    }
+
+    /// Sets the folder of the local history, and keeps the text of the file as it is now: the first
+    /// version, so a bad edit in this run can always be undone from the history.
+    pub fn set_history(&mut self, folder: Option<PathBuf>) {
+        self.history = folder;
+        let text = self.file_text();
+        self.keep_version(&text, true);
+    }
+
+    /// F6: opens the list of the saved versions of the file. Each line says how old the version is, how
+    /// large, and how many lines it lost and gained compared with the buffer. `Enter` restores a version.
+    fn open_history(&mut self) {
+        let Some(folder) = &self.history else {
+            self.message = "There is no history: the program has no state folder.".into();
+            return;
+        };
+        let versions = history::list(folder, &self.path);
+        if versions.is_empty() {
+            self.message =
+                "No versions yet. The program keeps one after a save, at most every 30 s.".into();
+            return;
+        }
+        let current = self.file_text();
+        let now = SystemTime::now();
+        let entries = versions
+            .into_iter()
+            .map(|version| {
+                let age = crate::age_text(now.duration_since(version.time).unwrap_or_default());
+                let (lost, gained) = version
+                    .read()
+                    .map_or((0, 0), |old| history::changed_lines(&current, &old));
+                // The numbers say what the version would change: lines that go, and lines that come back.
+                let age = if age == "now" {
+                    "just now".to_string()
+                } else {
+                    format!("{age} ago")
+                };
+                let text = format!(
+                    "{age:<10} {:>7} bytes  -{lost} +{gained} lines",
+                    version.size
+                );
+                (version, text)
+            })
+            .collect();
+        self.mode = Mode::History(Box::new(Switcher::new(
+            "History",
+            "Enter restores  Esc closes",
+            entries,
+            false,
+        )));
+    }
+
+    /// The keys of the history list: `Enter` puts the version in the buffer, as one edit.
+    fn history_key(&mut self, key: KeyEvent) {
+        let Mode::History(popup) = &mut self.mode else {
+            return;
+        };
+        let outcome = if key.code == KeyCode::F(6) {
+            Outcome::Close
+        } else {
+            popup.key(key)
+        };
+        match outcome {
+            Outcome::Stay => {}
+            Outcome::Close => self.mode = Mode::Edit,
+            Outcome::Pick(version) => {
+                self.mode = Mode::Edit;
+                match version.read() {
+                    Ok(text) => self.restore_text(&text),
+                    Err(err) => self.message = format!("Cannot read the version: {err}"),
+                }
+            }
+        }
+    }
+
+    /// Puts `text` in the buffer as one edit. One Ctrl-Z takes it back.
+    fn restore_text(&mut self, text: &str) {
+        let before = self.textarea.lines().to_vec();
+        let lines: Vec<&str> = text.lines().collect();
+        let place = self.cursor_position();
+        self.textarea.cancel_selection();
+        self.textarea.select_all();
+        self.textarea.insert_str(lines.join("\n"));
+        self.note_replace(before);
+        self.set_cursor_position(place);
+        self.mark_edit();
+        self.message = "Restored the version. Ctrl-Z undoes.".into();
     }
 
     /// Opens the last exported PDF with `program`. The program runs in the background with no input and
@@ -585,6 +692,12 @@ impl Editor {
             Mode::Outline(_) => {
                 for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
                     self.outline_key(KeyEvent::from(KeyCode::Char(letter)));
+                }
+                return;
+            }
+            Mode::History(_) => {
+                for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
+                    self.history_key(KeyEvent::from(KeyCode::Char(letter)));
                 }
                 return;
             }
@@ -1234,6 +1347,10 @@ impl Editor {
                 self.outline_key(key);
                 return Action::Stay;
             }
+            Mode::History(_) => {
+                self.history_key(key);
+                return Action::Stay;
+            }
             Mode::Full if !full_passthrough(key) => return self.full_key(key),
             // The error is in the text, so the text must show.
             Mode::Full if matches!(key.code, KeyCode::Char('g') | KeyCode::F(8)) => {
@@ -1269,6 +1386,8 @@ impl Editor {
             self.open_outline();
         } else if key.code == KeyCode::F(10) {
             self.cycle_arrangement(self.width);
+        } else if key.code == KeyCode::F(6) {
+            self.open_history();
         } else if key.code == KeyCode::F(5) {
             self.paused = !self.paused;
             self.message = if self.paused {

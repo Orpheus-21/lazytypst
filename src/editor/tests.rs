@@ -1410,6 +1410,7 @@ fn snapshot(editor: &Editor, left: bool) -> Snapshot {
             Mode::Line(_) => "line",
             Mode::Replace(_) => "replace",
             Mode::Outline(_) => "outline",
+            Mode::History(_) => "history",
             Mode::Full => "full",
         },
         cursor: editor.cursor_position(),
@@ -1498,7 +1499,7 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
     // Only the search key does nothing in the full preview. A new entry in this list is a decision.
     assert_eq!(
         ignored_in_full,
-        ["Ctrl-F", "Alt-Enter, Ctrl-]", "F10", "Alt-S", "Alt-G"]
+        ["Ctrl-F", "Alt-Enter, Ctrl-]", "F6", "F10", "Alt-S", "Alt-G"]
     );
 }
 
@@ -3229,6 +3230,83 @@ fn a_new_key_cancels_the_waiting_compile_and_ctrl_b_does_not_wait() {
     editor.handle_key(ctrl('b'));
     assert!(editor.compiling(), "Ctrl-B starts at once");
     assert!(editor.compile_at.is_none());
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_history_keeps_the_text_at_open_and_not_every_save_and_lists_it_with_f6() {
+    let path = temp_file("historylist", "first\n");
+    let state = path.parent().unwrap().join("state").join("history");
+    let mut editor = open(&path);
+    editor.set_history(Some(state.clone()));
+    assert_eq!(
+        history::list(&state, &path).len(),
+        1,
+        "the text at open is the first version"
+    );
+    editor.handle_key(key(KeyCode::Char('X')));
+    editor.handle_key(ctrl('s'));
+    assert_eq!(
+        history::list(&state, &path).len(),
+        1,
+        "the next save is under 30 s later"
+    );
+    editor.handle_key(key(KeyCode::F(6)));
+    assert!(matches!(editor.mode, Mode::History(_)));
+    let rows = rows_sized(&mut editor, 100, 24).join("\n");
+    assert!(
+        rows.contains("History") && rows.contains("just now") && rows.contains("-1 +1 lines"),
+        "{rows}"
+    );
+    editor.handle_key(key(KeyCode::Esc));
+    assert!(matches!(editor.mode, Mode::Edit));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn enter_restores_an_older_version_as_one_edit_that_ctrl_z_takes_back() {
+    let path = temp_file("historyrestore", "good text\nsecond line\n");
+    let state = path.parent().unwrap().join("state").join("history");
+    let long_ago = SystemTime::now() - Duration::from_secs(7200);
+    history::record(&state, &path, "good text\nsecond line\n", long_ago, true).unwrap();
+    fs::write(&path, "bad paste\n").unwrap();
+    let mut editor = open(&path);
+    editor.set_history(Some(state.clone()));
+    editor.handle_key(key(KeyCode::F(6)));
+    editor.handle_key(key(KeyCode::Down)); // the older version
+    editor.handle_key(key(KeyCode::Enter));
+    assert!(matches!(editor.mode, Mode::Edit));
+    assert_eq!(editor.textarea.lines(), ["good text", "second line"]);
+    assert!(editor.dirty, "a restore is an edit");
+    assert!(editor.message.starts_with("Restored"), "{}", editor.message);
+    editor.handle_key(ctrl('z'));
+    assert_eq!(
+        editor.textarea.lines(),
+        ["bad paste"],
+        "one Ctrl-Z takes it back"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn f6_without_versions_or_without_a_state_folder_says_so() {
+    let path = temp_file("historynone", "text\n");
+    let mut editor = open(&path);
+    editor.handle_key(key(KeyCode::F(6)));
+    assert!(matches!(editor.mode, Mode::Edit));
+    assert!(
+        editor.message.contains("no state folder"),
+        "{}",
+        editor.message
+    );
+    let state = path.parent().unwrap().join("state").join("history");
+    editor.history = Some(state);
+    editor.handle_key(key(KeyCode::F(6)));
+    assert!(
+        editor.message.starts_with("No versions yet"),
+        "{}",
+        editor.message
+    );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 

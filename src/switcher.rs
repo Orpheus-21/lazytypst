@@ -113,7 +113,11 @@ impl<T: Clone> Switcher<T> {
             .unwrap_or(u16::MAX)
             .saturating_add(2)
             .max(4);
-        let [area] = Layout::horizontal([Constraint::Percentage(70)])
+        // 70 percent of the width, but not less than 56 columns, so a narrow window still shows a whole line.
+        let wide = (frame.area().width / 10 * 7)
+            .max(56)
+            .min(frame.area().width);
+        let [area] = Layout::horizontal([Constraint::Length(wide)])
             .flex(Flex::Center)
             .areas(frame.area());
         let [area] = Layout::vertical([Constraint::Length(rows.min(frame.area().height))])

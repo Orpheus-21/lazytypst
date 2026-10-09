@@ -194,6 +194,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "F6",
+        "Show the history: the saved versions of this file, with their age and what they would change. Enter restores one as an edit, and Ctrl-Z undoes it. The versions are in the state folder, not in the project.",
+        Some((KeyCode::F(6), NONE)),
+    ),
+    key(
+        Scope::Editor,
         "F10",
         "Change the layout: editor and preview side by side, editor above the preview, or editor only. A window under 100 columns starts stacked. The choice is kept.",
         Some((KeyCode::F(10), NONE)),

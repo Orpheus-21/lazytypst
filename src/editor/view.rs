@@ -459,5 +459,8 @@ impl Editor {
         if let Mode::Outline(popup) = &mut self.mode {
             popup.draw(frame);
         }
+        if let Mode::History(popup) = &mut self.mode {
+            popup.draw(frame);
+        }
     }
 }
