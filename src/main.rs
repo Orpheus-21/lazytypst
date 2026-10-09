@@ -1016,7 +1016,17 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
     }
 }
 
+/// The smallest window the layout works in.
+const MIN_SIZE: (u16, u16) = (60, 16);
+
 fn draw(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+    if area.width < MIN_SIZE.0 || area.height < MIN_SIZE.1 {
+        // The state stays as it is. The next draw in a bigger window shows it again.
+        let text = format!("Make the window bigger ({}x{})", MIN_SIZE.0, MIN_SIZE.1);
+        frame.render_widget(Paragraph::new(text), area);
+        return;
+    }
     draw_screen(frame, app);
     if let Some(help) = &mut app.help {
         help.draw(frame);
@@ -1150,6 +1160,27 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn a_small_window_shows_one_line_and_keeps_the_state() {
+        let mut app = app("small");
+        for (width, height) in [(40, 10), (59, 30), (100, 15), (1, 1), (0, 0)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        }
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Make the window bigger (60x16)"), "{text}");
+        assert!(!text.contains("a.typ"));
+        assert!(screen(&mut app).contains("a.typ"));
     }
 
     #[test]
@@ -2479,13 +2510,13 @@ mod tests {
     #[test]
     fn the_list_shows_the_age_and_hides_it_in_a_narrow_terminal() {
         let mut app = app("age");
-        let long = "a-rather-long-file-name-here.typ";
+        let long = "a-rather-long-file-name-here-for-the-narrow-test.typ";
         fs::write(app.root.join(long), "").unwrap();
         set_age(&app.root.join(long), 2);
         press(&mut app, KeyCode::Char('r'));
         let wide = screen_at(&mut app, 100);
         assert!(wide.contains("2 h"), "{wide}");
-        let narrow = screen_at(&mut app, 40);
+        let narrow = screen_at(&mut app, 60);
         assert!(narrow.contains(long), "the path stays whole");
         assert!(!narrow.contains("2 h"), "the age is hidden");
         fs::remove_dir_all(&app.root).unwrap();
