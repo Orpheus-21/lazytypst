@@ -56,6 +56,23 @@ pub fn save_main(file: &Path, root: &Path, main: Option<&Path>) -> io::Result<()
     replace_line(file, root, value)
 }
 
+/// Saves that the user chose no main file for the project `root`. The program then does not pick one by
+/// itself. The value `-` is no file name that `load_main` accepts, so it reads as no main file.
+pub fn save_no_main(file: &Path, root: &Path) -> io::Result<()> {
+    replace_line(file, root, Some(b"-".to_vec()))
+}
+
+/// True if the file has a line for the project `root`: a main file, or the choice of no main file.
+pub fn has_main_choice(file: &Path, root: &Path) -> bool {
+    let Ok(bytes) = fs::read(file) else {
+        return false;
+    };
+    bytes
+        .split(|byte| *byte == b'\n')
+        .filter_map(split_line)
+        .any(|(saved_root, _)| saved_root == root.as_os_str().as_bytes())
+}
+
 /// The file that holds the last open file of each project, next to the main file list.
 /// Each line is `<project folder>`, a tab, `<file>`, a tab, and the page number.
 pub fn last_file(state_file: &Path) -> PathBuf {
@@ -363,5 +380,24 @@ mod tests {
         save_main(&file, &root, Some(Path::new("main.typ"))).unwrap();
         assert_eq!(load_main(&file, &root), Some(PathBuf::from("main.typ")));
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn the_choice_of_no_main_file_is_saved_and_a_removed_choice_is_not() {
+        let dir = temp_dir("nomain");
+        let root = project(&dir, "p");
+        let file = dir.join("main-files");
+        assert!(!has_main_choice(&file, &root), "no file");
+        save_main(&file, &root, Some(Path::new("main.typ"))).unwrap();
+        assert!(has_main_choice(&file, &root));
+        save_no_main(&file, &root).unwrap();
+        assert!(has_main_choice(&file, &root), "no main file is a choice");
+        assert_eq!(load_main(&file, &root), None);
+        save_main(&file, &root, None).unwrap();
+        assert!(
+            !has_main_choice(&file, &root),
+            "a removed line is no choice"
+        );
+        assert!(!has_main_choice(&file, &dir.join("other")));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

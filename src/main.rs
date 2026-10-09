@@ -146,6 +146,20 @@ fn write_to_terminal(text: &str) {
 /// The title goes to the terminal inside an escape sequence, and a file name comes from users and from
 /// other programs. A control character in it could end the sequence early and start another one. So each
 /// control character becomes a question mark.
+/// The value of `entrypoint` in the text of a `typst.toml`, if it is a plain relative path. A small reader:
+/// the key is a line `entrypoint = "path"`.
+fn manifest_entrypoint(text: &str) -> Option<PathBuf> {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("entrypoint") && line[10..].trim_start().starts_with('='))?;
+    let value = line.split_once('=')?.1.trim();
+    let path = PathBuf::from(value.strip_prefix('"')?.split('"').next()?);
+    path.components()
+        .all(|part| matches!(part, std::path::Component::Normal(_)))
+        .then_some(path)
+}
+
 /// The command to edit a file in the terminal: `$VISUAL`, or else `$EDITOR`. An empty value does not count.
 /// The value splits on spaces, so `code --wait` is a program and one argument.
 fn editor_command(visual: Option<OsString>, editor: Option<OsString>) -> Option<Vec<String>> {
@@ -336,6 +350,21 @@ impl App {
             .as_deref()
             .and_then(|file| state::load_main(file, &self.root))
             .filter(|main| self.all_files.contains(main));
+        // Without a choice of the user, a project that has a main file by its own rules gets it: the
+        // entrypoint of typst.toml, or main.typ. The choice is not saved. The user can remove the mark.
+        let chosen = state_file
+            .as_deref()
+            .is_some_and(|file| state::has_main_choice(file, &self.root));
+        if self.main_file.is_none()
+            && !chosen
+            && let Some(main) = self.default_main_file()
+        {
+            self.status = format!(
+                "Main file: {} (found). Press m on it to remove the mark.",
+                main.display()
+            );
+            self.main_file = Some(main);
+        }
         // The list selects the last file of the project and does not open it. The page waits for the open.
         if let Some((path, page)) = state_file
             .as_deref()
@@ -347,6 +376,18 @@ impl App {
             self.pages.insert(self.root.join(path), page);
         }
         self.state_file = state_file;
+    }
+
+    /// The main file that a project has by its own rules: the `entrypoint` of `typst.toml`, or else
+    /// `main.typ` in the folder of the project. It must be in the list.
+    fn default_main_file(&self) -> Option<PathBuf> {
+        let from_manifest = std::fs::read_to_string(self.root.join("typst.toml"))
+            .ok()
+            .and_then(|text| manifest_entrypoint(&text));
+        [from_manifest, Some(PathBuf::from("main.typ"))]
+            .into_iter()
+            .flatten()
+            .find(|path| self.all_files.contains(path))
     }
 
     /// Saves the main file choice. A failure only shows a message: the mark still works in this run.
@@ -592,10 +633,16 @@ impl App {
         if self.main_file.as_ref() == Some(&selected) {
             self.main_file = None;
             self.status = "No main file. lazytypst compiles the open file.".into();
-        } else {
-            self.status = format!("Main file: {}", selected.display());
-            self.main_file = Some(selected);
+            // The user chose this, so the program must not pick a main file again at the next start.
+            if let Some(file) = &self.state_file
+                && let Err(err) = state::save_no_main(file, &self.root)
+            {
+                self.status = format!("Cannot save the main file choice: {err}");
+            }
+            return;
         }
+        self.status = format!("Main file: {}", selected.display());
+        self.main_file = Some(selected);
         self.save_main_choice();
     }
 
@@ -2654,6 +2701,75 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.editor.as_ref().unwrap().compiling());
         fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn a_project_with_main_typ_marks_it_as_the_main_file_until_the_user_removes_the_mark() {
+        let mut first = app("automain");
+        fs::write(first.root.join("main.typ"), "= Main\n").unwrap();
+        press(&mut first, KeyCode::Char('r'));
+        let state = first.root.join("state").join("main-files");
+        first.load_state(Some(state.clone()));
+        assert_eq!(first.main_file, Some(PathBuf::from("main.typ")));
+        assert!(first.status.contains("(found)"), "{}", first.status);
+        // It was not saved, so another start finds it again.
+        let files = browser::find_typ_files(&first.root, browser::MAX_DEPTH).unwrap();
+        let mut again = App::new(first.root.clone(), files.clone(), Picker::halfblocks());
+        again.load_state(Some(state.clone()));
+        assert_eq!(again.main_file, Some(PathBuf::from("main.typ")));
+        // The user removes the mark: no start picks it again.
+        let at = again
+            .files
+            .iter()
+            .position(|f| f == Path::new("main.typ"))
+            .unwrap();
+        again.list.select(Some(at));
+        press(&mut again, KeyCode::Char('m'));
+        assert_eq!(again.main_file, None);
+        let mut third = App::new(first.root.clone(), files, Picker::halfblocks());
+        third.load_state(Some(state));
+        assert_eq!(third.main_file, None, "the choice of no main file stays");
+        fs::remove_dir_all(&first.root).unwrap();
+    }
+
+    #[test]
+    fn a_saved_main_file_wins_and_the_entrypoint_of_typst_toml_comes_before_main_typ() {
+        let mut app = app("manifest");
+        fs::write(app.root.join("main.typ"), "").unwrap();
+        fs::create_dir_all(app.root.join("src")).unwrap();
+        fs::write(app.root.join("src").join("lib.typ"), "").unwrap();
+        fs::write(
+            app.root.join("typst.toml"),
+            "[package]\nname = \"x\"\nentrypoint = \"src/lib.typ\"\n",
+        )
+        .unwrap();
+        press(&mut app, KeyCode::Char('r'));
+        let state = app.root.join("state").join("main-files");
+        app.load_state(Some(state.clone()));
+        assert_eq!(app.main_file, Some(PathBuf::from("src/lib.typ")));
+        // A saved choice wins.
+        state::save_main(&state, &app.root, Some(Path::new("a.typ"))).unwrap();
+        let files = browser::find_typ_files(&app.root, browser::MAX_DEPTH).unwrap();
+        let mut saved = App::new(app.root.clone(), files, Picker::halfblocks());
+        saved.load_state(Some(state));
+        assert_eq!(saved.main_file, Some(PathBuf::from("a.typ")));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_entrypoint_reader_takes_a_plain_path_only() {
+        assert_eq!(
+            manifest_entrypoint("[package]\nentrypoint = \"lib.typ\"\n"),
+            Some(PathBuf::from("lib.typ"))
+        );
+        assert_eq!(
+            manifest_entrypoint("entrypoint=\"a/b.typ\" # x"),
+            Some(PathBuf::from("a/b.typ"))
+        );
+        assert_eq!(manifest_entrypoint("entrypoint = \"../x.typ\""), None);
+        assert_eq!(manifest_entrypoint("entrypoint = \"/etc/x.typ\""), None);
+        assert_eq!(manifest_entrypoint("entrypoints = \"x.typ\""), None);
+        assert_eq!(manifest_entrypoint("name = \"x\""), None);
     }
 
     #[test]
