@@ -27,7 +27,7 @@ cargo fmt --check
 1. `cargo fmt` formats the code. `cargo clippy` shows no warning.
 2. Each change has tests. A bug fix starts with a test that fails before the fix.
 3. Use the standard library when it does the work. A new dependency needs a reason in the pull request.
-4. A change to a key or an option also changes the README, the `--help` text, the man page `docs/lazytypst.1`, and the website `site/index.html`. Tests check that these agree.
+4. A change to a key or an option also changes the README, the `--help` text, the man page `docs/lazytypst.1`, and the website `site/index.html`. Tests check that these agree. After a change of the list of keys in `src/help.rs`, build the program, run `scripts/sync-keys.py` (it writes the keys of the man page and of the website from `lazytypst --keys`), and update the table in the README.
 5. A change that a user can see adds one line under `Unreleased` in [`CHANGELOG.md`](CHANGELOG.md). Put the line in the section Added, Changed, Fixed, or Removed.
 
 ## Commits
