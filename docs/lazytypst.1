@@ -110,6 +110,12 @@ Open the file that the string under the cursor names, for example in #include "c
 .B F6
 Show the history: the saved versions of this file, with their age and what they would change. Enter restores one as an edit, and Ctrl\-Z undoes it. The versions are in the state folder, not in the project.
 .TP
+.B F7
+Spell check on or off. It needs hunspell and a dictionary. The language comes from #set text(lang: "de"). Unknown words are underlined.
+.TP
+.B Alt\-;
+Go to the next misspelled word and show what to do: a suggestion, add the word to your dictionary, or ignore it.
+.TP
 .B F10
 Change the layout: editor and preview side by side, editor above the preview, or editor only. A window under 100 columns starts stacked. The choice is kept.
 .TP
