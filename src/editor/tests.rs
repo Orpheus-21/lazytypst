@@ -1496,6 +1496,108 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
 }
 
 #[test]
+fn shift_tab_removes_one_indent_level_and_keeps_the_cursor_in_the_text() {
+    let path = temp_file("dedent", "      deep\n one\nnone\n\tcode\n");
+    let mut editor = open(&path);
+    let back_tab = key(KeyCode::BackTab);
+    editor.textarea.move_cursor(CursorMove::Jump(0, 8));
+    editor.handle_key(back_tab);
+    assert_eq!(editor.textarea.lines()[0], "    deep", "two spaces go");
+    assert_eq!(
+        editor.cursor_position(),
+        (0, 6),
+        "the cursor stays on the same letter"
+    );
+    assert!(editor.dirty);
+    editor.handle_key(ctrl('u'));
+    assert_eq!(editor.textarea.lines()[0], "      deep", "one undo step");
+
+    editor.textarea.move_cursor(CursorMove::Jump(1, 2));
+    editor.handle_key(back_tab);
+    assert_eq!(
+        editor.textarea.lines()[1],
+        "one",
+        "one space is all there is"
+    );
+
+    editor.textarea.move_cursor(CursorMove::Jump(2, 1));
+    editor.dirty = false;
+    editor.handle_key(back_tab);
+    assert_eq!(
+        editor.textarea.lines()[2],
+        "none",
+        "no indent: nothing changes"
+    );
+    assert!(!editor.dirty, "and nothing is marked as edited");
+
+    editor.textarea.move_cursor(CursorMove::Jump(3, 3));
+    editor.handle_key(back_tab);
+    assert_eq!(editor.textarea.lines()[3], "code", "a tab character goes");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn enter_keeps_the_indent_of_the_line_and_adds_a_level_after_an_opening_bracket() {
+    let path = temp_file(
+        "autoindent",
+        "  alpha beta\nplain\n  #let f(x) = {\n\tcode\n",
+    );
+    let mut editor = open(&path);
+    let enter = key(KeyCode::Enter);
+    // At the end of an indented line.
+    editor.textarea.move_cursor(CursorMove::Jump(0, 12));
+    editor.handle_key(enter);
+    assert_eq!(editor.textarea.lines()[1], "  ");
+    assert_eq!(editor.cursor_position(), (1, 2));
+    editor.handle_key(ctrl('u'));
+    assert_eq!(
+        editor.textarea.lines().len(),
+        4,
+        "one undo step takes back the break and the indent"
+    );
+    // In the middle of the line: the rest moves down with the indent.
+    editor.textarea.move_cursor(CursorMove::Jump(0, 8));
+    editor.handle_key(enter);
+    assert_eq!(&editor.textarea.lines()[..2], ["  alpha ", "  beta"]);
+    editor.handle_key(ctrl('u'));
+    // No indent: a plain break.
+    editor.textarea.move_cursor(CursorMove::Jump(1, 5));
+    editor.handle_key(enter);
+    assert_eq!(editor.textarea.lines()[2], "");
+    editor.handle_key(ctrl('u'));
+    // After an opening bracket: one more level.
+    editor.textarea.move_cursor(CursorMove::Jump(2, 15));
+    editor.handle_key(enter);
+    assert_eq!(editor.textarea.lines()[3], "    ");
+    assert_eq!(editor.cursor_position(), (3, 4));
+    editor.handle_key(ctrl('u'));
+    // Inside the indent itself, the new line gets the indent up to the cursor.
+    editor.textarea.move_cursor(CursorMove::Jump(2, 1));
+    editor.handle_key(enter);
+    // The line below keeps its whole indent: one space from the new indent, one that was after the cursor.
+    assert_eq!(&editor.textarea.lines()[2..4], [" ", "  #let f(x) = {"]);
+    editor.handle_key(ctrl('u'));
+    // A tab character is copied as it is, and a bracket adds a tab.
+    editor.textarea.move_cursor(CursorMove::Jump(3, 5));
+    editor.handle_key(enter);
+    assert_eq!(editor.textarea.lines()[4], "\t");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn enter_with_a_selection_replaces_it_without_an_indent() {
+    let path = temp_file("autoindentsel", "  abc def\n");
+    let mut editor = open(&path);
+    editor.textarea.move_cursor(CursorMove::Jump(0, 2));
+    for _ in 0..3 {
+        editor.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    }
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.textarea.lines(), ["  ", " def"]);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
     let path = temp_file("escconflict", "text\n");
     let mut editor = open(&path);

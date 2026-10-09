@@ -245,6 +245,18 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Text,
+        "Shift-Tab",
+        "Remove one indent level from the line.",
+        None,
+    ),
+    key(
+        Scope::Text,
+        "Enter",
+        "Break the line and keep its indent. After ( [ or { the new line has one level more.",
+        None,
+    ),
+    key(
+        Scope::Text,
         "Ctrl-W",
         "Delete the word before the cursor.",
         None,
@@ -301,6 +313,21 @@ pub fn usage_keys() -> String {
     [Scope::List, Scope::Editor, Scope::Text]
         .map(section)
         .join("\n")
+}
+
+/// All the keys as lines of tab separated text: the part of the program (`list`, `editor`, or `text`), the keys,
+/// and the description. For scripts, such as `scripts/sync-keys.py`.
+pub fn keys_tsv() -> String {
+    KEYS.iter()
+        .map(|entry| {
+            let part = match entry.scope {
+                Scope::List => "list",
+                Scope::Editor => "editor",
+                Scope::Text => "text",
+            };
+            format!("{part}\t{}\t{}\n", entry.keys, entry.text)
+        })
+        .collect()
 }
 
 /// The width of the column of keys in the window. "Shift with arrow keys" is the longest.
@@ -580,6 +607,17 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+    #[test]
+    fn the_keys_as_tab_separated_lines_have_three_fields_and_name_every_key() {
+        let text = keys_tsv();
+        assert_eq!(text.lines().count(), KEYS.len());
+        for (line, entry) in text.lines().zip(KEYS) {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert_eq!(fields.len(), 3, "{line}");
+            assert_eq!((fields[1], fields[2]), (entry.keys, entry.text));
+            assert!(["list", "editor", "text"].contains(&fields[0]));
         }
     }
 }

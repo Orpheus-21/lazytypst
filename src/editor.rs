@@ -333,6 +333,61 @@ impl Editor {
         }
     }
 
+    /// Notes that the text changed: the buffer is not on disk, the autosave waits for a pause, and the word
+    /// count is made again.
+    fn mark_edit(&mut self) {
+        self.dirty = true;
+        self.last_edit = Some(Instant::now());
+        self.count_words();
+    }
+
+    /// Breaks the line at the cursor. The new line starts with the indent of the line, but not more than the
+    /// part of the indent that is before the cursor. After an opening bracket, it has one level more.
+    /// One undo step takes back the break and the indent.
+    fn break_line_with_indent(&mut self) {
+        let (row, column) = self.cursor_position();
+        let line = &self.textarea.lines()[row];
+        let before: String = line.chars().take(column).collect();
+        let indent_len = line
+            .chars()
+            .take_while(|letter| matches!(letter, ' ' | '\t'))
+            .count()
+            .min(column);
+        let mut indent: String = line.chars().take(indent_len).collect();
+        if before.trim_end().ends_with(['{', '(', '[']) {
+            // A level is a tab in a line that uses tabs, and a tab stop of spaces if not.
+            if indent.starts_with('\t') {
+                indent.push('\t');
+            } else {
+                indent.push_str(&" ".repeat(usize::from(self.textarea.tab_length())));
+            }
+        }
+        self.textarea.insert_str(format!("\n{indent}"));
+    }
+
+    /// Removes one indent level from the start of the line of the cursor: a tab character, or up to as many
+    /// spaces as a tab stop. The cursor stays on the same letter. Returns false if the line has no indent.
+    fn dedent_line(&mut self) -> bool {
+        let (row, column) = self.cursor_position();
+        let line = &self.textarea.lines()[row];
+        let remove = if line.starts_with('\t') {
+            1
+        } else {
+            line.chars()
+                .take(usize::from(self.textarea.tab_length()))
+                .take_while(|letter| *letter == ' ')
+                .count()
+        };
+        if remove == 0 {
+            return false;
+        }
+        self.textarea.cancel_selection();
+        self.set_cursor_position((row, 0));
+        self.textarea.delete_str(remove);
+        self.set_cursor_position((row, column.saturating_sub(remove)));
+        true
+    }
+
     /// How many times the text area must get `key` to move or delete one visible character (a grapheme
     /// cluster): the length of the cluster in code points. It is 1 for any other key, at the end of a line,
     /// and at the start of a line, where the text area joins or crosses lines.
@@ -562,6 +617,19 @@ impl Editor {
             } else {
                 " Esc again closes without a save."
             });
+        } else if key.code == KeyCode::Enter
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && self.textarea.selection_range().is_none()
+        {
+            self.break_line_with_indent();
+            self.mark_edit();
+        } else if key.code == KeyCode::BackTab {
+            // Shift-Tab. The text area would insert spaces, as Tab does.
+            if self.dedent_line() {
+                self.mark_edit();
+            }
         } else {
             // Ctrl-C and Ctrl-X also go to the system clipboard. Without a selection they copy nothing.
             let copying = ctrl
@@ -571,9 +639,7 @@ impl Editor {
             // for each key, so the key is repeated for the rest of the character.
             for _ in 0..self.grapheme_steps(key) {
                 if self.textarea.input(key) {
-                    self.dirty = true;
-                    self.last_edit = Some(Instant::now());
-                    self.count_words();
+                    self.mark_edit();
                 }
             }
             if copying {

@@ -109,6 +109,7 @@ Options:
   -h, --help     Show this help.
   -V, --version  Show the version of lazytypst and the version of typst.
   --doctor       Check typst, the terminal image protocol, and the temporary folder.
+  --keys         Print all keys as lines of tab separated text, for scripts.
 
 ";
 
@@ -118,6 +119,7 @@ enum Args {
     Help,
     Version,
     Doctor,
+    Keys,
 }
 
 /// The commands that save the window title of the terminal and bring it back (xterm window operations 22
@@ -289,6 +291,7 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, String> 
         Some("-h" | "--help") => Ok(Args::Help),
         Some("-V" | "--version") => Ok(Args::Version),
         Some("--doctor") => Ok(Args::Doctor),
+        Some("--keys") => Ok(Args::Keys),
         Some(option) if option.starts_with('-') => Err(format!(
             "Unknown option: {option}. For a folder that starts with a dash, write ./{option}."
         )),
@@ -845,6 +848,10 @@ fn main() -> std::io::Result<()> {
             return Ok(());
         }
         Ok(Args::Doctor) => std::process::exit(run_doctor()),
+        Ok(Args::Keys) => {
+            print!("{}", help::keys_tsv());
+            return Ok(());
+        }
         Ok(Args::Version) => {
             print!(
                 "{}",
@@ -2904,6 +2911,7 @@ mod tests {
     fn help_and_version_have_a_long_and_a_short_form() {
         assert_eq!(args(&["lazytypst", "--help"]), Ok(Args::Help));
         assert_eq!(args(&["lazytypst", "--doctor"]), Ok(Args::Doctor));
+        assert_eq!(args(&["lazytypst", "--keys"]), Ok(Args::Keys));
         assert_eq!(args(&["lazytypst", "-h"]), Ok(Args::Help));
         assert_eq!(args(&["lazytypst", "--version"]), Ok(Args::Version));
         assert_eq!(args(&["lazytypst", "-V"]), Ok(Args::Version));
