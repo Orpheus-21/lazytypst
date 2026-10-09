@@ -878,7 +878,7 @@ fn run_doctor() -> i32 {
         .unwrap_or(0);
     let checks = [
         doctor::typst_check(compile::typst_version()),
-        doctor::terminal_check(query_protocol()),
+        doctor::terminal_check(query_protocol(), std::env::var_os("TMUX").is_some()),
         doctor::temp_check(&tmp),
         doctor::stale_check(stale),
     ];
@@ -950,12 +950,25 @@ fn main() -> std::io::Result<()> {
     let mut app = App::new(root, files, picker);
     app.load_state(state::default_state_file());
     app.start(open);
+    if app.status.is_empty()
+        && tmux_hint_needed(
+            app.picker.protocol_type(),
+            std::env::var_os("TMUX").is_some(),
+        )
+    {
+        app.status = doctor::TMUX_HINT.into();
+    }
     let result = run(&mut terminal, &mut app);
     write_to_terminal(RESTORE_TITLE);
     write_to_terminal(DISABLE_PASTE);
     ratatui::restore();
     compile::cleanup();
     result
+}
+
+/// True when the preview uses half blocks inside tmux. Then the status line shows the tmux hint once.
+fn tmux_hint_needed(protocol: ratatui_image::picker::ProtocolType, in_tmux: bool) -> bool {
+    in_tmux && protocol == ratatui_image::picker::ProtocolType::Halfblocks
 }
 
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
@@ -1137,6 +1150,14 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn the_tmux_hint_is_for_half_blocks_inside_tmux_only() {
+        use ratatui_image::picker::ProtocolType::{Halfblocks, Kitty};
+        assert!(tmux_hint_needed(Halfblocks, true));
+        assert!(!tmux_hint_needed(Halfblocks, false));
+        assert!(!tmux_hint_needed(Kitty, true));
     }
 
     #[test]

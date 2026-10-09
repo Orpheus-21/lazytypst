@@ -47,9 +47,13 @@ pub enum Query {
     Failed(String),
 }
 
+/// The tmux hint: tmux blocks the image data unless `allow-passthrough` is on. It is shown only when
+/// the program runs in tmux and the preview uses half blocks.
+pub const TMUX_HINT: &str = "In tmux, set -g allow-passthrough on";
+
 /// The check of the terminal. Half blocks always work, so they are not a failure. If the program could not
-/// ask, the line says so and does not guess.
-pub fn terminal_check(query: Query) -> Check {
+/// ask, the line says so and does not guess. `in_tmux` adds the tmux hint to the half blocks lines.
+pub fn terminal_check(query: Query, in_tmux: bool) -> Check {
     let text = match query {
         Query::Protocol(ProtocolType::Kitty) => "kitty graphics".to_string(),
         Query::Protocol(ProtocolType::Sixel) => "sixel graphics".to_string(),
@@ -61,6 +65,12 @@ pub fn terminal_check(query: Query) -> Check {
             "unknown (the input or the output is not a terminal, so the program did not ask. Run it without a pipe or a redirect)".to_string()
         }
         Query::Failed(reason) => format!("half blocks (the query failed: {reason})"),
+    };
+    let hint = in_tmux && text.starts_with("half blocks");
+    let text = if hint {
+        format!("{text}. {TMUX_HINT}")
+    } else {
+        text
     };
     Check::new("terminal", true, text)
 }
@@ -126,20 +136,34 @@ mod tests {
     #[test]
     fn the_terminal_line_names_the_protocol_and_half_blocks_are_not_a_failure() {
         assert_eq!(
-            terminal_check(Query::Protocol(ProtocolType::Kitty)).text,
+            terminal_check(Query::Protocol(ProtocolType::Kitty), false).text,
             "kitty graphics"
         );
         assert_eq!(
-            terminal_check(Query::Protocol(ProtocolType::Sixel)).text,
+            terminal_check(Query::Protocol(ProtocolType::Sixel), false).text,
             "sixel graphics"
         );
-        let blocks = terminal_check(Query::Failed("no answer".into()));
+        let blocks = terminal_check(Query::Failed("no answer".into()), false);
         assert!(blocks.ok);
         assert!(blocks.text.contains("half blocks") && blocks.text.contains("no answer"));
-        let unknown = terminal_check(Query::NotATerminal);
+        let unknown = terminal_check(Query::NotATerminal, false);
         assert!(unknown.ok);
         assert!(unknown.text.starts_with("unknown"), "{}", unknown.text);
         assert!(!unknown.text.contains("half blocks"));
+    }
+
+    #[test]
+    fn the_tmux_hint_shows_only_in_tmux_with_half_blocks() {
+        let halfblocks = || Query::Protocol(ProtocolType::Halfblocks);
+        assert!(terminal_check(halfblocks(), true).text.contains(TMUX_HINT));
+        assert!(!terminal_check(halfblocks(), false).text.contains("tmux"));
+        let kitty = terminal_check(Query::Protocol(ProtocolType::Kitty), true);
+        assert!(!kitty.text.contains("tmux"));
+        assert!(
+            !terminal_check(Query::NotATerminal, true)
+                .text
+                .contains("tmux")
+        );
     }
 
     #[test]
