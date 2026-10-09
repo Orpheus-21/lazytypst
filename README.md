@@ -281,7 +281,7 @@ The page preview is an image. The terminal must have an image protocol. The prog
 | foot | sixel | not tested |
 | Konsole | not known | not tested |
 | Alacritty | none, so half blocks | not tested |
-| tmux | depends on the terminal and the settings | not tested |
+| tmux | depends on the terminal and the settings | tmux 3.7c in a detached session: no image protocol, so half blocks, and `--doctor` shows the passthrough hint. With a terminal behind tmux and `allow-passthrough on`: not tested |
 
 The program also works in a terminal with no image protocol. It then draws the page with half block characters.
 
