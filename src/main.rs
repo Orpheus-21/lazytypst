@@ -8,6 +8,7 @@ mod help;
 mod highlight;
 mod history;
 mod newfile;
+mod outline;
 mod preview;
 mod spell;
 mod state;
@@ -97,6 +98,8 @@ struct App {
     help: Option<Help>,
     /// The file switcher over the editor. While it is open, it takes every key.
     switcher: Option<Switcher<PathBuf>>,
+    /// True when the preview follows the cursor (F3). It is on unless the user switched it off.
+    follow: bool,
     /// True when the user switched the spell check on with F7. It stays on for the next files and runs.
     spell: bool,
     /// The layout that the user chose with F10, for each editor that opens. `None`: by window width.
@@ -385,6 +388,7 @@ impl App {
             recent: Vec::new(),
             layout: None,
             spell: false,
+            follow: true,
         };
         app.read_times();
         app.outside_links = browser::links_outside(&app.root);
@@ -431,6 +435,10 @@ impl App {
             .as_deref()
             .and_then(|file| state::load_switch(&state::spell_file(file)))
             .unwrap_or(false);
+        self.follow = state_file
+            .as_deref()
+            .and_then(|file| state::load_switch(&state::follow_file(file)))
+            .unwrap_or(true);
         self.state_file = state_file;
     }
 
@@ -529,6 +537,7 @@ impl App {
         self.status = match opened {
             Ok(mut editor) => {
                 editor.set_arrangement(self.layout);
+                editor.set_follow(self.follow);
                 editor.set_spell(
                     self.spell,
                     self.state_file.as_deref().map(state::spell_words_file),
@@ -934,9 +943,18 @@ impl App {
             let action = editor.handle_key(key);
             let chosen = editor.chosen_arrangement();
             let spell_now = editor.spell_on();
+            let follow_now = editor.follow_on();
             if chosen != self.layout {
                 self.layout = chosen;
                 self.save_layout();
+            }
+            if follow_now != self.follow {
+                self.follow = follow_now;
+                if let Some(state) = &self.state_file
+                    && let Err(err) = state::save_switch(&state::follow_file(state), self.follow)
+                {
+                    self.status = format!("Cannot save the follow switch: {err}");
+                }
             }
             if spell_now != self.spell {
                 self.spell = spell_now;

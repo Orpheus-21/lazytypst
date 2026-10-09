@@ -194,6 +194,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "F3",
+        "The preview follows the cursor, or not. When the cursor enters another section, the preview goes to the page of its heading. Alt-Up and Alt-Down still turn pages.",
+        Some((KeyCode::F(3), NONE)),
+    ),
+    key(
+        Scope::Editor,
         "F6",
         "Show the history: the saved versions of this file, with their age and what they would change. Enter restores one as an edit, and Ctrl-Z undoes it. The versions are in the state folder, not in the project.",
         Some((KeyCode::F(6), NONE)),

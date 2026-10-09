@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod build;
+mod follow;
 mod spelling;
 #[cfg(test)]
 mod tests;
@@ -381,6 +382,8 @@ pub struct Editor {
     last_search: String,
     /// A compile that waits after a save: when it starts, and how long the wait is. See `compile_wait`.
     compile_at: Option<(Instant, Duration)>,
+    /// The preview that follows the cursor. See `follow.rs`.
+    follow: follow::Follow,
     /// The spell check. See `spelling.rs`.
     spelling: spelling::Spelling,
     /// Grows with each change of the text, so that a check can tell if its words are still current.
@@ -460,6 +463,7 @@ impl Editor {
             replaced: None,
             arrangement: None,
             history: None,
+            follow: follow::Follow::new(),
             spelling: spelling::Spelling::new(),
             text_version: 0,
             compile_at: None,
@@ -1410,6 +1414,8 @@ impl Editor {
             self.open_history();
         } else if key.code == KeyCode::F(7) {
             self.toggle_spell();
+        } else if key.code == KeyCode::F(3) {
+            self.toggle_follow();
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char(';') {
             self.open_spell();
         } else if key.code == KeyCode::F(5) {
@@ -1666,6 +1672,7 @@ impl Editor {
         changed |= self.watch_file(now);
         changed |= self.watch_deps(now);
         changed |= self.poll_spell();
+        changed |= self.poll_follow();
         changed |= self.poll_compile();
         changed |= self.poll_export();
         changed

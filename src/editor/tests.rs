@@ -1503,6 +1503,7 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
         [
             "Ctrl-F",
             "Alt-Enter, Ctrl-]",
+            "F3",
             "F6",
             "F7",
             "Alt-;",
@@ -3485,6 +3486,100 @@ fn without_the_program_the_check_says_so_and_does_not_repeat() {
     assert!(!editor.spell_on());
     editor.handle_key(alt(KeyCode::Char(';')));
     assert!(editor.message.contains("F7"), "{}", editor.message);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+const THREE_PAGES: &str = "#set page(width: 8cm, height: 5cm)\n= One\ntext one\n#pagebreak()\n== Two A\ntext two\n#pagebreak()\n= Three\ntext three\n";
+
+/// An editor on the three page document, with the preview that follows the cursor, after the first
+/// compile and the answer about the headings.
+fn follow_editor(name: &str) -> (PathBuf, Editor) {
+    let path = temp_file(name, THREE_PAGES);
+    let mut editor = open(&path);
+    editor.set_follow(true);
+    editor.compile_now();
+    wait_for_idle(&mut editor);
+    let start = Instant::now();
+    while editor.follow.document.is_empty() {
+        editor.tick(Instant::now());
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "no answer about the headings"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    (path, editor)
+}
+
+#[test]
+fn the_preview_goes_to_the_page_of_the_section_when_the_cursor_enters_it() {
+    let (path, mut editor) = follow_editor("followpage");
+    let pages: Vec<usize> = editor
+        .follow
+        .document
+        .iter()
+        .map(|heading| heading.page)
+        .collect();
+    assert_eq!(
+        pages,
+        [1, 2, 4].map(|page| page.min(3)),
+        "the page of `= Three` is 3"
+    );
+    assert_eq!(
+        editor.preview.wanted_page(),
+        1,
+        "the cursor is in the first section"
+    );
+    editor.set_cursor_position((4, 0)); // "text two"
+    editor.tick(Instant::now());
+    assert_eq!(editor.preview.wanted_page(), 2);
+    assert!(editor.compiling(), "the compile for the page started");
+    wait_for_idle(&mut editor);
+    editor.set_cursor_position((8, 0)); // "text three"
+    editor.tick(Instant::now());
+    assert_eq!(editor.preview.wanted_page(), 3);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_page_that_the_user_chose_stays_until_the_cursor_enters_another_section() {
+    let (path, mut editor) = follow_editor("followstay");
+    editor.set_cursor_position((4, 0));
+    editor.tick(Instant::now());
+    wait_for_idle(&mut editor);
+    editor.handle_key(alt(KeyCode::Down)); // the user turns to page 3
+    assert_eq!(editor.preview.wanted_page(), 3);
+    wait_for_idle(&mut editor);
+    editor.set_cursor_position((5, 2)); // the same section
+    editor.tick(Instant::now());
+    assert_eq!(
+        editor.preview.wanted_page(),
+        3,
+        "no jump inside the section"
+    );
+    editor.set_cursor_position((1, 0)); // the first section
+    editor.tick(Instant::now());
+    assert_eq!(editor.preview.wanted_page(), 1);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn f3_switches_the_follow_off_and_on() {
+    let (path, mut editor) = follow_editor("followkey");
+    editor.handle_key(key(KeyCode::F(3)));
+    assert!(!editor.follow_on());
+    assert_eq!(editor.message, "The preview stays on its page");
+    editor.set_cursor_position((8, 0));
+    editor.tick(Instant::now());
+    assert_eq!(editor.preview.wanted_page(), 1, "off: no jump");
+    editor.handle_key(key(KeyCode::F(3)));
+    assert!(editor.follow_on());
+    editor.tick(Instant::now());
+    assert_eq!(
+        editor.preview.wanted_page(),
+        3,
+        "on again: the section of the cursor counts"
+    );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 

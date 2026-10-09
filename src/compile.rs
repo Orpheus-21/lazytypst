@@ -355,7 +355,7 @@ const STDERR_LIMIT: usize = 1 << 20;
 /// The command that runs `program`. If the `prlimit` program of util-linux is in `PATH`, it starts
 /// `program` with a limit on the memory (`prlimit` runs `program` in its own process, so the job
 /// that kills the process kills Typst too). Else `program` runs without a limit.
-fn limited_command(program: &str) -> Command {
+pub(crate) fn limited_command(program: &str) -> Command {
     match (find_in_path("prlimit"), find_in_path(program)) {
         (Some(prlimit), Some(program)) => {
             let mut command = Command::new(prlimit);

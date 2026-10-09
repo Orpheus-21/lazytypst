@@ -100,6 +100,11 @@ pub fn spell_file(state_file: &Path) -> PathBuf {
     state_file.with_file_name("spell")
 }
 
+/// The file that holds the switch of the preview that follows the cursor: `on` or `off`.
+pub fn follow_file(state_file: &Path) -> PathBuf {
+    state_file.with_file_name("follow")
+}
+
 /// The personal dictionary of the spell check: one word on each line.
 pub fn spell_words_file(state_file: &Path) -> PathBuf {
     state_file.with_file_name("spell-words.txt")
