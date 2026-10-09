@@ -9,6 +9,9 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 ### Added
 
 - The search takes plain text by default (`f(x)` and `1+1` work), with smart case. `Alt-R` switches to a regular expression.
+- The gutter marks the lines with an error (red) and with a warning (yellow).
+- `F8` and `Shift-F8` go to the next and the previous error.
+- The title of the preview says `(old)` while the last compile failed, because the page is then from an older compile.
 - `Shift-Tab` removes one indent level. Before, it added spaces.
 - `Enter` keeps the indent of the line, and adds one level after `(`, `[`, or `{`.
 - `lazytypst --keys` prints all keys as lines of tab separated text, for scripts.
