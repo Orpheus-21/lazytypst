@@ -283,7 +283,7 @@ The terminal has no image protocol, or the program could not read the answer of 
 
 ### tmux
 
-tmux sits between the program and the terminal, and it can block the image data. Images in tmux are not tested. Newer versions of tmux have the option `allow-passthrough`, for example `set -g allow-passthrough on` in `~/.tmux.conf`. This fix is not tried.
+tmux sits between the program and the terminal, and it can block the image data. Images in tmux are not tested. Newer versions of tmux have the option `allow-passthrough`, for example `set -g allow-passthrough on` in `~/.tmux.conf`. This fix is not tried. In tmux with half blocks, the status line and `lazytypst --doctor` show this hint.
 
 ### Alt keys do nothing
 
