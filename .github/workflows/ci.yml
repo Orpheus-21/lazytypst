@@ -65,3 +65,38 @@ jobs:
       - name: Clippy
         if: matrix.rust == 'stable'
         run: cargo clippy --locked --all-targets -- -D warnings
+
+  # The pty checks start the program in a pseudo terminal and read the screen. See tests/pty/run.py.
+  pty:
+    name: Terminal checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Typst
+        run: |
+          curl -fsSL -o typst.tar.xz "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz"
+          echo "${TYPST_SHA256}  typst.tar.xz" | sha256sum --check
+          tar -xJf typst.tar.xz
+          mkdir -p "$HOME/.local/bin"
+          install -m 755 typst-x86_64-unknown-linux-musl/typst "$HOME/.local/bin/typst"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/typst" --version
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install pyte
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --require-virtualenv -r tests/pty/requirements.txt
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Terminal checks
+        run: python3 tests/pty/run.py
