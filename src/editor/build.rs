@@ -9,6 +9,7 @@ impl Editor {
 
     /// Starts a compile of the wanted page. The new compile replaces the running compile.
     pub(super) fn start_compile(&mut self) {
+        self.compile_at = None;
         self.stop_compile();
         let target = self.compile_target().to_path_buf();
         let dir = compile::next_dir(&self.pages_root);

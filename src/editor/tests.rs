@@ -3162,6 +3162,76 @@ fn every_layout_draws_in_small_and_tall_windows_without_a_panic() {
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
+#[test]
+fn the_wait_before_a_compile_follows_the_time_of_the_last_one() {
+    use super::compile_wait_after;
+    let ms = Duration::from_millis;
+    assert_eq!(compile_wait_after(ms(0)), ms(300));
+    assert_eq!(
+        compile_wait_after(ms(999)),
+        ms(300),
+        "a fast compile starts at once"
+    );
+    assert_eq!(compile_wait_after(ms(1000)), ms(2000));
+    assert_eq!(compile_wait_after(ms(1400)), ms(2800));
+    assert_eq!(
+        compile_wait_after(ms(9000)),
+        ms(3000),
+        "not longer than 3 s"
+    );
+}
+
+/// Gives the editor the report of a compile that took `seconds`.
+fn after_compile_of(editor: &mut Editor, seconds: u64) {
+    let mut report = Report::new(true, Vec::new());
+    report.elapsed = Some(Duration::from_secs(seconds));
+    editor.report = Some(report);
+}
+
+#[test]
+fn after_a_slow_compile_the_save_comes_at_once_and_the_compile_waits() {
+    let path = temp_file("slowwait", "text\n");
+    let mut editor = open(&path);
+    after_compile_of(&mut editor, 2);
+    editor.handle_key(key(KeyCode::Char('X')));
+    let start = Instant::now();
+    assert!(editor.tick(start + Duration::from_millis(400)));
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "Xtext\n",
+        "the save does not wait"
+    );
+    assert!(!editor.compiling(), "the compile waits");
+    let pane = pane_rows(&mut editor).join("\n");
+    assert!(pane.contains("next in 3.0 s"), "{pane}");
+    assert!(
+        !editor.tick(start + Duration::from_secs(2)),
+        "still waiting"
+    );
+    assert!(!editor.compiling());
+    assert!(editor.tick(start + Duration::from_secs(4)));
+    assert!(editor.compiling(), "the wait is over");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_new_key_cancels_the_waiting_compile_and_ctrl_b_does_not_wait() {
+    let path = temp_file("slowcancel", "text\n");
+    let mut editor = open(&path);
+    after_compile_of(&mut editor, 2);
+    editor.handle_key(key(KeyCode::Char('X')));
+    let start = Instant::now();
+    editor.tick(start + Duration::from_millis(400));
+    assert!(editor.compile_at.is_some());
+    editor.handle_key(key(KeyCode::Char('Y')));
+    assert!(editor.compile_at.is_none(), "a key cancels it");
+    assert!(!editor.compiling());
+    editor.handle_key(ctrl('b'));
+    assert!(editor.compiling(), "Ctrl-B starts at once");
+    assert!(editor.compile_at.is_none());
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
 fn pane_rows(editor: &mut Editor) -> Vec<String> {
     // The pane stands under the text area: the last 6 rows above the status line.

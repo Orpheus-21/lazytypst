@@ -38,6 +38,10 @@ const PANE_HEIGHT: u16 = 6;
 
 /// The time without a key after which the editor saves and compiles.
 const DEBOUNCE: Duration = Duration::from_millis(300);
+/// A compile that takes less than this is fast: it starts right after the save, as the autosave does.
+const SLOW_COMPILE: Duration = Duration::from_secs(1);
+/// The longest wait for a compile after a save. A slow document waits twice its last compile time, up to this.
+const MAX_COMPILE_WAIT: Duration = Duration::from_secs(3);
 
 /// How often the editor looks at the modification time of the file while the buffer has no edits.
 const WATCH_EVERY: Duration = Duration::from_secs(1);
@@ -272,6 +276,15 @@ fn disk_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
 
+/// The wait before a compile, after a compile that took `last`. See `Editor::compile_wait`.
+fn compile_wait_after(last: Duration) -> Duration {
+    if last < SLOW_COMPILE {
+        DEBOUNCE
+    } else {
+        (last * 2).clamp(DEBOUNCE, MAX_COMPILE_WAIT)
+    }
+}
+
 /// True when the user edited the text and then typed nothing for `DEBOUNCE`.
 fn debounce_done(last_edit: Option<Instant>, now: Instant) -> bool {
     last_edit.is_some_and(|edit| now.saturating_duration_since(edit) >= DEBOUNCE)
@@ -361,6 +374,8 @@ pub struct Editor {
     mode: Mode,
     /// The text of the last search, for the next prompt.
     last_search: String,
+    /// A compile that waits after a save: when it starts, and how long the wait is. See `compile_wait`.
+    compile_at: Option<(Instant, Duration)>,
     /// The layout that the user chose with F10. `None`: the width of the window decides.
     arrangement: Option<Arrangement>,
     /// The width of the window at the last draw, for F10.
@@ -433,6 +448,7 @@ impl Editor {
             last_replace: String::new(),
             replaced: None,
             arrangement: None,
+            compile_at: None,
             width: 0,
             search_regex: false,
             close_armed: false,
@@ -592,6 +608,8 @@ impl Editor {
     /// Notes that the text changed: the buffer is not on disk, the autosave waits for a pause, and the word
     /// count is made again.
     fn mark_edit(&mut self) {
+        // A compile that waits would show the text before this key. The next save plans a new one.
+        self.compile_at = None;
         self.dirty = true;
         self.last_edit = Some(Instant::now());
         self.count_words();
@@ -959,6 +977,17 @@ impl Editor {
                 Action::Stay
             }
         }
+    }
+
+    /// How long after the last key a compile starts. After a fast compile it is the pause of the autosave.
+    /// After a slow one (`SLOW_COMPILE` or more) it is twice that time, up to `MAX_COMPILE_WAIT`.
+    fn compile_wait(&self) -> Duration {
+        compile_wait_after(
+            self.report
+                .as_ref()
+                .and_then(|report| report.elapsed)
+                .unwrap_or_default(),
+        )
     }
 
     /// The layout that the user chose, for the program to keep.
@@ -1471,12 +1500,24 @@ impl Editor {
         let mut changed = false;
         if debounce_done(self.last_edit, now) {
             // `save` clears `last_edit`. If the save fails, nothing retries until the next edit.
-            self.last_edit = None;
-            if self.paused {
-                self.save(false);
-            } else {
-                self.save_and_compile();
+            let edited = self.last_edit.take().unwrap_or(now);
+            let saved = self.save(false);
+            if saved && !self.paused {
+                // The save is always quick. The compile of a slow document waits, so the machine is not busy
+                // all the time while the user types.
+                let wait = self.compile_wait();
+                if wait <= DEBOUNCE {
+                    self.start_compile();
+                } else {
+                    self.compile_at = Some((edited + wait, wait));
+                }
             }
+            changed = true;
+        }
+        if let Some((due, _)) = self.compile_at
+            && now >= due
+        {
+            self.start_compile();
             changed = true;
         }
         changed |= self.watch_file(now);

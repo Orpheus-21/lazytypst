@@ -149,6 +149,10 @@ impl Editor {
                 title = format!("{title} ({} ms)", elapsed.as_millis());
             }
         }
+        if let Some((_, wait)) = self.compile_at {
+            // The document is slow, so the compile waits after the save. The wait was set at the save.
+            title = format!("{title} (next in {:.1} s)", wait.as_secs_f32());
+        }
         if self.job.is_some() {
             // The last report stays on screen until the new report replaces it.
             color = Color::Yellow;
