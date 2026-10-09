@@ -94,7 +94,7 @@ struct App {
     /// The help window. While it is open, it takes every key.
     help: Option<Help>,
     /// The file switcher over the editor. While it is open, it takes every key.
-    switcher: Option<Switcher>,
+    switcher: Option<Switcher<PathBuf>>,
     /// The files that were open in this run, the latest first. The switcher lists them first.
     recent: Vec<PathBuf>,
 }
@@ -860,7 +860,19 @@ impl App {
             .collect();
         files.extend(others);
         files.retain(|file| Some(file) != open.as_ref());
-        self.switcher = Some(Switcher::new(files));
+        let entries = files
+            .into_iter()
+            .map(|file| {
+                let text = file.display().to_string();
+                (file, text)
+            })
+            .collect();
+        self.switcher = Some(Switcher::new(
+            "Switch file",
+            "Type to filter  Enter opens  F2 previous  Esc closes",
+            entries,
+            true,
+        ));
     }
 
     /// Handles one key. Returns true when the program must quit.
@@ -872,7 +884,7 @@ impl App {
             match switcher.key(key) {
                 Outcome::Stay => {}
                 Outcome::Close => self.switcher = None,
-                Outcome::Open(file) => {
+                Outcome::Pick(file) => {
                     // The editor saved its text when it asked for the switcher.
                     self.switcher = None;
                     self.close_editor();
@@ -1799,7 +1811,7 @@ mod tests {
             .unwrap()
             .visible()
             .into_iter()
-            .cloned()
+            .map(|(file, _)| file.clone())
             .collect();
         assert_eq!(names, [PathBuf::from("b.typ"), PathBuf::from("c.typ")]);
         assert!(screen(&mut app).contains("Switch file"));

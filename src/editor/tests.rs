@@ -1409,6 +1409,7 @@ fn snapshot(editor: &Editor, left: bool) -> Snapshot {
             Mode::Search(_) => "search",
             Mode::Line(_) => "line",
             Mode::Replace(_) => "replace",
+            Mode::Outline(_) => "outline",
             Mode::Full => "full",
         },
         cursor: editor.cursor_position(),
@@ -2852,6 +2853,75 @@ fn the_replace_prompt_shows_its_text_in_a_narrow_window_and_keeps_it_after_the_w
     type_text(&mut editor, "dog");
     assert!(last_row(&mut editor, 56).contains("Replace with: dog"));
     assert!(last_row(&mut editor, 100).contains("Replace with: dog"));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+const OUTLINE_TEXT: &str = "= One\ntext\n== Two A\n// = not a heading\n```\n= in raw\n```\n=== Deep one\n= Three\n$\n= in math\n$\n";
+
+#[test]
+fn the_outline_lists_the_headings_by_level_and_skips_comments_raw_text_and_math() {
+    let path = temp_file("outlinelist", OUTLINE_TEXT);
+    let editor = open(&path);
+    let headings = editor.headings();
+    assert_eq!(
+        headings,
+        [
+            (0, "One".to_string()),
+            (2, "  Two A".to_string()),
+            (7, "    Deep one".to_string()),
+            (8, "Three".to_string()),
+        ]
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn f4_opens_the_outline_on_the_section_of_the_cursor_and_enter_jumps() {
+    let path = temp_file("outlinejump", OUTLINE_TEXT);
+    let mut editor = open(&path);
+    editor.set_cursor_position((3, 0)); // after "== Two A"
+    editor.handle_key(key(KeyCode::F(4)));
+    assert!(matches!(editor.mode, Mode::Outline(_)));
+    editor.handle_key(key(KeyCode::Enter));
+    assert!(matches!(editor.mode, Mode::Edit));
+    assert_eq!(
+        editor.cursor_position(),
+        (2, 0),
+        "the section of the cursor was selected"
+    );
+    editor.handle_key(key(KeyCode::F(4)));
+    type_text(&mut editor, "thr");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (8, 0), "the filter found Three");
+    assert!(!editor.dirty, "the outline never changes the text");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_outline_closes_with_esc_and_f4_and_a_file_without_headings_says_so() {
+    let path = temp_file("outlineclose", "= One\n");
+    let mut editor = open(&path);
+    editor.handle_key(key(KeyCode::F(4)));
+    editor.handle_key(key(KeyCode::Esc));
+    assert!(matches!(editor.mode, Mode::Edit));
+    editor.handle_key(key(KeyCode::F(4)));
+    editor.handle_key(key(KeyCode::F(4)));
+    assert!(matches!(editor.mode, Mode::Edit));
+    editor.handle_key(key(KeyCode::F(4)));
+    editor.paste("x");
+    assert!(!editor.dirty, "a paste goes to the filter");
+    assert!(matches!(editor.mode, Mode::Outline(_)));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+
+    let path = temp_file("outlinenone", "just text\n");
+    let mut editor = open(&path);
+    editor.handle_key(key(KeyCode::F(4)));
+    assert!(matches!(editor.mode, Mode::Edit));
+    assert!(
+        editor.message.starts_with("No headings"),
+        "{}",
+        editor.message
+    );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 

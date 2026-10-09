@@ -1,7 +1,5 @@
-//! The file switcher: a popup in the editor with the files of the project, the most recent first, and a
-//! line to filter them. `F2` opens it. `F2` again opens the previous file.
-
-use std::path::PathBuf;
+//! A popup list with a line to filter it. The file switcher (`F2`) lists the files of the project, the
+//! most recent first. The outline (`F4`) lists the headings of the open file. Both pick one entry.
 
 use ratatui::{
     Frame,
@@ -11,45 +9,62 @@ use ratatui::{
     widgets::{Block, Clear, List, ListState},
 };
 
-/// What a key did to the switcher.
+/// What a key did to the popup.
 #[derive(Debug, PartialEq)]
-pub enum Outcome {
+pub enum Outcome<T> {
     Stay,
     Close,
-    /// Open this file, a path relative to the root.
-    Open(PathBuf),
+    /// The user picked this entry.
+    Pick(T),
 }
 
-pub struct Switcher {
-    /// The files in the order of the list: the most recent first. The open file is not in it.
-    files: Vec<PathBuf>,
+pub struct Switcher<T> {
+    title: &'static str,
+    hint: &'static str,
+    /// The entries in the order of the list, each with the text that the list shows and the filter reads.
+    entries: Vec<(T, String)>,
     filter: String,
     state: ListState,
+    /// True if a second `F2` picks the first entry. That is the toggle of the file switcher.
+    toggle: bool,
 }
 
-impl Switcher {
-    pub fn new(files: Vec<PathBuf>) -> Self {
+impl<T: Clone> Switcher<T> {
+    pub fn new(
+        title: &'static str,
+        hint: &'static str,
+        entries: Vec<(T, String)>,
+        toggle: bool,
+    ) -> Self {
         let mut state = ListState::default();
-        state.select((!files.is_empty()).then_some(0));
+        state.select((!entries.is_empty()).then_some(0));
         Self {
-            files,
+            title,
+            hint,
+            entries,
             filter: String::new(),
             state,
+            toggle,
         }
     }
 
-    /// The files that the filter lets through. The match ignores case.
-    pub fn visible(&self) -> Vec<&PathBuf> {
+    /// Selects the entry at `index` of the whole list. Use it before the user types a filter.
+    pub fn select(&mut self, index: usize) {
+        if index < self.entries.len() {
+            self.state.select(Some(index));
+        }
+    }
+
+    /// The entries that the filter lets through. The match ignores case.
+    pub fn visible(&self) -> Vec<&(T, String)> {
         let needle = self.filter.to_lowercase();
-        self.files
+        self.entries
             .iter()
-            .filter(|path| {
-                needle.is_empty() || path.to_string_lossy().to_lowercase().contains(&needle)
-            })
+            .filter(|(_, text)| needle.is_empty() || text.to_lowercase().contains(&needle))
             .collect()
     }
 
-    pub fn key(&mut self, key: KeyEvent) -> Outcome {
+    pub fn key(&mut self, key: KeyEvent) -> Outcome<T> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let count = self.visible().len();
@@ -59,16 +74,16 @@ impl Switcher {
                 let chosen = self
                     .state
                     .selected()
-                    .and_then(|index| self.visible().get(index).copied().cloned());
-                return chosen.map_or(Outcome::Stay, Outcome::Open);
+                    .and_then(|index| self.visible().get(index).map(|(value, _)| value.clone()));
+                return chosen.map_or(Outcome::Stay, Outcome::Pick);
             }
             // A second F2 is the toggle: the file that was open before this one.
-            KeyCode::F(2) => {
+            KeyCode::F(2) if self.toggle => {
                 return self
-                    .files
+                    .entries
                     .first()
-                    .cloned()
-                    .map_or(Outcome::Close, Outcome::Open);
+                    .map(|(value, _)| value.clone())
+                    .map_or(Outcome::Close, Outcome::Pick);
             }
             KeyCode::Down | KeyCode::Tab => self.state.select_next(),
             KeyCode::Up | KeyCode::BackTab => self.state.select_previous(),
@@ -84,7 +99,7 @@ impl Switcher {
             }
             _ => {}
         }
-        // `select_next` and `select_previous` run past the ends. Keep the choice on a file.
+        // `select_next` and `select_previous` run past the ends. Keep the choice on an entry.
         if let Some(index) = self.state.selected() {
             self.state.select(Some(index.min(count.saturating_sub(1))));
         }
@@ -104,17 +119,10 @@ impl Switcher {
         let [area] = Layout::vertical([Constraint::Length(rows.min(frame.area().height))])
             .flex(Flex::Center)
             .areas(area);
-        let title = format!("Switch file /{}", self.filter);
-        let items: Vec<String> = visible
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect();
+        let title = format!("{} /{}", self.title, self.filter);
+        let items: Vec<String> = visible.iter().map(|(_, text)| text.clone()).collect();
         let list = List::new(items)
-            .block(
-                Block::bordered()
-                    .title(title)
-                    .title_bottom("Type to filter  Enter opens  F2 previous  Esc closes"),
-            )
+            .block(Block::bordered().title(title).title_bottom(self.hint))
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
         frame.render_widget(Clear, area);
         frame.render_stateful_widget(list, area, &mut self.state);
@@ -124,33 +132,34 @@ impl Switcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
-    fn files() -> Switcher {
-        Switcher::new(vec![
-            "two.typ".into(),
-            "one.typ".into(),
-            "sub/three.typ".into(),
-        ])
+    fn files() -> Switcher<PathBuf> {
+        let entries = ["two.typ", "one.typ", "sub/three.typ"]
+            .map(|name| (PathBuf::from(name), name.to_string()))
+            .to_vec();
+        Switcher::new("Switch file", "hint", entries, true)
     }
 
-    fn press(switcher: &mut Switcher, code: KeyCode) -> Outcome {
+    fn press(switcher: &mut Switcher<PathBuf>, code: KeyCode) -> Outcome<PathBuf> {
         switcher.key(KeyEvent::from(code))
     }
 
-    fn type_text(switcher: &mut Switcher, text: &str) {
+    fn type_text(switcher: &mut Switcher<PathBuf>, text: &str) {
         for letter in text.chars() {
             press(switcher, KeyCode::Char(letter));
         }
     }
 
+    fn pick(name: &str) -> Outcome<PathBuf> {
+        Outcome::Pick(name.into())
+    }
+
     #[test]
-    fn the_order_is_the_order_that_the_caller_gave_and_enter_opens_the_first() {
+    fn the_order_is_the_order_that_the_caller_gave_and_enter_picks_the_first() {
         let mut switcher = files();
         assert_eq!(switcher.visible().len(), 3);
-        assert_eq!(
-            press(&mut switcher, KeyCode::Enter),
-            Outcome::Open("two.typ".into())
-        );
+        assert_eq!(press(&mut switcher, KeyCode::Enter), pick("two.typ"));
     }
 
     #[test]
@@ -158,11 +167,8 @@ mod tests {
         let mut switcher = files();
         press(&mut switcher, KeyCode::Down);
         type_text(&mut switcher, "THREE");
-        assert_eq!(switcher.visible(), [&PathBuf::from("sub/three.typ")]);
-        assert_eq!(
-            press(&mut switcher, KeyCode::Enter),
-            Outcome::Open("sub/three.typ".into())
-        );
+        assert_eq!(switcher.visible().len(), 1);
+        assert_eq!(press(&mut switcher, KeyCode::Enter), pick("sub/three.typ"));
         press(&mut switcher, KeyCode::Backspace);
         assert_eq!(switcher.visible().len(), 1, "thre still matches one file");
         type_text(&mut switcher, "zzz");
@@ -170,7 +176,7 @@ mod tests {
         assert_eq!(
             press(&mut switcher, KeyCode::Enter),
             Outcome::Stay,
-            "no file, no open"
+            "no entry, no pick"
         );
     }
 
@@ -180,31 +186,27 @@ mod tests {
         for _ in 0..5 {
             press(&mut switcher, KeyCode::Down);
         }
-        assert_eq!(
-            press(&mut switcher, KeyCode::Enter),
-            Outcome::Open("sub/three.typ".into())
-        );
+        assert_eq!(press(&mut switcher, KeyCode::Enter), pick("sub/three.typ"));
         for _ in 0..5 {
             press(&mut switcher, KeyCode::Up);
         }
-        assert_eq!(
-            press(&mut switcher, KeyCode::Enter),
-            Outcome::Open("two.typ".into())
-        );
+        assert_eq!(press(&mut switcher, KeyCode::Enter), pick("two.typ"));
     }
 
     #[test]
-    fn a_second_f2_opens_the_previous_file_and_esc_closes() {
+    fn a_second_f2_picks_the_first_entry_if_the_toggle_is_on_and_esc_closes() {
         let mut switcher = files();
         type_text(&mut switcher, "three");
         assert_eq!(
             press(&mut switcher, KeyCode::F(2)),
-            Outcome::Open("two.typ".into()),
+            pick("two.typ"),
             "the filter does not matter"
         );
         assert_eq!(press(&mut switcher, KeyCode::Esc), Outcome::Close);
-        let mut none = Switcher::new(Vec::new());
+        let mut none = Switcher::<PathBuf>::new("t", "h", Vec::new(), true);
         assert_eq!(press(&mut none, KeyCode::F(2)), Outcome::Close);
         assert_eq!(press(&mut none, KeyCode::Down), Outcome::Stay);
+        let mut off = Switcher::new("t", "h", vec![(1, "one".to_string())], false);
+        assert_eq!(off.key(KeyEvent::from(KeyCode::F(2))), Outcome::Stay);
     }
 }

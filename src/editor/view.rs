@@ -434,5 +434,8 @@ impl Editor {
             Paragraph::new(position).alignment(Alignment::Right),
             position_area,
         );
+        if let Mode::Outline(popup) = &mut self.mode {
+            popup.draw(frame);
+        }
     }
 }

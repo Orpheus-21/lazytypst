@@ -188,6 +188,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "F4",
+        "Show the outline: the headings of the file. Type to filter, Enter jumps to the heading, F4 or Esc closes.",
+        Some((KeyCode::F(4), NONE)),
+    ),
+    key(
+        Scope::Editor,
         "Alt-S",
         "Replace the text of the last search. Type the new text. Enter replaces one match and goes to the next. Alt-A replaces all. Esc stops. Press Alt-S in the search prompt, too.",
         Some((KeyCode::Char('s'), ALT)),
@@ -606,7 +612,7 @@ mod tests {
     #[test]
     fn every_word_of_every_text_shows_in_the_window_at_100_and_at_60_columns() {
         for width in [100, 60] {
-            let screen = drawn(width, 140);
+            let screen = drawn(width, 170);
             // Take the text of the window without the border and the keys, line by line.
             let words: std::collections::HashSet<&str> = screen.split_whitespace().collect();
             for entry in KEYS {
@@ -625,7 +631,7 @@ mod tests {
     #[test]
     fn no_text_touches_the_right_border_of_the_window() {
         for width in [100u16, 60] {
-            let screen = drawn(width, 140);
+            let screen = drawn(width, 170);
             let window = usize::from(width) * 90 / 100;
             let left = (usize::from(width) - window) / 2;
             let last_inner = left + window - 2;

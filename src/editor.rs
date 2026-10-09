@@ -21,6 +21,7 @@ use crate::{
     compile::{self, Job, Report, Severity},
     fsutil, highlight,
     preview::{Preview, page_in},
+    switcher::{Outcome, Switcher},
     words,
 };
 
@@ -181,6 +182,9 @@ enum Mode {
     Line(Box<TextArea<'static>>),
     /// The prompt `Replace with:` in the status line. It takes every key and every paste. See `replace_key`.
     Replace(Box<TextArea<'static>>),
+    /// The outline popup. It takes every key and every paste. See `outline_key`. Each entry is the line of a
+    /// heading, counted from 0.
+    Outline(Box<Switcher<usize>>),
     /// The preview fills the screen and the text area is hidden. Typing does nothing. See `full_key`.
     Full,
 }
@@ -433,6 +437,12 @@ impl Editor {
                 }
                 return;
             }
+            Mode::Outline(_) => {
+                for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
+                    self.outline_key(KeyEvent::from(KeyCode::Char(letter)));
+                }
+                return;
+            }
             Mode::Search(_) => {
                 // The prompt takes the text of a paste, as one line.
                 for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
@@ -591,6 +601,10 @@ impl Editor {
             }
             KeyCode::F(1) => return Action::Help,
             KeyCode::F(2) => return self.switch_action(),
+            KeyCode::F(4) => {
+                self.open_outline();
+                return Action::Stay;
+            }
             KeyCode::Char('+' | '=') => self.preview.zoom_step(true),
             KeyCode::Char('-') => self.preview.zoom_step(false),
             KeyCode::Char('0') => self.preview.zoom_fit(),
@@ -718,6 +732,76 @@ impl Editor {
                 }
             }
             Ok(()) => {}
+        }
+    }
+
+    /// The headings of the text: the line, and the text for the list, indented by level. A line that looks
+    /// like a heading inside a comment, math, or raw text is not a heading.
+    fn headings(&self) -> Vec<(usize, String)> {
+        let lines = self.textarea.lines();
+        let parts = highlight::tokenize(lines);
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(row, _)| {
+                parts[*row]
+                    .first()
+                    .is_some_and(|part| part.kind == highlight::Kind::Heading && part.start == 0)
+            })
+            .map(|(row, line)| {
+                let text = line.trim();
+                let level = text.chars().take_while(|letter| *letter == '=').count();
+                let title = text.trim_start_matches('=').trim();
+                (
+                    row,
+                    format!("{}{title}", "  ".repeat(level.saturating_sub(1))),
+                )
+            })
+            .collect()
+    }
+
+    /// F4: opens the outline, with the section of the cursor selected. It shows the text, not the full
+    /// preview, because the jump needs the text.
+    fn open_outline(&mut self) {
+        let headings = self.headings();
+        if headings.is_empty() {
+            self.message =
+                "No headings. A heading is a line that starts with = and a space.".into();
+            return;
+        }
+        let here = self.cursor_position().0;
+        let current = headings.iter().rposition(|(row, _)| *row <= here);
+        let mut popup = Switcher::new(
+            "Outline",
+            "Type to filter  Enter jumps  F4 or Esc closes",
+            headings,
+            false,
+        );
+        if let Some(index) = current {
+            popup.select(index);
+        }
+        self.mode = Mode::Outline(Box::new(popup));
+    }
+
+    /// The keys of the outline: `Enter` goes to the heading, `F4` and `Esc` close it. The rest is the
+    /// popup's.
+    fn outline_key(&mut self, key: KeyEvent) {
+        let Mode::Outline(popup) = &mut self.mode else {
+            return;
+        };
+        let outcome = if key.code == KeyCode::F(4) {
+            Outcome::Close
+        } else {
+            popup.key(key)
+        };
+        match outcome {
+            Outcome::Stay => {}
+            Outcome::Close => self.mode = Mode::Edit,
+            Outcome::Pick(row) => {
+                self.mode = Mode::Edit;
+                self.textarea.cancel_selection();
+                self.set_cursor_position((row, 0));
+            }
         }
     }
 
@@ -936,6 +1020,10 @@ impl Editor {
                 self.replace_key(key);
                 return Action::Stay;
             }
+            Mode::Outline(_) => {
+                self.outline_key(key);
+                return Action::Stay;
+            }
             Mode::Full if !full_passthrough(key) => return self.full_key(key),
             // The error is in the text, so the text must show.
             Mode::Full if matches!(key.code, KeyCode::Char('g') | KeyCode::F(8)) => {
@@ -963,6 +1051,8 @@ impl Editor {
             return Action::Help;
         } else if key.code == KeyCode::F(2) {
             return self.switch_action();
+        } else if key.code == KeyCode::F(4) {
+            self.open_outline();
         } else if key.code == KeyCode::F(5) {
             self.paused = !self.paused;
             self.message = if self.paused {
