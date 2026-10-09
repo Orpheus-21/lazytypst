@@ -1328,6 +1328,91 @@ mod tests {
             .collect()
     }
 
+    /// A fixed pseudo random text from a small alphabet of the chars that the parsers care about.
+    fn noise(seed: &mut u64, length: usize) -> String {
+        const PIECES: [&str; 40] = [
+            "=",
+            " ",
+            "\n",
+            "#",
+            "$",
+            "`",
+            "```",
+            "//",
+            "/*",
+            "*/",
+            "\"",
+            "\\",
+            "(",
+            ")",
+            "[",
+            "]",
+            "{",
+            "}",
+            "<",
+            ">",
+            "@",
+            ":",
+            ".",
+            "-",
+            "_",
+            "set",
+            "text",
+            "error",
+            "warning",
+            ": error: ",
+            ".typ",
+            "é",
+            "ï",
+            "日本",
+            "\t",
+            "\r",
+            "0",
+            "42",
+            "http://",
+            "a",
+        ];
+        (0..length)
+            .map(|_| {
+                *seed ^= *seed << 13;
+                *seed ^= *seed >> 7;
+                *seed ^= *seed << 17;
+                PIECES[(*seed % PIECES.len() as u64) as usize]
+            })
+            .collect()
+    }
+
+    /// The parsers read any text, also that of a hostile file. None of them may panic. This is a quick
+    /// stand-in for a fuzzer: fixed seeds, so a failure repeats.
+    #[test]
+    fn the_parsers_never_panic_on_noise() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15;
+        let root = std::env::temp_dir().join(format!("lazytypst-noise-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for round in 0..3000 {
+            let text = noise(&mut seed, 1 + round % 80);
+            let lines: Vec<String> = text.lines().map(String::from).collect();
+            let parts = highlight::tokenize(&lines);
+            assert_eq!(parts.len(), lines.len());
+            let _ = spell::prose_words(&lines, &parts);
+            let _ = spell::lang_of(&lines);
+            let _ = words::count(&text);
+            let _ = history::changed_lines(&text, &noise(&mut seed, 20));
+            let _ = compile::Diagnostic::parse(&text);
+            if round % 100 == 0 {
+                // The state file and the name of a new file take text from outside, too.
+                let file = root.join("state").join("last-files");
+                let _ = fs::create_dir_all(file.parent().unwrap());
+                let _ = fs::write(&file, text.as_bytes());
+                let _ = state::load_last(&file, &root);
+                let _ = state::load_main(&root.join("state").join("last-files"), &root);
+                let _ = newfile::create(&root, &text.replace('\n', ""), browser::MAX_DEPTH);
+            }
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn a_place_after_the_file_name_splits_off_when_the_name_does_not_exist() {
         let split = |text: &str| split_place(Path::new(text));
