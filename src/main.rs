@@ -1067,7 +1067,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
 }
 
 /// The smallest window the layout works in.
-const MIN_SIZE: (u16, u16) = (60, 16);
+const MIN_SIZE: (u16, u16) = (40, 10);
 
 fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -1260,11 +1260,11 @@ mod tests {
     #[test]
     fn a_small_window_shows_one_line_and_keeps_the_state() {
         let mut app = app("small");
-        for (width, height) in [(40, 10), (59, 30), (100, 15), (1, 1), (0, 0)] {
+        for (width, height) in [(39, 30), (100, 9), (30, 8), (1, 1), (0, 0), (40, 10)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         }
-        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(39, 10)).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let text: String = terminal
             .backend()
@@ -1273,7 +1273,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("Make the window bigger (60x16)"), "{text}");
+        assert!(text.contains("Make the window bigger (40x10)"), "{text}");
         assert!(!text.contains("a.typ"));
         assert!(screen(&mut app).contains("a.typ"));
     }
