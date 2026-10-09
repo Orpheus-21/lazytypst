@@ -343,6 +343,8 @@ A manual run of the workflow is a dry run. It builds and checks the archive and 
 
 GitHub Actions runs both on each push and on each pull request to `main`. The workflow is the file `.github/workflows/ci.yml`. It installs Typst 0.15.1 from the release page of Typst and checks the file against a fixed SHA-256 hash. It runs `cargo test` with the current stable version of Rust and with Rust 1.90. It runs clippy and `cargo fmt --check` with the stable version only. The run with Rust 1.90 is the check for the minimum Rust version in the requirements above.
 
+The folder `tests/pty/` holds the terminal checks. Each one starts the debug build in a pseudo terminal, plays keys, and reads the screen with the Python library `pyte`. They need `python3` and `pyte` (`pip install -r tests/pty/requirements.txt`, best in a virtual environment) and `typst` in `PATH`. After `cargo build`, `python3 tests/pty/run.py` runs all of them and fails if one fails. `python3 tests/pty/run.py check_search.py` runs one. The variable `LAZYTYPST_BIN` names another program to test. The CI job `Terminal checks` runs them on each push and each pull request.
+
 Two more workflows exist. `.github/workflows/audit.yml` checks the crates in `Cargo.lock` against the RustSec advisory database each week and when `Cargo.lock` or `Cargo.toml` changes. `.github/workflows/pages.yml` publishes the folder `site/` to GitHub Pages when a push changes it.
 
 ## Measuring

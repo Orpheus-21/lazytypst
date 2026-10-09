@@ -13,14 +13,17 @@ This guide tells you how to change lazytypst and how to send the change. Everyon
 
 You need Rust 1.90 or later, and the `typst` command in `PATH`. Many tests run the real `typst` command. The tests run on Linux only, because some of them read `/proc`.
 
-These four commands must pass before you send a change:
+These commands must pass before you send a change:
 
 ```
 cargo build
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+python3 tests/pty/run.py
 ```
+
+The last command runs the terminal checks in `tests/pty/`. It needs `python3` and the library `pyte` (`pip install -r tests/pty/requirements.txt`, best in a virtual environment). A new key or a new screen gets a check there too: copy a small `check_*.py` and change it.
 
 ## Code rules
 
