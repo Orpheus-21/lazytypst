@@ -286,13 +286,18 @@ impl Editor {
             Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(status);
         if let Mode::Search(prompt) = &self.mode {
             let message_width = u16::try_from(self.message.len()).unwrap_or(u16::MAX);
+            let label_text = if self.search_regex {
+                "Search (regex): "
+            } else {
+                "Search (text): "
+            };
             let [label, input, message] = Layout::horizontal([
-                Constraint::Length(8),
+                Constraint::Length(u16::try_from(label_text.len()).unwrap_or(u16::MAX)),
                 Constraint::Min(1),
                 Constraint::Length(message_width),
             ])
             .areas(hint_area);
-            frame.render_widget(Paragraph::new("Search: "), label);
+            frame.render_widget(Paragraph::new(label_text), label);
             frame.render_widget(&**prompt, input);
             frame.render_widget(Paragraph::new(self.message.as_str()), message);
         } else {

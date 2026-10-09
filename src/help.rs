@@ -159,7 +159,7 @@ pub const KEYS: &[Key] = &[
     key(
         Scope::Editor,
         "Ctrl-F",
-        "Search. Type a regular expression, then Enter or Ctrl-F for the next match. Esc closes.",
+        "Search. Type the text, then Enter or Ctrl-F for the next match. Alt-R switches to a regular expression. Esc closes.",
         Some((KeyCode::Char('f'), CTRL)),
     ),
     key(

@@ -930,7 +930,7 @@ fn search_moves_to_the_next_match_wraps_and_the_same_key_goes_on() {
     let mut editor = open(&path);
     editor.handle_key(ctrl('f'));
     assert!(
-        status_row(&mut editor).starts_with("Search:"),
+        status_row(&mut editor).starts_with("Search (text):"),
         "{}",
         status_row(&mut editor)
     );
@@ -973,6 +973,7 @@ fn an_invalid_pattern_shows_the_error_and_does_not_crash() {
     let path = temp_file("searchbad", "alpha (x\n");
     let mut editor = open(&path);
     editor.handle_key(ctrl('f'));
+    editor.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT)); // regular expression mode
     type_in_search(&mut editor, "(");
     assert!(
         editor.message.starts_with("Invalid pattern:"),
@@ -1295,7 +1296,7 @@ fn a_reload_keeps_the_search_style_and_the_pattern_of_an_open_prompt() {
     assert_eq!(editor.textarea.lines(), ["alpha beta gamma"]);
     assert_eq!(
         editor.textarea.search_pattern().map(|p| p.as_str()),
-        Some("beta")
+        Some("(?i)beta")
     );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
@@ -1594,6 +1595,89 @@ fn enter_with_a_selection_replaces_it_without_an_indent() {
     }
     editor.handle_key(key(KeyCode::Enter));
     assert_eq!(editor.textarea.lines(), ["  ", " def"]);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn search_finds_plain_text_with_special_characters() {
+    let path = temp_file("searchplain", "see f(x) and 1+1 and $x$ and a.b and [z]\n");
+    let mut editor = open(&path);
+    for (needle, column) in [
+        ("f(x)", 4),
+        ("1+1", 13),
+        ("$x$", 21),
+        ("a.b", 29),
+        ("[z]", 37),
+    ] {
+        editor.textarea.move_cursor(CursorMove::Jump(0, 0));
+        editor.handle_key(ctrl('f'));
+        // The prompt starts with the last text: clear it.
+        for _ in 0..20 {
+            editor.handle_key(key(KeyCode::Backspace));
+        }
+        type_in_search(&mut editor, needle);
+        assert!(
+            !editor.message.starts_with("Invalid"),
+            "{needle}: {}",
+            editor.message
+        );
+        editor.handle_key(key(KeyCode::Enter));
+        assert_eq!(editor.cursor_position(), (0, column), "{needle}");
+        editor.handle_key(key(KeyCode::Esc));
+    }
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn search_ignores_case_for_lowercase_text_and_respects_it_for_text_with_a_capital() {
+    let path = temp_file("searchcase", "an item and an Item\n");
+    let mut editor = open(&path);
+    editor.handle_key(ctrl('f'));
+    type_in_search(&mut editor, "item");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (0, 3), "item finds item first");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (0, 15), "and then Item");
+    editor.handle_key(key(KeyCode::Esc));
+
+    editor.textarea.move_cursor(CursorMove::Jump(0, 0));
+    editor.handle_key(ctrl('f'));
+    for _ in 0..10 {
+        editor.handle_key(key(KeyCode::Backspace));
+    }
+    type_in_search(&mut editor, "Item");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (0, 15), "Item does not find item");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn alt_r_in_the_prompt_switches_between_text_and_regular_expression() {
+    let path = temp_file("searchregex", "a.c abc\n");
+    let mut editor = open(&path);
+    editor.handle_key(ctrl('f'));
+    assert!(
+        status_row(&mut editor).starts_with("Search (text):"),
+        "{}",
+        status_row(&mut editor)
+    );
+    type_in_search(&mut editor, "a.c");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (0, 0), "text: the dot is a dot");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (0, 0), "text: no other a.c");
+    editor.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
+    assert!(
+        status_row(&mut editor).starts_with("Search (regex):"),
+        "{}",
+        status_row(&mut editor)
+    );
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        editor.cursor_position(),
+        (0, 4),
+        "regex: the dot is any letter"
+    );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 

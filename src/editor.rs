@@ -69,6 +69,25 @@ fn full_passthrough(key: KeyEvent) -> bool {
         || key.code == KeyCode::F(5)
 }
 
+/// The regular expression for the text of a search. In regex mode it is the text. Else the text is plain: the
+/// special characters are escaped, and a text with no capital letter ignores the case (smart case).
+fn search_regex_for(typed: &str, regex: bool) -> String {
+    if regex {
+        return typed.to_string();
+    }
+    let mut pattern = String::new();
+    if !typed.chars().any(char::is_uppercase) {
+        pattern.push_str("(?i)");
+    }
+    for letter in typed.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(letter) {
+            pattern.push('\\');
+        }
+        pattern.push(letter);
+    }
+    pattern
+}
+
 fn disk_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
@@ -144,6 +163,8 @@ pub struct Editor {
     mode: Mode,
     /// The text of the last search, for the next prompt.
     last_search: String,
+    /// True when the text of the search is a regular expression. False: it is plain text. `Alt-R` switches.
+    search_regex: bool,
     /// True when the user turned the live compile off with F5. The autosave still runs.
     paused: bool,
     /// False when the user turned colors off with `NO_COLOR`. The preview image keeps its colors.
@@ -197,6 +218,7 @@ impl Editor {
             paused: false,
             mode: Mode::Edit,
             last_search: String::new(),
+            search_regex: false,
             close_armed: false,
             message: String::new(),
             pages_root: compile::out_dir(),
@@ -524,12 +546,18 @@ impl Editor {
             let _ = self.textarea.set_search_pattern("");
             return;
         }
-        if !next {
+        let switch = key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('r');
+        if switch {
+            self.search_regex = !self.search_regex;
+        } else if !next {
             prompt.input(key);
         }
         let pattern = prompt.lines().join("");
         self.last_search = pattern.clone();
-        match self.textarea.set_search_pattern(&pattern) {
+        match self
+            .textarea
+            .set_search_pattern(search_regex_for(&pattern, self.search_regex))
+        {
             Err(err) => {
                 // An invalid pattern keeps the old matches. The first line of the error says why.
                 let reason = err.to_string();
@@ -755,7 +783,9 @@ impl Editor {
                 self.crlf = text.contains("\r\n");
                 self.textarea = new_textarea(&text);
                 if matches!(self.mode, Mode::Search(_)) {
-                    let _ = self.textarea.set_search_pattern(&self.last_search);
+                    let _ = self
+                        .textarea
+                        .set_search_pattern(search_regex_for(&self.last_search, self.search_regex));
                 }
                 self.count_words();
                 self.set_cursor_position(place);
