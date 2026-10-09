@@ -462,7 +462,9 @@ impl Editor {
     /// compile reads, and a refused save (a file that another program changed) must not stop the turn.
     /// The old page stays on screen until the new page is ready. The user's choice ends a recovery.
     fn page_key(&mut self, key: KeyEvent) -> bool {
-        if !key.modifiers.contains(KeyModifiers::ALT) {
+        // Alt-Shift with an arrow key is for the line keys. Only plain Alt turns pages.
+        if !key.modifiers.contains(KeyModifiers::ALT) || key.modifiers.contains(KeyModifiers::SHIFT)
+        {
             return false;
         }
         let changed = match key.code {

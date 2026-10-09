@@ -1682,6 +1682,27 @@ fn alt_r_in_the_prompt_switches_between_text_and_regular_expression() {
 }
 
 #[test]
+fn alt_shift_with_an_arrow_does_not_turn_the_page() {
+    let path = temp_file("altshift", "= One\n#pagebreak()\n= Two\n");
+    let mut editor = open(&path);
+    compile_and_wait(&mut editor);
+    let alt_shift = KeyModifiers::ALT | KeyModifiers::SHIFT;
+    for code in [KeyCode::Down, KeyCode::Up, KeyCode::Home, KeyCode::End] {
+        editor.handle_key(KeyEvent::new(code, alt_shift));
+        assert_eq!(editor.preview.wanted_page(), 1, "{code:?}");
+        assert!(editor.job.is_none(), "{code:?} must not start a compile");
+    }
+    editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    assert_eq!(
+        editor.preview.wanted_page(),
+        2,
+        "plain Alt-Down still turns"
+    );
+    editor.stop_compile();
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
     let path = temp_file("escconflict", "text\n");
     let mut editor = open(&path);

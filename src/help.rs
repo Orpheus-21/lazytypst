@@ -620,4 +620,24 @@ mod tests {
             assert!(["list", "editor", "text"].contains(&fields[0]));
         }
     }
+    #[test]
+    fn no_two_entries_of_the_same_part_use_the_same_key() {
+        // The editor and the text area share the keys of the text, so they count as one part.
+        use std::collections::HashMap;
+        let mut seen: HashMap<(bool, String), &str> = HashMap::new();
+        for entry in KEYS {
+            // A line can name more than one key: "j or Down", "Ctrl-A, End".
+            let tokens = entry.keys.split([',']).flat_map(|part| part.split(" or "));
+            for token in tokens {
+                let token = token.trim().to_string();
+                let list = entry.scope == Scope::List;
+                if let Some(other) = seen.insert((list, token.clone()), entry.keys) {
+                    panic!(
+                        "the key {token:?} is in the lines {other:?} and {:?}",
+                        entry.keys
+                    );
+                }
+            }
+        }
+    }
 }
