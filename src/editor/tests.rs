@@ -1959,6 +1959,60 @@ fn a_long_section_title_is_cut_and_a_narrow_screen_shows_none() {
 }
 
 #[test]
+fn ctrl_z_undoes_like_ctrl_u() {
+    let path = temp_file("ctrlz", "text\n");
+    let mut editor = open(&path);
+    editor.handle_key(key(KeyCode::Char('X')));
+    assert_eq!(editor.textarea.lines(), ["Xtext"]);
+    editor.handle_key(ctrl('z'));
+    assert_eq!(editor.textarea.lines(), ["text"]);
+    editor.handle_key(ctrl('r'));
+    assert_eq!(editor.textarea.lines(), ["Xtext"], "Ctrl-R still redoes");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn alt_a_selects_all_the_text_and_ctrl_c_copies_it() {
+    let path = temp_file("selectall", "one\ntwo\nthree\n");
+    let mut editor = open(&path);
+    editor.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+    editor.handle_key(ctrl('c'));
+    assert_eq!(editor.take_clipboard().as_deref(), Some("one\ntwo\nthree"));
+    // Ctrl-A is still the start of the line.
+    editor.textarea.move_cursor(CursorMove::Jump(1, 2));
+    editor.handle_key(ctrl('a'));
+    assert_eq!(editor.cursor_position(), (1, 0));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn ctrl_home_and_ctrl_end_go_to_the_start_and_the_end_of_the_file_and_shift_selects() {
+    let path = temp_file("ctrlhome", "one\ntwo\nthree\n");
+    let mut editor = open(&path);
+    editor.textarea.move_cursor(CursorMove::Jump(1, 1));
+    editor.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+    assert_eq!(editor.cursor_position(), (2, 5), "the end of the last line");
+    editor.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+    assert_eq!(editor.cursor_position(), (0, 0));
+    // With Shift the keys select.
+    editor.textarea.move_cursor(CursorMove::Jump(1, 1));
+    editor.handle_key(KeyEvent::new(
+        KeyCode::End,
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    editor.handle_key(ctrl('c'));
+    assert_eq!(editor.take_clipboard().as_deref(), Some("wo\nthree"));
+    editor.textarea.move_cursor(CursorMove::Jump(1, 1));
+    editor.handle_key(KeyEvent::new(
+        KeyCode::Home,
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    editor.handle_key(ctrl('c'));
+    assert_eq!(editor.take_clipboard().as_deref(), Some("one\nt"));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
     let path = temp_file("escconflict", "text\n");
     let mut editor = open(&path);

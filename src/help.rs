@@ -228,7 +228,8 @@ pub const KEYS: &[Key] = &[
         "Save the file and quit.",
         Some((KeyCode::Char('q'), CTRL)),
     ),
-    key(Scope::Text, "Ctrl-U", "Undo.", None),
+    key(Scope::Text, "Ctrl-U, Ctrl-Z", "Undo.", None),
+    key(Scope::Text, "Alt-A", "Select all the text.", None),
     key(Scope::Text, "Ctrl-R", "Redo.", None),
     key(Scope::Text, "Shift with arrow keys", "Select text.", None),
     key(
@@ -289,6 +290,12 @@ pub const KEYS: &[Key] = &[
         Scope::Text,
         "Ctrl-A, End",
         "Move to the start or the end of the line.",
+        None,
+    ),
+    key(
+        Scope::Text,
+        "Ctrl-Home, Ctrl-End",
+        "Move to the start or the end of the file. With Shift, select to there.",
         None,
     ),
     key(
@@ -506,7 +513,7 @@ mod tests {
         let editing = text.find("Editing keys in the editor:").unwrap();
         assert!(list < editor && editor < editing);
         assert!(text.contains("  Ctrl-S         Save the file."));
-        assert!(text.contains("  Ctrl-U         Undo."));
+        assert!(text.contains("  Ctrl-U, Ctrl-Z Undo."));
     }
 
     #[test]

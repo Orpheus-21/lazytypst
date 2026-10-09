@@ -672,6 +672,41 @@ impl Editor {
         {
             self.break_line_with_indent();
             self.mark_edit();
+        } else if ctrl && key.code == KeyCode::Char('z') {
+            // Ctrl-Z undoes, as in most editors. The text area undoes with Ctrl-U.
+            if self
+                .textarea
+                .input(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            {
+                self.mark_edit();
+            } else {
+                self.message = "Nothing to undo".into();
+            }
+        } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('a') {
+            self.textarea.select_all();
+        } else if ctrl && matches!(key.code, KeyCode::Home | KeyCode::End) {
+            // Ctrl-Home and Ctrl-End go to the start and the end of the text. With Shift, they select.
+            let end = key.code == KeyCode::End;
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                if self.textarea.selection_range().is_none() {
+                    self.textarea.start_selection();
+                }
+            } else {
+                self.textarea.cancel_selection();
+            }
+            let last = self.textarea.lines().len().saturating_sub(1);
+            let place = if end {
+                (
+                    last,
+                    self.textarea
+                        .lines()
+                        .get(last)
+                        .map_or(0, |line| line.chars().count()),
+                )
+            } else {
+                (0, 0)
+            };
+            self.set_cursor_position(place);
         } else if key.code == KeyCode::BackTab {
             // Shift-Tab. The text area would insert spaces, as Tab does.
             if self.dedent_line() {
