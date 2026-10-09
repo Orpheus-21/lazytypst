@@ -7,6 +7,8 @@ use image::DynamicImage;
 use ratatui::{
     Frame,
     layout::{Rect, Size},
+    style::{Modifier, Style},
+    text::Line,
     widgets::{Block, Paragraph},
 };
 use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulProtocol};
@@ -53,6 +55,8 @@ pub struct Preview {
     zoom: usize,
     /// The place of the view in the page. See `crop_rect`.
     pan: (f32, f32),
+    /// True while the last compile failed. The page on screen is then from an older, good compile.
+    stale: bool,
 }
 
 impl Preview {
@@ -67,6 +71,7 @@ impl Preview {
             image: None,
             zoom: 0,
             pan: (0.0, 0.0),
+            stale: false,
         }
     }
 
@@ -228,8 +233,13 @@ impl Preview {
         self.page.is_some()
     }
 
+    /// Tells the preview if the last compile failed. The title then says that the page is old.
+    pub fn set_stale(&mut self, stale: bool) {
+        self.stale = stale;
+    }
+
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let title = match self.page {
+        let mut title = match self.page {
             Some(_) if self.zoom > 0 => {
                 format!(
                     "Preview {}/{} {}%",
@@ -240,6 +250,13 @@ impl Preview {
             }
             Some(_) => format!("Preview {}/{}", self.shown, self.count),
             None => "Preview".to_string(),
+        };
+        // A page from an older compile must not look like the current one.
+        let title = if self.stale && self.page.is_some() {
+            title.push_str(" (old)");
+            Line::styled(title, Style::new().add_modifier(Modifier::DIM))
+        } else {
+            Line::from(title)
         };
         let block = Block::bordered().title(title);
         let inner = block.inner(area);

@@ -281,6 +281,8 @@ impl Editor {
         let [main, status] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
         if matches!(self.mode, Mode::Full) {
+            self.preview
+                .set_stale(self.report.as_ref().is_some_and(|report| !report.ok));
             self.preview.draw(frame, main);
             let zoom = format!("{}%", self.preview.zoom_percent());
             let width = u16::try_from(zoom.len() + 1).unwrap_or(u16::MAX);
@@ -313,6 +315,8 @@ impl Editor {
         frame.render_widget(&self.textarea, inner);
         self.paint(frame.buffer_mut(), inner);
         frame.render_widget(self.compile_pane(pane), pane);
+        self.preview
+            .set_stale(self.report.as_ref().is_some_and(|report| !report.ok));
         self.preview.draw(frame, right);
         let hint = if self.message.is_empty() {
             "F1 help  Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Alt-Up/Down page  Esc back"

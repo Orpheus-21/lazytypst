@@ -1868,6 +1868,47 @@ fn f8_without_an_error_says_so_and_an_error_in_another_file_opens_it_after_a_sav
 }
 
 #[test]
+fn a_page_from_an_older_compile_says_old_in_the_title_while_the_last_compile_failed() {
+    let path = temp_file("oldpage", "= One\n");
+    let mut editor = open(&path);
+    compile_and_wait(&mut editor);
+    let title = |editor: &mut Editor| screen_rows(editor)[0].clone();
+    assert!(
+        title(&mut editor).contains("Preview 1/1"),
+        "{}",
+        title(&mut editor)
+    );
+    assert!(
+        !title(&mut editor).contains("(old)"),
+        "a good compile is not old"
+    );
+
+    editor.report = report_with(false, &["doc.typ:1:1: error: boom"]);
+    let old = title(&mut editor);
+    assert!(old.contains("Preview 1/1 (old)"), "{old}");
+    // The full preview says it too.
+    editor.handle_key(key(KeyCode::F(11)));
+    assert!(
+        title(&mut editor).contains("(old)"),
+        "{}",
+        title(&mut editor)
+    );
+
+    editor.report = report_with(true, &[]);
+    assert!(
+        !title(&mut editor).contains("(old)"),
+        "a good report ends it"
+    );
+    // With no page at all, there is nothing to call old.
+    let other = temp_file("oldpage2", "= Two\n");
+    let mut fresh = open(&other);
+    fresh.report = report_with(false, &["doc.typ:1:1: error: boom"]);
+    assert!(!screen_rows(&mut fresh)[0].contains("(old)"));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    fs::remove_dir_all(other.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
     let path = temp_file("escconflict", "text\n");
     let mut editor = open(&path);
