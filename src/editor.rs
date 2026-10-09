@@ -14,6 +14,7 @@ use ratatui::{
 };
 use ratatui_image::picker::Picker;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
+use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
@@ -178,6 +179,8 @@ enum Mode {
     Search(Box<TextArea<'static>>),
     /// The prompt `Line:` in the status line. It takes every key and every paste. See `line_key`.
     Line(Box<TextArea<'static>>),
+    /// The prompt `Replace with:` in the status line. It takes every key and every paste. See `replace_key`.
+    Replace(Box<TextArea<'static>>),
     /// The preview fills the screen and the text area is hidden. Typing does nothing. See `full_key`.
     Full,
 }
@@ -229,6 +232,10 @@ pub struct Editor {
     mode: Mode,
     /// The text of the last search, for the next prompt.
     last_search: String,
+    /// The text before and after the last replace. See `undo`.
+    replaced: Option<(Vec<String>, Vec<String>)>,
+    /// The text of the last replacement, for the next prompt.
+    last_replace: String,
     /// True when the text of the search is a regular expression. False: it is plain text. `Alt-R` switches.
     search_regex: bool,
     /// True when the user turned the live compile off with F5. The autosave still runs.
@@ -290,6 +297,8 @@ impl Editor {
             paused: false,
             mode: Mode::Edit,
             last_search: String::new(),
+            last_replace: String::new(),
+            replaced: None,
             search_regex: false,
             close_armed: false,
             message: String::new(),
@@ -413,6 +422,12 @@ impl Editor {
             Mode::Line(_) => {
                 for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
                     self.line_key(KeyEvent::from(KeyCode::Char(letter)));
+                }
+                return;
+            }
+            Mode::Replace(_) => {
+                for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
+                    self.replace_key(KeyEvent::from(KeyCode::Char(letter)));
                 }
                 return;
             }
@@ -672,6 +687,10 @@ impl Editor {
             let _ = self.textarea.set_search_pattern("");
             return;
         }
+        if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('s') {
+            self.open_replace();
+            return;
+        }
         let switch = key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('r');
         if switch {
             self.search_regex = !self.search_regex;
@@ -699,6 +718,196 @@ impl Editor {
         }
     }
 
+    /// Takes back the last edit. A replace is a delete and an insert in the text area, so if the text is
+    /// still the text that the replace made, one more step takes back the delete: the user sees one undo.
+    fn undo(&mut self) -> bool {
+        let group = self
+            .replaced
+            .take()
+            .filter(|(_, after)| after == self.textarea.lines());
+        let undone = self.textarea.undo();
+        if let Some((before, _)) = group
+            && undone
+            && self.textarea.lines() != before
+        {
+            self.textarea.undo();
+        }
+        undone
+    }
+
+    /// Remembers the text before and after a replace, for `undo`.
+    fn note_replace(&mut self, before: Vec<String>) {
+        self.replaced = Some((before, self.textarea.lines().to_vec()));
+    }
+
+    /// The regular expression of the last search, or `None` if there is no search text or it is invalid.
+    fn replace_regex(&self) -> Option<Regex> {
+        if self.last_search.is_empty() {
+            return None;
+        }
+        Regex::new(&search_regex_for(&self.last_search, self.search_regex)).ok()
+    }
+
+    /// The first match that starts at or after the cursor, wrapping once at the end of the text. An empty
+    /// match does not count. The match is (line, first char, end char).
+    fn next_match(&self, re: &Regex) -> Option<(usize, usize, usize)> {
+        let lines = self.textarea.lines();
+        let (row, column) = self.cursor_position();
+        let chars = |line: &str, byte: usize| line[..byte].chars().count();
+        let first = |line: &str, from: usize| {
+            re.find_iter(line)
+                .find(|found| !found.is_empty() && found.start() >= from)
+                .map(|found| (chars(line, found.start()), chars(line, found.end())))
+        };
+        let from = lines[row]
+            .char_indices()
+            .nth(column)
+            .map_or(lines[row].len(), |(byte, _)| byte);
+        if let Some((start, end)) = first(&lines[row], from) {
+            return Some((row, start, end));
+        }
+        (row + 1..lines.len())
+            .chain(0..=row)
+            .find_map(|line| first(&lines[line], 0).map(|(start, end)| (line, start, end)))
+    }
+
+    /// The text for a match: the replacement as typed in plain mode. In regex mode `$1` and `${name}` give
+    /// the groups of the match.
+    fn expanded(&self, captures: &regex::Captures, replacement: &str) -> String {
+        if self.search_regex {
+            let mut text = String::new();
+            captures.expand(replacement, &mut text);
+            text
+        } else {
+            replacement.to_string()
+        }
+    }
+
+    /// Opens the prompt `Replace with:` for the text of the last search. The cursor goes to the first match.
+    fn open_replace(&mut self) {
+        let Some(re) = self.replace_regex() else {
+            self.mode = Mode::Edit;
+            self.message = if self.last_search.is_empty() {
+                "Search first: press Ctrl-F, type the text, then press Alt-S.".into()
+            } else {
+                "The search text is not valid.".into()
+            };
+            return;
+        };
+        let _ = self
+            .textarea
+            .set_search_pattern(search_regex_for(&self.last_search, self.search_regex));
+        match self.next_match(&re) {
+            Some((row, start, _)) => self.set_cursor_position((row, start)),
+            None => self.message = format!("No match for {}", self.last_search),
+        }
+        let mut prompt = TextArea::new(vec![self.last_replace.clone()]);
+        prompt.set_cursor_line_style(Style::default());
+        prompt.move_cursor(CursorMove::End);
+        self.mode = Mode::Replace(Box::new(prompt));
+    }
+
+    /// The keys of the prompt `Replace with:`. `Enter` replaces the match at the cursor and goes to the next
+    /// one. `Alt-A` replaces all matches. `Esc` stops. Other keys edit the replacement.
+    fn replace_key(&mut self, key: KeyEvent) {
+        let Mode::Replace(prompt) = &mut self.mode else {
+            return;
+        };
+        if key.code == KeyCode::Esc {
+            self.mode = Mode::Edit;
+            let _ = self.textarea.set_search_pattern("");
+            return;
+        }
+        let all = key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('a');
+        if key.code != KeyCode::Enter && !all {
+            prompt.input(key);
+            self.last_replace = prompt.lines().join("");
+            return;
+        }
+        let replacement = prompt.lines().join("");
+        self.last_replace = replacement.clone();
+        let Some(re) = self.replace_regex() else {
+            self.message = "The search text is not valid.".into();
+            return;
+        };
+        if all {
+            self.replace_all(&re, &replacement);
+        } else {
+            self.replace_one(&re, &replacement);
+        }
+    }
+
+    fn replace_one(&mut self, re: &Regex, replacement: &str) {
+        let Some((row, start, end)) = self.next_match(re) else {
+            self.message = format!("No match for {}", self.last_search);
+            return;
+        };
+        let line = self.textarea.lines()[row].clone();
+        let byte = line
+            .char_indices()
+            .nth(start)
+            .map_or(line.len(), |(byte, _)| byte);
+        let text = re.captures_at(&line, byte).map_or_else(
+            || replacement.to_string(),
+            |caps| self.expanded(&caps, replacement),
+        );
+        let before = self.textarea.lines().to_vec();
+        self.textarea.cancel_selection();
+        self.set_cursor_position((row, start));
+        self.textarea.delete_str(end - start);
+        self.textarea.insert_str(text);
+        self.note_replace(before);
+        self.mark_edit();
+        let left: usize = self
+            .textarea
+            .lines()
+            .iter()
+            .map(|line| re.find_iter(line).filter(|found| !found.is_empty()).count())
+            .sum();
+        match self.next_match(re) {
+            Some((row, start, _)) if left > 0 => {
+                self.set_cursor_position((row, start));
+                self.message = format!("Replaced. {left} left");
+            }
+            _ => self.message = "Replaced. No more matches".into(),
+        }
+    }
+
+    fn replace_all(&mut self, re: &Regex, replacement: &str) {
+        let mut count = 0;
+        let lines: Vec<String> = self
+            .textarea
+            .lines()
+            .iter()
+            .map(|line| {
+                re.replace_all(line, |caps: &regex::Captures| {
+                    if caps[0].is_empty() {
+                        return String::new();
+                    }
+                    count += 1;
+                    self.expanded(caps, replacement)
+                })
+                .into_owned()
+            })
+            .collect();
+        if count == 0 {
+            self.message = format!("No match for {}", self.last_search);
+            return;
+        }
+        // One insert over the whole text is one undo step.
+        let place = self.cursor_position();
+        let before = self.textarea.lines().to_vec();
+        self.textarea.select_all();
+        self.textarea.insert_str(lines.join("\n"));
+        self.note_replace(before);
+        self.set_cursor_position(place);
+        self.mark_edit();
+        self.message = format!(
+            "Replaced {count} {}",
+            if count == 1 { "match" } else { "matches" }
+        );
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         let armed = std::mem::take(&mut self.close_armed);
         self.message.clear();
@@ -709,6 +918,10 @@ impl Editor {
             }
             Mode::Line(_) => {
                 self.line_key(key);
+                return Action::Stay;
+            }
+            Mode::Replace(_) => {
+                self.replace_key(key);
                 return Action::Stay;
             }
             Mode::Full if !full_passthrough(key) => return self.full_key(key),
@@ -792,16 +1005,15 @@ impl Editor {
         {
             self.break_line_with_indent();
             self.mark_edit();
-        } else if ctrl && key.code == KeyCode::Char('z') {
+        } else if ctrl && matches!(key.code, KeyCode::Char('z' | 'u')) {
             // Ctrl-Z undoes, as in most editors. The text area undoes with Ctrl-U.
-            if self
-                .textarea
-                .input(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
-            {
+            if self.undo() {
                 self.mark_edit();
             } else {
                 self.message = "Nothing to undo".into();
             }
+        } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('s') {
+            self.open_replace();
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('g') {
             let mut prompt = TextArea::default();
             prompt.set_cursor_line_style(Style::default());

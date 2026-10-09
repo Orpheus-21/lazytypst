@@ -8,4 +8,5 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 ratatui = "0.30.2"
 ratatui-image = { version = "11.1", default-features = false, features = ["crossterm"] }
 ratatui-textarea = { version = "0.9.2", features = ["search"] }
+regex = "1"
 unicode-segmentation = "1"

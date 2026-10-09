@@ -1408,6 +1408,7 @@ fn snapshot(editor: &Editor, left: bool) -> Snapshot {
             Mode::Edit => "edit",
             Mode::Search(_) => "search",
             Mode::Line(_) => "line",
+            Mode::Replace(_) => "replace",
             Mode::Full => "full",
         },
         cursor: editor.cursor_position(),
@@ -1494,7 +1495,7 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
         }
     }
     // Only the search key does nothing in the full preview. A new entry in this list is a decision.
-    assert_eq!(ignored_in_full, ["Ctrl-F", "Alt-G"]);
+    assert_eq!(ignored_in_full, ["Ctrl-F", "Alt-S", "Alt-G"]);
 }
 
 #[test]
@@ -2696,6 +2697,143 @@ fn the_dependency_watch_waits_while_the_user_types_or_the_live_compile_is_off() 
     editor.dirty = false;
     assert!(editor.tick(Instant::now() + Duration::from_secs(6)));
     assert!(editor.compiling());
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+/// Opens a file with `text`, searches for `term` with Ctrl-F, and opens the prompt `Replace with:` with Alt-S.
+fn replace_prompt(name: &str, text: &str, term: &str) -> (PathBuf, Editor) {
+    let path = temp_file(name, text);
+    let mut editor = open(&path);
+    editor.handle_key(ctrl('f'));
+    for letter in term.chars() {
+        editor.handle_key(key(KeyCode::Char(letter)));
+    }
+    editor.handle_key(alt(KeyCode::Char('s')));
+    assert!(matches!(editor.mode, Mode::Replace(_)));
+    (path, editor)
+}
+
+fn type_text(editor: &mut Editor, text: &str) {
+    for letter in text.chars() {
+        editor.handle_key(key(KeyCode::Char(letter)));
+    }
+}
+
+#[test]
+fn enter_replaces_one_match_and_goes_to_the_next() {
+    let (path, mut editor) = replace_prompt("replace1", "cat and Cat\ncat\n", "cat");
+    type_text(&mut editor, "dog");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.textarea.lines(), ["dog and Cat", "cat"]);
+    assert_eq!(editor.message, "Replaced. 2 left");
+    assert_eq!(
+        editor.cursor_position(),
+        (0, 8),
+        "the cursor is on the next match"
+    );
+    editor.handle_key(key(KeyCode::Enter));
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.textarea.lines(), ["dog and dog", "dog"]);
+    assert_eq!(editor.message, "Replaced. No more matches");
+    editor.handle_key(key(KeyCode::Enter));
+    assert!(editor.message.starts_with("No match for cat"));
+    assert!(editor.dirty);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn alt_a_replaces_all_matches_in_one_undo_step() {
+    let (path, mut editor) = replace_prompt("replaceall", "a cat\n\ncat cat\n", "cat");
+    type_text(&mut editor, "dog");
+    editor.handle_key(alt(KeyCode::Char('a')));
+    assert_eq!(editor.textarea.lines(), ["a dog", "", "dog dog"]);
+    assert_eq!(editor.message, "Replaced 3 matches");
+    editor.handle_key(key(KeyCode::Esc));
+    assert!(matches!(editor.mode, Mode::Edit));
+    editor.handle_key(ctrl('u'));
+    assert_eq!(
+        editor.textarea.lines(),
+        ["a cat", "", "cat cat"],
+        "one undo takes all back"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn one_replace_is_one_undo_step() {
+    let (path, mut editor) = replace_prompt("replaceundo", "cat cat\n", "cat");
+    type_text(&mut editor, "tiger");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.textarea.lines(), ["tiger cat"]);
+    editor.handle_key(key(KeyCode::Esc));
+    editor.handle_key(ctrl('u'));
+    assert_eq!(editor.textarea.lines(), ["cat cat"]);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_replacement_is_plain_text_and_regex_groups_work_in_regex_mode() {
+    let (path, mut editor) = replace_prompt("replaceplain", "price (1)\n", "(1)");
+    type_text(&mut editor, "$1 & \\n");
+    editor.handle_key(alt(KeyCode::Char('a')));
+    assert_eq!(
+        editor.textarea.lines(),
+        ["price $1 & \\n"],
+        "no expansion in plain mode"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+
+    let path = temp_file("replaceregex", "ab-12 cd-34\n");
+    let mut editor = open(&path);
+    editor.handle_key(ctrl('f'));
+    editor.handle_key(alt(KeyCode::Char('r')));
+    type_text(&mut editor, "([a-z]+)-([0-9]+)");
+    editor.handle_key(alt(KeyCode::Char('s')));
+    type_text(&mut editor, "$2:$1");
+    editor.handle_key(alt(KeyCode::Char('a')));
+    assert_eq!(editor.textarea.lines(), ["12:ab 34:cd"]);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn alt_s_without_a_search_says_so_and_a_search_without_a_match_replaces_nothing() {
+    let path = temp_file("replacenone", "text\n");
+    let mut editor = open(&path);
+    editor.handle_key(alt(KeyCode::Char('s')));
+    assert!(matches!(editor.mode, Mode::Edit));
+    assert!(
+        editor.message.starts_with("Search first"),
+        "{}",
+        editor.message
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+
+    let (path, mut editor) = replace_prompt("replacenomatch", "text\n", "zzz");
+    editor.handle_key(alt(KeyCode::Char('a')));
+    assert!(
+        editor.message.starts_with("No match for zzz"),
+        "{}",
+        editor.message
+    );
+    assert_eq!(editor.textarea.lines(), ["text"]);
+    assert!(!editor.dirty);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_replace_prompt_takes_a_paste_and_remembers_the_text_and_esc_leaves_the_text_alone() {
+    let (path, mut editor) = replace_prompt("replacepaste", "cat\n", "cat");
+    editor.paste("dog\n");
+    editor.handle_key(key(KeyCode::Esc));
+    assert_eq!(editor.textarea.lines(), ["cat"]);
+    editor.handle_key(ctrl('f'));
+    editor.handle_key(alt(KeyCode::Char('s')));
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        editor.textarea.lines(),
+        ["dog"],
+        "the prompt started with the last replacement"
+    );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 

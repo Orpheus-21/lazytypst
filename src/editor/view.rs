@@ -391,13 +391,24 @@ impl Editor {
                 Layout::horizontal([Constraint::Length(6), Constraint::Min(1)]).areas(hint_area);
             frame.render_widget(Paragraph::new("Line: "), label);
             frame.render_widget(&**prompt, input);
-        } else if let Mode::Search(prompt) = &self.mode {
-            let message_width = u16::try_from(self.message.len()).unwrap_or(u16::MAX);
-            let label_text = if self.search_regex {
-                "Search (regex): "
+        } else if let Some((label_text, prompt)) = match &self.mode {
+            Mode::Search(prompt) => Some((
+                if self.search_regex {
+                    "Search (regex): "
+                } else {
+                    "Search (text): "
+                },
+                prompt,
+            )),
+            Mode::Replace(prompt) => Some(("Replace with: ", prompt)),
+            _ => None,
+        } {
+            let shown = if self.message.is_empty() && matches!(self.mode, Mode::Replace(_)) {
+                "Enter: replace  Alt-A: all  Esc: stop"
             } else {
-                "Search (text): "
+                self.message.as_str()
             };
+            let message_width = u16::try_from(shown.len()).unwrap_or(u16::MAX);
             let [label, input, message] = Layout::horizontal([
                 Constraint::Length(u16::try_from(label_text.len()).unwrap_or(u16::MAX)),
                 Constraint::Min(1),
@@ -406,7 +417,7 @@ impl Editor {
             .areas(hint_area);
             frame.render_widget(Paragraph::new(label_text), label);
             frame.render_widget(&**prompt, input);
-            frame.render_widget(Paragraph::new(self.message.as_str()), message);
+            frame.render_widget(Paragraph::new(shown), message);
         } else {
             frame.render_widget(Paragraph::new(hint), hint_area);
         }

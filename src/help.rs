@@ -182,6 +182,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "Alt-S",
+        "Replace the text of the last search. Type the new text. Enter replaces one match and goes to the next. Alt-A replaces all. Esc stops. Press Alt-S in the search prompt, too.",
+        Some((KeyCode::Char('s'), ALT)),
+    ),
+    key(
+        Scope::Editor,
         "Alt-G",
         "Go to a line. Type the line number, or line:column, then Enter. Esc closes.",
         Some((KeyCode::Char('g'), ALT)),
