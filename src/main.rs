@@ -965,6 +965,14 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
     let files = browser::find_typ_files(&root, browser::MAX_DEPTH)?;
+    // Saves and exports write beside the .typ files. A kill can leave a temp file there.
+    let folders: std::collections::BTreeSet<PathBuf> = files
+        .iter()
+        .filter_map(|file| root.join(file).parent().map(Path::to_path_buf))
+        .collect();
+    fsutil::remove_leftovers(folders, std::time::SystemTime::now(), |pid| {
+        Path::new("/proc").join(pid.to_string()).exists()
+    });
     compile::make_out_dir().map_err(|err| {
         let message = format!(
             "Cannot make the folder {}: {err}",
