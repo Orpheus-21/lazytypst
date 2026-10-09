@@ -27,6 +27,7 @@ use crate::{
 
 mod build;
 mod follow;
+mod image;
 mod mouse;
 mod spelling;
 #[cfg(test)]
@@ -393,6 +394,8 @@ pub struct Editor {
     last_search: String,
     /// A compile that waits after a save: when it starts, and how long the wait is. See `compile_wait`.
     compile_at: Option<(Instant, Duration)>,
+    /// The program that reads an image from the system clipboard, or `None`.
+    clip_tool: Option<crate::clipboard::Tool>,
     /// The screen rows of the text at the last draw, the area of the text, and the area of the preview.
     hits: Vec<HitRow>,
     text_area: Rect,
@@ -482,6 +485,7 @@ impl Editor {
             replaced: None,
             arrangement: None,
             history: None,
+            clip_tool: crate::clipboard::Tool::detect(),
             hits: Vec::new(),
             text_area: Rect::default(),
             preview_area: Rect::default(),
@@ -1442,6 +1446,8 @@ impl Editor {
             self.toggle_follow();
         } else if key.code == KeyCode::F(9) {
             self.toggle_mouse();
+        } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('i') {
+            self.paste_image();
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char(';') {
             self.open_spell();
         } else if key.code == KeyCode::F(5) {

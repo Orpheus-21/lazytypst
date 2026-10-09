@@ -230,6 +230,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "Alt-I",
+        "Insert the image from the system clipboard: it is saved in the folder images of the project, and an #image line is put at the cursor. It needs wl-paste or xclip.",
+        Some((KeyCode::Char('i'), ALT)),
+    ),
+    key(
+        Scope::Editor,
         "F10",
         "Change the layout: editor and preview side by side, editor above the preview, or editor only. A window under 100 columns starts stacked. The choice is kept.",
         Some((KeyCode::F(10), NONE)),

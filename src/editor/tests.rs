@@ -1508,6 +1508,7 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
             "F7",
             "Alt-;",
             "F9",
+            "Alt-I",
             "F10",
             "Alt-S",
             "Alt-G"
@@ -3692,6 +3693,113 @@ fn f9_switches_the_mouse_and_a_popup_takes_no_mouse() {
         "the popup is open"
     );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+/// A fake `wl-paste`. It lists `types` and gives the bytes of the file `image.bin` next to it.
+fn fake_wl_paste(dir: &Path, types: &str) -> crate::clipboard::Tool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(dir.join("image.bin"), b"\x89PNG fake bytes").unwrap();
+    let script = dir.join("wl-paste");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n  --list-types) printf '{types}';;\n  *) cat \"$(dirname \"$0\")/image.bin\";;\nesac\n"
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::clipboard::Tool::WlPaste(script.display().to_string())
+}
+
+#[test]
+fn alt_i_saves_the_clipboard_image_in_the_project_and_puts_an_image_line_at_the_cursor() {
+    let path = temp_file("pasteimage", "before after\n");
+    let dir = path.parent().unwrap().to_path_buf();
+    let mut editor = open(&path);
+    editor.clip_tool = Some(fake_wl_paste(
+        &dir.join("..").join(dir.file_name().unwrap()),
+        "text/plain\nimage/png\n",
+    ));
+    editor.set_cursor_position((0, 7));
+    editor.handle_key(alt(KeyCode::Char('i')));
+    let line = editor.textarea.lines()[0].clone();
+    assert!(
+        line.starts_with("before #image(\"/images/pasted-")
+            && line.ends_with(".png\", width: 80%)after"),
+        "{line}"
+    );
+    assert!(
+        editor.message.starts_with("Saved images/pasted-"),
+        "{}",
+        editor.message
+    );
+    let saved: Vec<_> = fs::read_dir(dir.join("images"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(fs::read(saved[0].path()).unwrap(), b"\x89PNG fake bytes");
+    assert!(editor.dirty);
+    // A second image in the same second does not replace the first.
+    editor.handle_key(alt(KeyCode::Char('i')));
+    assert_eq!(fs::read_dir(dir.join("images")).unwrap().count(), 2);
+    // One undo takes the line back for each paste. The files stay.
+    editor.handle_key(ctrl('z'));
+    editor.handle_key(ctrl('z'));
+    assert_eq!(editor.textarea.lines(), ["before after"]);
+    assert_eq!(fs::read_dir(dir.join("images")).unwrap().count(), 2);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn without_an_image_without_a_tool_or_with_a_bad_folder_nothing_is_written() {
+    let path = temp_file("pastenone", "text\n");
+    let dir = path.parent().unwrap().to_path_buf();
+    let mut editor = open(&path);
+    editor.clip_tool = None;
+    editor.handle_key(alt(KeyCode::Char('i')));
+    assert!(
+        editor.message.starts_with("No clipboard program"),
+        "{}",
+        editor.message
+    );
+    editor.clip_tool = Some(fake_wl_paste(&dir, "text/plain\ntext/html\n"));
+    editor.handle_key(alt(KeyCode::Char('i')));
+    assert!(editor.message.contains("no image"), "{}", editor.message);
+    editor.clip_tool = Some(crate::clipboard::Tool::WlPaste(
+        "/nonexistent/wl-paste".into(),
+    ));
+    editor.handle_key(alt(KeyCode::Char('i')));
+    assert!(editor.message.starts_with("No image"), "{}", editor.message);
+    assert!(!dir.join("images").exists(), "no folder without an image");
+    assert_eq!(editor.textarea.lines(), ["text"]);
+    assert!(!editor.dirty);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_folder_for_images_is_a_short_plain_path_that_is_no_link() {
+    use super::image::make_folder;
+    let dir = std::env::temp_dir().join(format!("lazytypst-imgdir-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("real")).unwrap();
+    assert_eq!(
+        make_folder(&dir, "figs/pasted").unwrap(),
+        Path::new("figs/pasted")
+    );
+    assert!(dir.join("figs/pasted").is_dir());
+    for bad in ["", "/abs", "../out", "a/../../b", "a/b/c/d/e"] {
+        assert!(make_folder(&dir, bad).is_err(), "{bad:?}");
+    }
+    std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+    assert!(
+        make_folder(&dir, "link")
+            .unwrap_err()
+            .contains("link or a file")
+    );
+    fs::write(dir.join("file"), "x").unwrap();
+    assert!(make_folder(&dir, "file/x").is_err());
+    fs::remove_dir_all(&dir).unwrap();
 }
 
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
