@@ -82,7 +82,7 @@ impl Editor {
             }
         }
         let good = self.report.as_ref().is_some_and(|report| report.ok)
-            && self.job.is_none()
+            && !self.compile_busy()
             && self.compile_at.is_none()
             && self.last_edit.is_none();
         if good && self.follow.job.is_none() {

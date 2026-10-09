@@ -3802,6 +3802,106 @@ fn the_folder_for_images_is_a_short_plain_path_that_is_no_link() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// An editor in the watch mode, after the first compile of a document of three pages.
+fn watch_editor(name: &str) -> (PathBuf, Editor) {
+    let path = temp_file(name, THREE_PAGES);
+    let mut editor = open(&path);
+    editor.watch_mode = true;
+    editor.compile_now();
+    wait_for_idle(&mut editor);
+    assert!(
+        editor.report.as_ref().is_some_and(|report| report.ok),
+        "{:?}",
+        editor.report
+    );
+    assert_eq!(editor.preview.page_count(), 3);
+    (path, editor)
+}
+
+#[test]
+fn in_the_watch_mode_an_edit_is_compiled_by_the_running_watch_and_errors_show() {
+    let (path, mut editor) = watch_editor("watchedit");
+    let pid = editor.watch.as_ref().unwrap().pid();
+    // An edit that breaks the document: the same process compiles it.
+    editor.set_cursor_position((2, 0));
+    for letter in "#oops ".chars() {
+        editor.handle_key(key(KeyCode::Char(letter)));
+    }
+    editor.tick(Instant::now() + Duration::from_secs(1));
+    assert!(editor.compiling(), "the editor waits for the report");
+    wait_for_idle(&mut editor);
+    let report = editor.report.as_ref().unwrap();
+    assert!(
+        !report.ok && report.error_count() == 1,
+        "{:?}",
+        report.lines
+    );
+    assert_eq!(editor.watch.as_ref().unwrap().pid(), pid, "no new process");
+    // The repair: the next report is good, and the page loads again.
+    for _ in 0..6 {
+        editor.handle_key(key(KeyCode::Backspace));
+    }
+    editor.tick(Instant::now() + Duration::from_secs(2));
+    wait_for_idle(&mut editor);
+    assert!(editor.report.as_ref().unwrap().ok);
+    assert_eq!(editor.watch.as_ref().unwrap().pid(), pid);
+    assert_eq!(editor.preview.page_count(), 3);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn in_the_watch_mode_a_page_turn_starts_the_watch_again_and_closing_ends_it() {
+    let (path, mut editor) = watch_editor("watchpage");
+    let pid = editor.watch.as_ref().unwrap().pid();
+    editor.handle_key(alt(KeyCode::Down));
+    wait_for_idle(&mut editor);
+    assert_eq!(editor.preview.shown_page(), 2);
+    let second = editor.watch.as_ref().unwrap().pid();
+    assert_ne!(second, pid, "another page needs another process");
+    // The page folder of the watch holds no page that was taken already.
+    let watch_dir = editor.pages_root.join("watch");
+    assert_eq!(fs::read_dir(&watch_dir).unwrap().count(), 0);
+    // F5 turns the live compile off: the watch ends.
+    editor.handle_key(key(KeyCode::F(5)));
+    editor.tick(Instant::now());
+    assert!(editor.watch.is_none());
+    editor.handle_key(key(KeyCode::F(5)));
+    wait_for_idle(&mut editor);
+    let third = editor.watch.as_ref().unwrap().pid();
+    drop(editor);
+    let start = Instant::now();
+    while Path::new(&format!("/proc/{third}")).exists() && start.elapsed() < Duration::from_secs(5)
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !Path::new(&format!("/proc/{third}")).exists(),
+        "the process of the watch ended with the editor"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn in_the_watch_mode_a_document_with_fewer_pages_goes_to_the_last_page() {
+    let (path, mut editor) = watch_editor("watchshrink");
+    editor.handle_key(alt(KeyCode::End));
+    wait_for_idle(&mut editor);
+    assert_eq!(editor.preview.shown_page(), 3);
+    fs::write(
+        &path,
+        "#set page(width: 8cm, height: 5cm)\n= One\n#pagebreak()\n= Two\n",
+    )
+    .unwrap();
+    editor.handle_key(ctrl('b'));
+    wait_for_idle(&mut editor);
+    assert_eq!(
+        editor.preview.shown_page(),
+        2,
+        "the recovery works as without the watch"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
 fn pane_rows(editor: &mut Editor) -> Vec<String> {
     // The pane stands under the text area: the last 6 rows above the status line.
@@ -4362,7 +4462,7 @@ fn alt_down_and_alt_up_render_the_new_page_with_a_new_compile() {
 /// Waits up to 30 seconds until no compile runs. A recovery compile starts the next compile at once.
 fn wait_for_idle(editor: &mut Editor) {
     let start = Instant::now();
-    while editor.job.is_some() {
+    while editor.compile_busy() {
         editor.tick(Instant::now());
         assert!(
             start.elapsed() < Duration::from_secs(30),

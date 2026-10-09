@@ -12,6 +12,7 @@ use std::{
 };
 
 /// The result of one `typst compile` run.
+#[derive(Debug)]
 pub struct Report {
     pub ok: bool,
     /// The lines that `typst` printed on stderr. Errors and warnings are here.
@@ -271,7 +272,48 @@ pub fn scan_dirs() -> Vec<PathBuf> {
 /// Deletes each stale folder in `tmp`. See `stale_dirs_in`.
 fn remove_stale_dirs_in(tmp: &Path, uid: u32) {
     for dir in stale_dirs_in(tmp, uid) {
+        end_orphan_watches(&dir, uid);
         let _ = fs::remove_dir_all(dir);
+    }
+}
+
+/// Ends the `typst watch` processes of the user `uid` that write into the stale folder `dir`. A hard kill of
+/// the program leaves such a process: it ends by itself only at its next compile (its pipe is broken), and
+/// until then it holds its memory. The process is found by its command line: it holds the word `watch` and
+/// a path inside `dir`.
+fn end_orphan_watches(dir: &Path, uid: u32) {
+    use std::os::unix::fs::MetadataExt;
+    let Some(dir) = dir.to_str() else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .filter(|pid| pid.bytes().all(|byte| byte.is_ascii_digit()))
+        else {
+            continue;
+        };
+        if entry.metadata().map(|meta| meta.uid()).ok() != Some(uid) {
+            continue;
+        }
+        let Ok(command) = fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let words: Vec<&[u8]> = command.split(|byte| *byte == 0).collect();
+        let watches = words.iter().any(|word| *word == b"watch");
+        let writes_here = words.iter().any(|word| word.starts_with(dir.as_bytes()));
+        if watches && writes_here {
+            let _ = Command::new("kill")
+                .args(["-TERM", pid])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
 }
 
@@ -408,6 +450,205 @@ pub fn read_deps(dir: &Path, root: &Path) -> Option<Vec<PathBuf>> {
 
 /// The most files that the editor watches for one document.
 const MAX_DEPS: usize = 500;
+
+/// What one `typst watch` process was started with. A change of any of these needs a new process.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WatchParams {
+    pub target: PathBuf,
+    pub root: PathBuf,
+    pub page: usize,
+    pub ppi: Option<u32>,
+}
+
+/// What `typst watch` reports.
+#[derive(Debug)]
+pub enum WatchEvent {
+    /// A compile started.
+    Compiling,
+    /// A compile ended. The report holds the errors and warnings.
+    Done(Report),
+}
+
+/// A long running `typst watch`, as an option instead of one `typst compile` for each compile. The process
+/// keeps the fonts and the caches of the document, so a compile after a small change takes a few
+/// milliseconds and not the 250 ms of a new process. It writes the page into `dir`. Dropping the value kills
+/// the process.
+pub struct Watch {
+    child: Child,
+    events: Receiver<WatchEvent>,
+    pub dir: PathBuf,
+    pub params: WatchParams,
+}
+
+/// How long `typst watch` must be silent before a report counts as complete. It prints the status line and
+/// the errors in one burst.
+const WATCH_QUIET: Duration = Duration::from_millis(30);
+
+impl Watch {
+    pub fn start(params: WatchParams, dir: PathBuf) -> io::Result<Watch> {
+        Watch::start_with(&typst_program(), params, dir)
+    }
+
+    fn start_with(program: &str, params: WatchParams, dir: PathBuf) -> io::Result<Watch> {
+        fs::create_dir_all(&dir)?;
+        let mut command = limited_command(program);
+        command
+            .current_dir(&params.root)
+            .args([
+                "watch",
+                "--format",
+                "png",
+                "--diagnostic-format",
+                "short",
+                "--root",
+            ])
+            .arg(&params.root)
+            .arg("--pages")
+            .arg(params.page.to_string());
+        if let Some(ppi) = params.ppi {
+            command.arg("--ppi").arg(ppi.to_string());
+        }
+        command
+            .arg(&params.target)
+            .arg(dir.join("page-{p}-of-{t}.png"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+        let mut stderr = child.stderr.take().expect("stderr is piped");
+        let (raw_sender, raw) = mpsc::channel::<Vec<u8>>();
+        let (sender, events) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            while let Ok(count) = stderr.read(&mut buffer) {
+                if count == 0 || raw_sender.send(buffer[..count].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        thread::spawn(move || assemble_watch(&raw, &sender));
+        Ok(Watch {
+            child,
+            events,
+            dir,
+            params,
+        })
+    }
+
+    /// The process id, for a test.
+    #[cfg(test)]
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// True while the process runs.
+    pub fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// The next thing that the process reported, if there is one.
+    pub fn try_event(&mut self) -> Option<WatchEvent> {
+        self.events.try_recv().ok()
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The time in `compiled successfully in 3.56 ms` or `... in 1.21 s`.
+fn watch_elapsed(rest: &str) -> Option<Duration> {
+    let (number, unit) = rest.trim().split_once(' ')?;
+    let number: f64 = number.parse().ok()?;
+    match unit.trim() {
+        "ms" => Some(Duration::from_secs_f64(number / 1000.0)),
+        "s" => Some(Duration::from_secs_f64(number)),
+        "µs" | "us" => Some(Duration::from_secs_f64(number / 1_000_000.0)),
+        _ => None,
+    }
+}
+
+/// Reads the output of `typst watch` and makes events. A line that starts with a time in brackets is a
+/// status: `compiling ...`, `compiled successfully in X`, `compiled with warnings in X`, or
+/// `compiled with errors`. The lines after a status are its errors and warnings. Typst prints the header
+/// `watching <file>` and `writing to <path>` before each status, and the program skips them.
+fn assemble_watch(raw: &Receiver<Vec<u8>>, out: &mpsc::Sender<WatchEvent>) {
+    let mut pending: Vec<u8> = Vec::new();
+    // The report that is being collected: ok, time, lines.
+    let mut open: Option<(bool, Option<Duration>, Vec<String>)> = None;
+    // When the last compile started: typst gives no time for a compile with errors, so this one counts.
+    let mut started: Option<Instant> = None;
+    let finish = |open: &mut Option<(bool, Option<Duration>, Vec<String>)>| {
+        if let Some((ok, elapsed, lines)) = open.take() {
+            let mut report = Report::new(ok, lines);
+            report.elapsed = elapsed;
+            let _ = out.send(WatchEvent::Done(report));
+        }
+    };
+    loop {
+        let chunk = if open.is_some() {
+            match raw.recv_timeout(WATCH_QUIET) {
+                Ok(chunk) => chunk,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    finish(&mut open);
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match raw.recv() {
+                Ok(chunk) => chunk,
+                Err(_) => break,
+            }
+        };
+        pending.extend_from_slice(&chunk);
+        while let Some(at) = pending.iter().position(|byte| *byte == b'\n') {
+            let line = String::from_utf8_lossy(&pending[..at])
+                .trim_end()
+                .to_string();
+            pending.drain(..=at);
+            if line.is_empty() || line.starts_with("watching ") || line.starts_with("writing to ") {
+                continue;
+            }
+            let status = line
+                .strip_prefix('[')
+                .and_then(|rest| rest.split_once("] "))
+                .filter(|(time, _)| {
+                    time.len() <= 8
+                        && time
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || byte == b':')
+                })
+                .map(|(_, text)| text);
+            match status {
+                Some("compiling ...") => {
+                    finish(&mut open);
+                    started = Some(Instant::now());
+                    let _ = out.send(WatchEvent::Compiling);
+                }
+                Some(text) if text.starts_with("compiled") => {
+                    finish(&mut open);
+                    let ok = !text.contains("errors");
+                    let elapsed = text
+                        .split_once(" in ")
+                        .and_then(|(_, rest)| watch_elapsed(rest))
+                        .or_else(|| started.map(|time| time.elapsed()));
+                    open = Some((ok, elapsed, Vec::new()));
+                }
+                Some(_) => {}
+                None => {
+                    if let Some((_, _, lines)) = &mut open {
+                        lines.push(line);
+                    }
+                }
+            }
+        }
+    }
+    finish(&mut open);
+}
 
 /// A running command. Dropping the job kills the process, so a new job can replace an old one.
 pub struct Job {
@@ -1691,5 +1932,147 @@ mod tests {
         fs::remove_file(dir.join(DEPS_FILE)).unwrap();
         assert_eq!(read_deps(&dir, root), None, "no list: the old one stays");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Waits for the next report of the watch, and skips the events that start a compile.
+    fn next_report(watch: &mut Watch) -> Report {
+        let start = Instant::now();
+        loop {
+            if let Some(WatchEvent::Done(report)) = watch.try_event() {
+                return report;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "no report from typst watch"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_watch_compiles_at_start_and_after_each_change_and_reports_errors_and_warnings() {
+        let (file, _) = project("watch", "= One\n#lorem(5)\n");
+        let root = file.parent().unwrap().to_path_buf();
+        let dir = root.join("watch-out");
+        let params = WatchParams {
+            target: file.clone(),
+            root: root.clone(),
+            page: 1,
+            ppi: None,
+        };
+        let mut watch = Watch::start(params, dir.clone()).unwrap();
+        let report = next_report(&mut watch);
+        assert!(report.ok && report.lines.is_empty(), "{:?}", report.lines);
+        assert!(report.elapsed.is_some());
+        assert!(watch.alive());
+        let page: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(page, ["page-1-of-1.png"]);
+        fs::remove_file(dir.join("page-1-of-1.png")).unwrap();
+        // A change with an error: the report says so, with the line of the error.
+        fs::write(&file, "= One\n#oops\n").unwrap();
+        let report = next_report(&mut watch);
+        assert!(!report.ok);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("unknown variable: oops")),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.error_count(), 1);
+        // A warning does not fail the compile.
+        fs::write(&file, "= One\n#text(font: \"NoSuchFontXyz\")[x]\n").unwrap();
+        let report = next_report(&mut watch);
+        assert!(report.ok);
+        assert_eq!(report.warning_count(), 1, "{:?}", report.lines);
+        assert!(
+            dir.join("page-1-of-1.png").is_file(),
+            "the page of the good compile"
+        );
+        drop(watch);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_output_of_typst_watch_is_read_in_pieces_and_without_the_header_lines() {
+        let (sender, raw) = mpsc::channel();
+        let (out, events) = mpsc::channel();
+        let reader = thread::spawn(move || assemble_watch(&raw, &out));
+        let text = "watching a.typ\nwriting to o-{p}.png\n\n[20:11:17] compiling ...\n\nwatching a.typ\nwriting to o-{p}.png\n\n[20:11:17] compiled with errors\n\na.typ:3:1: error: unknown variable: oops\na.typ:4:2: warning: w\n";
+        // The bytes come in pieces, also in the middle of a line and of a character.
+        for piece in text.as_bytes().chunks(7) {
+            sender.send(piece.to_vec()).unwrap();
+        }
+        sender
+            .send(
+                "watching é\n[20:11:18] compiled successfully in 1.5 s\n"
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .unwrap();
+        drop(sender);
+        reader.join().unwrap();
+        let events: Vec<WatchEvent> = events.try_iter().collect();
+        assert!(matches!(events[0], WatchEvent::Compiling));
+        let WatchEvent::Done(first) = &events[1] else {
+            panic!("{events:?}")
+        };
+        assert!(!first.ok);
+        assert_eq!(
+            first.lines,
+            [
+                "a.typ:3:1: error: unknown variable: oops",
+                "a.typ:4:2: warning: w"
+            ]
+        );
+        let WatchEvent::Done(second) = &events[2] else {
+            panic!("{events:?}")
+        };
+        assert!(second.ok && second.lines.is_empty());
+        assert_eq!(second.elapsed, Some(Duration::from_millis(1500)));
+        assert_eq!(
+            watch_elapsed("3.56 ms"),
+            Some(Duration::from_secs_f64(0.00356))
+        );
+        assert_eq!(watch_elapsed("nonsense"), None);
+    }
+
+    #[test]
+    fn a_watch_that_writes_into_a_stale_folder_is_ended_with_the_folder() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = std::env::temp_dir().join(format!("lazytypst-orphan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        // The pid 4000000 is above the limit of the system, so no process has it.
+        let stale = tmp.join("lazytypst-4000000");
+        fs::create_dir_all(stale.join("1/watch")).unwrap();
+        let uid = fs::metadata("/proc/self").unwrap().uid();
+        let mut orphan = Command::new("sh")
+            .args(["-c", "sleep 30; sleep 1", "sh", "watch"])
+            .arg(stale.join("1/watch/page-{p}-of-{t}.png"))
+            .spawn()
+            .unwrap();
+        let mut other = Command::new("sh")
+            .args(["-c", "sleep 30; sleep 1", "sh", "watch", "/somewhere/else"])
+            .spawn()
+            .unwrap();
+        remove_stale_dirs_in(&tmp, uid);
+        let start = Instant::now();
+        while orphan.try_wait().unwrap().is_none() && start.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            orphan.try_wait().unwrap().is_some(),
+            "the process of the stale folder ended"
+        );
+        assert!(other.try_wait().unwrap().is_none(), "another process stays");
+        assert!(!stale.exists());
+        let _ = other.kill();
+        let _ = other.wait();
+        fs::remove_dir_all(&tmp).unwrap();
     }
 }

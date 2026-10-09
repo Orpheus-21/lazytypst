@@ -100,3 +100,7 @@ jobs:
 
       - name: Terminal checks
         run: python3 tests/pty/run.py
+
+      # The same checks with the option LAZYTYPST_WATCH=1: one long running typst watch for the compile.
+      - name: Terminal checks with typst watch
+        run: python3 tests/pty/run.py --watch

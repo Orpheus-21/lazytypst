@@ -184,6 +184,18 @@ pub(super) struct HitRow {
     pub cells: Vec<(u16, u16, usize)>,
 }
 
+/// A compile of `typst watch` that the editor waits for.
+pub(super) struct WatchWait {
+    pub since: Instant,
+    /// True after the watch said that a compile started.
+    pub compiling: bool,
+}
+
+/// The time after a save in which `typst watch` must start a compile. If it does not, the editor starts it again.
+const WATCH_PATIENCE: Duration = Duration::from_secs(4);
+/// The time that `typst watch` may need for one compile, as the time of a `typst compile`.
+const WATCH_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// How many indented lines the detection reads.
 const INDENT_LINES: usize = 200;
 
@@ -394,6 +406,11 @@ pub struct Editor {
     last_search: String,
     /// A compile that waits after a save: when it starts, and how long the wait is. See `compile_wait`.
     compile_at: Option<(Instant, Duration)>,
+    /// True when the compile uses a long running `typst watch`: the option `LAZYTYPST_WATCH=1`.
+    watch_mode: bool,
+    /// The running `typst watch`, and the compile that the editor waits for. See `start_watch`.
+    watch: Option<compile::Watch>,
+    watch_wait: Option<WatchWait>,
     /// The program that reads an image from the system clipboard, or `None`.
     clip_tool: Option<crate::clipboard::Tool>,
     /// The screen rows of the text at the last draw, the area of the text, and the area of the preview.
@@ -485,6 +502,9 @@ impl Editor {
             replaced: None,
             arrangement: None,
             history: None,
+            watch_mode: std::env::var_os("LAZYTYPST_WATCH").is_some_and(|value| value == "1"),
+            watch: None,
+            watch_wait: None,
             clip_tool: crate::clipboard::Tool::detect(),
             hits: Vec::new(),
             text_area: Rect::default(),
@@ -696,7 +716,7 @@ impl Editor {
     /// True while a compile runs, for a test.
     #[cfg(test)]
     pub fn compiling(&self) -> bool {
-        self.job.is_some()
+        self.compile_busy()
     }
 
     /// The page that the preview shows or waits for, counted from 1.
@@ -1143,6 +1163,10 @@ impl Editor {
     /// How long after the last key a compile starts. After a fast compile it is the pause of the autosave.
     /// After a slow one (`SLOW_COMPILE` or more) it is twice that time, up to `MAX_COMPILE_WAIT`.
     fn compile_wait(&self) -> Duration {
+        if self.watch_mode {
+            // The write of the file starts the compile of the watch, and an incremental compile is cheap.
+            return DEBOUNCE;
+        }
         compile_wait_after(
             self.report
                 .as_ref()
@@ -1452,6 +1476,10 @@ impl Editor {
             self.open_spell();
         } else if key.code == KeyCode::F(5) {
             self.paused = !self.paused;
+            if self.paused {
+                // The watch would compile each save. Ctrl-B starts one that ends after its report.
+                self.stop_compile();
+            }
             self.message = if self.paused {
                 "Live compile off. Ctrl-B compiles. F5 turns it on.".into()
             } else {
@@ -1688,7 +1716,7 @@ impl Editor {
                 // all the time while the user types.
                 let wait = self.compile_wait();
                 if wait <= DEBOUNCE {
-                    self.start_compile();
+                    self.compile_after_save();
                 } else {
                     self.compile_at = Some((edited + wait, wait));
                 }
@@ -1698,7 +1726,7 @@ impl Editor {
         if let Some((due, _)) = self.compile_at
             && now >= due
         {
-            self.start_compile();
+            self.compile_after_save();
             changed = true;
         }
         changed |= self.watch_file(now);
@@ -1718,7 +1746,8 @@ impl Editor {
     fn watch_deps(&mut self, now: Instant) -> bool {
         if self.dirty
             || self.paused
-            || self.job.is_some()
+            || self.compile_busy()
+            || self.watch_mode
             || self.deps.is_empty()
             || self
                 .last_deps_watch
