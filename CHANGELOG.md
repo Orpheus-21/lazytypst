@@ -10,6 +10,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 - The search takes plain text by default (`f(x)` and `1+1` work), with smart case. `Alt-R` switches to a regular expression.
 - A folder with a `typst.toml` entrypoint or a `main.typ` gets that file as its main file by itself. `m` removes the mark, and the choice stays.
+- The preview follows the cursor: when the cursor enters another section, the preview goes to the page of its heading. `F3` switches it. The program reads the pages with `typst eval`.
 - `F7` turns on a spell check with `hunspell` (optional): unknown words of the prose are underlined. `Alt-;` goes to the next one with suggestions, `Add`, and `Ignore`. The dictionary comes from `#set text(lang: ...)`.
 - `F6` shows a local history of the file in the state folder: the text at open, and saved versions at most every 30 s (50 for each file, 20 MiB in all). `Enter` restores a version as one edit.
 - After a compile of 1 s or more, the next compile waits twice that time after the last key, up to 3 s. The save does not wait, and the pane title says `(next in 2.4 s)`.
