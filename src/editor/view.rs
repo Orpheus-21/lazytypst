@@ -182,6 +182,37 @@ impl Editor {
     /// A row that starts a line shows the number of the line in the gutter. A row that continues a wrapped
     /// line has a blank gutter, and it continues where the row above stopped. The rows above the first
     /// numbered row are left plain, because the line of such a row is not known.
+    /// The heading of the section that holds the cursor: the nearest heading line at or above it, as it is
+    /// written (`== Title`), cut with `...` to `room` characters. `None` if there is no heading above, or no
+    /// room. A line that looks like a heading inside a comment, math, or raw text is not a heading.
+    fn section_title(
+        &self,
+        parts: &[Vec<highlight::Part>],
+        row: usize,
+        room: usize,
+    ) -> Option<String> {
+        // A title cut to a few letters says nothing: show none.
+        if room < 14 {
+            return None;
+        }
+        let lines = self.textarea.lines();
+        let heading = (0..=row.min(lines.len().saturating_sub(1)))
+            .rev()
+            .find(|line| {
+                parts[*line]
+                    .first()
+                    .is_some_and(|part| part.kind == highlight::Kind::Heading && part.start == 0)
+            })?;
+        let text = lines[heading].trim();
+        let count = text.chars().count();
+        Some(if count <= room {
+            text.to_string()
+        } else {
+            let kept: String = text.chars().take(room - 3).collect();
+            format!("{kept}...")
+        })
+    }
+
     /// The lines of the open file that have an error or a warning in the last compile, counted from 0. If a
     /// line has both, the error wins. A line of another file is not here.
     fn line_marks(&self) -> std::collections::HashMap<usize, Severity> {
@@ -207,10 +238,21 @@ impl Editor {
         marks
     }
 
+    #[cfg(test)]
     pub(super) fn paint(&self, buffer: &mut ratatui::buffer::Buffer, area: Rect) {
+        let parts = highlight::tokenize(self.textarea.lines());
+        self.paint_with(buffer, area, &parts);
+    }
+
+    /// `paint` with the parts of the text found already. `draw` finds them once for the colors and the section.
+    fn paint_with(
+        &self,
+        buffer: &mut ratatui::buffer::Buffer,
+        area: Rect,
+        parts: &[Vec<highlight::Part>],
+    ) {
         let lines = self.textarea.lines();
         let gutter = u16::try_from(lines.len().to_string().len() + 2).unwrap_or(u16::MAX);
-        let parts = highlight::tokenize(lines);
         let marks = self.line_marks();
         let mut current: Option<(usize, Vec<char>, usize)> = None; // the line, its characters, the next offset
         for y in area.top()..area.bottom() {
@@ -313,7 +355,8 @@ impl Editor {
         let inner = block.inner(body);
         frame.render_widget(block, body);
         frame.render_widget(&self.textarea, inner);
-        self.paint(frame.buffer_mut(), inner);
+        let parts = highlight::tokenize(self.textarea.lines());
+        self.paint_with(frame.buffer_mut(), inner, &parts);
         frame.render_widget(self.compile_pane(pane), pane);
         self.preview
             .set_stale(self.report.as_ref().is_some_and(|report| !report.ok));
@@ -333,7 +376,14 @@ impl Editor {
             cursor.0 + 1,
             cursor.1 + 1
         );
-        let width = u16::try_from(position.len() + 1).unwrap_or(u16::MAX);
+        // The section of the cursor goes before the count, if there is room: it must not cut the hint.
+        let total = usize::from(status.width);
+        let room = total.saturating_sub(hint.chars().count() + position.len() + 2);
+        let position = match self.section_title(&parts, cursor.0, room.saturating_sub(2)) {
+            Some(section) => format!("{section}  {position}"),
+            None => position,
+        };
+        let width = u16::try_from(position.chars().count() + 1).unwrap_or(u16::MAX);
         let [hint_area, position_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(status);
         if let Mode::Search(prompt) = &self.mode {

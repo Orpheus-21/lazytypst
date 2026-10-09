@@ -1909,6 +1909,56 @@ fn a_page_from_an_older_compile_says_old_in_the_title_while_the_last_compile_fai
 }
 
 #[test]
+fn the_status_line_names_the_section_of_the_cursor() {
+    let path = temp_file(
+        "section",
+        "intro\n= Notes\ntext\n== Sub part\nmore\n/*\n= not a heading\n*/\nafter\n",
+    );
+    let mut editor = open(&path);
+    assert!(
+        !status_row_at(&mut editor, 160).contains("="),
+        "no heading above the cursor: {}",
+        status_row_at(&mut editor, 160)
+    );
+    for (row, section) in [
+        (1, "= Notes"),
+        (2, "= Notes"),
+        (3, "== Sub part"),
+        (4, "== Sub part"),
+        (8, "== Sub part"),
+    ] {
+        editor.textarea.move_cursor(CursorMove::Jump(row, 0));
+        let status = status_row_at(&mut editor, 160);
+        assert!(
+            status.contains(&format!("{section}  ")),
+            "row {row}: {status}"
+        );
+        assert!(
+            status.trim_end().ends_with(&format!("{}:1", row + 1)),
+            "{status}"
+        );
+    }
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_long_section_title_is_cut_and_a_narrow_screen_shows_none() {
+    let long = format!("= {}", "very long ".repeat(12));
+    let path = temp_file("sectionlong", &format!("{long}\ntext\n"));
+    let mut editor = open(&path);
+    editor.textarea.move_cursor(CursorMove::Jump(1, 0));
+    let status = status_row_at(&mut editor, 160);
+    assert!(status.contains("..."), "{status}");
+    assert!(status.contains("F1 help"), "the hint is not cut: {status}");
+    // At 100 columns there is no room: the hint stays whole and the section is not shown.
+    let narrow = status_row_at(&mut editor, 100);
+    assert!(!narrow.contains("very"), "{narrow}");
+    assert!(narrow.contains("Esc back"), "{narrow}");
+    assert!(narrow.trim_end().ends_with("2:1"), "{narrow}");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
     let path = temp_file("escconflict", "text\n");
     let mut editor = open(&path);
@@ -2235,6 +2285,16 @@ fn the_line_numbers_are_dim() {
 /// The status line of the editor: the last row of the screen.
 fn status_row(editor: &mut Editor) -> String {
     screen_rows(editor).pop().unwrap()
+}
+
+/// The status line on a screen that is `width` columns wide.
+fn status_row_at(editor: &mut Editor, width: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+    terminal.draw(|frame| editor.draw(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..width)
+        .map(|column| buffer[(column, 19)].symbol())
+        .collect()
 }
 
 #[test]
