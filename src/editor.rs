@@ -120,6 +120,8 @@ enum Mode {
     Edit,
     /// The prompt `Search:` in the status line. It takes every key and every paste. See `search_key`.
     Search(Box<TextArea<'static>>),
+    /// The prompt `Line:` in the status line. It takes every key and every paste. See `line_key`.
+    Line(Box<TextArea<'static>>),
     /// The preview fills the screen and the text area is hidden. Typing does nothing. See `full_key`.
     Full,
 }
@@ -346,6 +348,12 @@ impl Editor {
         self.message.clear();
         match self.mode {
             Mode::Full => return, // typing is off in the full preview
+            Mode::Line(_) => {
+                for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
+                    self.line_key(KeyEvent::from(KeyCode::Char(letter)));
+                }
+                return;
+            }
             Mode::Search(_) => {
                 // The prompt takes the text of a paste, as one line.
                 for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
@@ -542,6 +550,52 @@ impl Editor {
         Action::Stay
     }
 
+    /// Handles a key while the prompt `Line:` is open (`Alt-G`). The text is a line number, or a line number,
+    /// a colon, and a column, both counted from 1. `Enter` goes there, and `Esc` closes the prompt. A number
+    /// beyond the end goes to the end. Only digits and the colon are typed.
+    fn line_key(&mut self, key: KeyEvent) {
+        let Mode::Line(prompt) = &mut self.mode else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Edit,
+            KeyCode::Enter => {
+                let typed = prompt.lines().join("");
+                if typed.is_empty() {
+                    self.mode = Mode::Edit;
+                    return;
+                }
+                let (line, column) = typed.split_once(':').unwrap_or((typed.as_str(), "1"));
+                let (Ok(line), Ok(column)) = (line.parse::<usize>(), column.parse::<usize>())
+                else {
+                    self.message = "Type a line number, for example 42 or 42:7.".into();
+                    return;
+                };
+                let last = self.textarea.lines().len().max(1);
+                self.textarea.cancel_selection();
+                self.go_to(line.max(1), column.max(1));
+                self.message = if line > last {
+                    format!("Line {line} is beyond the end. This is the last line, {last}.")
+                } else {
+                    format!("Line {line}")
+                };
+                self.mode = Mode::Edit;
+            }
+            KeyCode::Char(letter)
+                if (letter.is_ascii_digit() || letter == ':')
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                prompt.input(key);
+            }
+            KeyCode::Backspace | KeyCode::Left | KeyCode::Right | KeyCode::Delete => {
+                prompt.input(key);
+            }
+            _ => {}
+        }
+    }
+
     /// Handles a key while the prompt `Search:` is open. The text of the prompt is a regular expression.
     /// The matches show while you type. `Enter` or `Ctrl-F` moves the cursor to the next match, and the
     /// search wraps at the end of the file. `Esc` closes the prompt and keeps the cursor.
@@ -589,6 +643,10 @@ impl Editor {
         match self.mode {
             Mode::Search(_) => {
                 self.search_key(key);
+                return Action::Stay;
+            }
+            Mode::Line(_) => {
+                self.line_key(key);
                 return Action::Stay;
             }
             Mode::Full if !full_passthrough(key) => return self.full_key(key),
@@ -682,6 +740,10 @@ impl Editor {
             } else {
                 self.message = "Nothing to undo".into();
             }
+        } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('g') {
+            let mut prompt = TextArea::default();
+            prompt.set_cursor_line_style(Style::default());
+            self.mode = Mode::Line(Box::new(prompt));
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('a') {
             self.textarea.select_all();
         } else if ctrl && matches!(key.code, KeyCode::Home | KeyCode::End) {

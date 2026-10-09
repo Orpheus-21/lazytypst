@@ -1407,6 +1407,7 @@ fn snapshot(editor: &Editor, left: bool) -> Snapshot {
         mode: match editor.mode {
             Mode::Edit => "edit",
             Mode::Search(_) => "search",
+            Mode::Line(_) => "line",
             Mode::Full => "full",
         },
         cursor: editor.cursor_position(),
@@ -1493,7 +1494,7 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
         }
     }
     // Only the search key does nothing in the full preview. A new entry in this list is a decision.
-    assert_eq!(ignored_in_full, ["Ctrl-F"]);
+    assert_eq!(ignored_in_full, ["Ctrl-F", "Alt-G"]);
 }
 
 #[test]
@@ -2009,6 +2010,75 @@ fn ctrl_home_and_ctrl_end_go_to_the_start_and_the_end_of_the_file_and_shift_sele
     ));
     editor.handle_key(ctrl('c'));
     assert_eq!(editor.take_clipboard().as_deref(), Some("one\nt"));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn alt_g_goes_to_a_line_with_an_optional_column() {
+    let path = temp_file("gotoline", "one\ntwo is here\nthree\nfour\n");
+    let mut editor = open(&path);
+    let alt_g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT);
+    let type_text = |editor: &mut Editor, text: &str| {
+        for letter in text.chars() {
+            editor.handle_key(key(KeyCode::Char(letter)));
+        }
+    };
+    editor.handle_key(alt_g);
+    assert!(
+        status_row(&mut editor).starts_with("Line:"),
+        "{}",
+        status_row(&mut editor)
+    );
+    type_text(&mut editor, "3");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (2, 0));
+    assert!(matches!(editor.mode, Mode::Edit));
+    // With a column.
+    editor.handle_key(alt_g);
+    type_text(&mut editor, "2:5");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (1, 4));
+    // Beyond the end goes to the last line, and a column beyond the end to the end of the line.
+    editor.handle_key(alt_g);
+    type_text(&mut editor, "99:99");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(editor.cursor_position(), (3, 4));
+    assert!(editor.message.contains("last line"), "{}", editor.message);
+    // Letters are not typed. A bad text keeps the prompt open with a message.
+    editor.handle_key(alt_g);
+    type_text(&mut editor, "ab1:");
+    editor.handle_key(key(KeyCode::Enter));
+    assert!(
+        matches!(editor.mode, Mode::Line(_)),
+        "a bad text keeps the prompt open"
+    );
+    assert!(editor.message.contains("line number"), "{}", editor.message);
+    editor.handle_key(key(KeyCode::Esc));
+    // An empty prompt with Enter closes it.
+    editor.handle_key(alt_g);
+    editor.handle_key(key(KeyCode::Enter));
+    assert!(matches!(editor.mode, Mode::Edit));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_line_prompt_closes_with_esc_and_takes_a_paste_and_does_not_change_the_text() {
+    let path = temp_file("gotoline2", "one\ntwo\nthree\n");
+    let mut editor = open(&path);
+    editor.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT));
+    editor.paste("2\n");
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        editor.cursor_position(),
+        (1, 0),
+        "the paste went into the prompt"
+    );
+    assert_eq!(editor.textarea.lines(), ["one", "two", "three"]);
+    assert!(!editor.dirty);
+    editor.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT));
+    editor.handle_key(key(KeyCode::Esc));
+    assert!(matches!(editor.mode, Mode::Edit));
+    assert_eq!(editor.cursor_position(), (1, 0), "Esc keeps the cursor");
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 

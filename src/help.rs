@@ -182,6 +182,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "Alt-G",
+        "Go to a line. Type the line number, or line:column, then Enter. Esc closes.",
+        Some((KeyCode::Char('g'), ALT)),
+    ),
+    key(
+        Scope::Editor,
         "F8, Shift-F8",
         "Go to the next error, or the previous error. The search wraps at the ends.",
         Some((KeyCode::F(8), NONE)),
