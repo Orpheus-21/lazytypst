@@ -1702,6 +1702,89 @@ fn alt_shift_with_an_arrow_does_not_turn_the_page() {
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
+/// The cell of the first digit of the number of the line `number` (counted from 1), for a screen of 100 by 20.
+fn gutter_cell(editor: &mut Editor, number: usize) -> ratatui::buffer::Cell {
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    terminal.draw(|frame| editor.draw(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    for row in 0..20 {
+        // The gutter starts after the border: a space, the number, a space.
+        let text: String = (1..4)
+            .map(|column| buffer[(column, row)].symbol())
+            .collect();
+        if text.trim() == number.to_string() {
+            let column =
+                1 + u16::try_from(text.find(|c: char| c.is_ascii_digit()).unwrap()).unwrap();
+            return buffer[(column, row)].clone();
+        }
+    }
+    panic!("no line number {number} on the screen");
+}
+
+#[test]
+fn the_gutter_marks_the_lines_with_an_error_and_with_a_warning() {
+    let path = temp_file("gutter", "one\ntwo\nthree\nfour\n");
+    let mut editor = open(&path);
+    editor.colors = true;
+    editor.report = report_with(
+        false,
+        &[
+            "doc.typ:2:1: error: boom",
+            "doc.typ:4:1: warning: careful",
+            "doc.typ:4:2: error: and an error on the same line",
+            "other.typ:3:1: error: in another file",
+            "hint: no place",
+        ],
+    );
+    let plain = gutter_cell(&mut editor, 1);
+    assert_eq!(plain.fg, Color::Reset);
+    assert!(
+        plain.modifier.contains(ratatui::style::Modifier::DIM),
+        "a line with no mark stays dim"
+    );
+    let error = gutter_cell(&mut editor, 2);
+    assert_eq!(error.fg, Color::Red);
+    assert!(error.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert!(!error.modifier.contains(ratatui::style::Modifier::DIM));
+    assert_eq!(
+        gutter_cell(&mut editor, 3).fg,
+        Color::Reset,
+        "an error in another file marks nothing here"
+    );
+    assert_eq!(
+        gutter_cell(&mut editor, 4).fg,
+        Color::Red,
+        "the error wins over the warning"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn without_colors_the_gutter_marks_use_reverse_and_underline() {
+    let path = temp_file("guttermono", "one\ntwo\nthree\n");
+    let mut editor = open(&path);
+    editor.colors = false;
+    editor.report = report_with(
+        false,
+        &["doc.typ:1:1: error: boom", "doc.typ:3:1: warning: careful"],
+    );
+    let error = gutter_cell(&mut editor, 1);
+    assert_eq!(error.fg, Color::Reset);
+    assert!(error.modifier.contains(ratatui::style::Modifier::REVERSED));
+    let warning = gutter_cell(&mut editor, 3);
+    assert!(
+        warning
+            .modifier
+            .contains(ratatui::style::Modifier::UNDERLINED)
+    );
+    assert!(
+        gutter_cell(&mut editor, 2)
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 #[test]
 fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
     let path = temp_file("escconflict", "text\n");

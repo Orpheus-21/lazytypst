@@ -81,6 +81,18 @@ pub(super) fn severity_style(severity: Severity, colors: bool) -> Style {
 
 /// The words for the number of errors and warnings, for the title of the compile pane:
 /// `2 errors, 1 warning`. `None` if there are none.
+/// The style of a line number that has an error or a warning. Without colors, an error is reversed and a
+/// warning is underlined. The line numbers are dim, so a mark takes the dim off.
+pub(super) fn mark_style(severity: Severity, colors: bool) -> Style {
+    let style = Style::new().remove_modifier(Modifier::DIM);
+    match (severity, colors) {
+        (Severity::Error, true) => style.fg(Color::Red).add_modifier(Modifier::BOLD),
+        (Severity::Warning, true) => style.fg(Color::Yellow),
+        (Severity::Error, false) => style.add_modifier(Modifier::REVERSED),
+        _ => style.add_modifier(Modifier::UNDERLINED),
+    }
+}
+
 pub(super) fn counts_text(errors: usize, warnings: usize) -> Option<String> {
     let part = |count: usize, word: &str| match count {
         0 => None,
@@ -170,10 +182,36 @@ impl Editor {
     /// A row that starts a line shows the number of the line in the gutter. A row that continues a wrapped
     /// line has a blank gutter, and it continues where the row above stopped. The rows above the first
     /// numbered row are left plain, because the line of such a row is not known.
+    /// The lines of the open file that have an error or a warning in the last compile, counted from 0. If a
+    /// line has both, the error wins. A line of another file is not here.
+    fn line_marks(&self) -> std::collections::HashMap<usize, Severity> {
+        let mut marks = std::collections::HashMap::new();
+        let Some(report) = &self.report else {
+            return marks;
+        };
+        let open = self.path.strip_prefix(&self.root).unwrap_or(&self.path);
+        for diagnostic in &report.diagnostics {
+            if diagnostic.line == 0
+                || diagnostic.file.as_deref() != Some(open)
+                || !matches!(diagnostic.severity, Severity::Error | Severity::Warning)
+            {
+                continue;
+            }
+            let entry = marks
+                .entry(diagnostic.line - 1)
+                .or_insert(diagnostic.severity);
+            if diagnostic.severity == Severity::Error {
+                *entry = Severity::Error;
+            }
+        }
+        marks
+    }
+
     pub(super) fn paint(&self, buffer: &mut ratatui::buffer::Buffer, area: Rect) {
         let lines = self.textarea.lines();
         let gutter = u16::try_from(lines.len().to_string().len() + 2).unwrap_or(u16::MAX);
         let parts = highlight::tokenize(lines);
+        let marks = self.line_marks();
         let mut current: Option<(usize, Vec<char>, usize)> = None; // the line, its characters, the next offset
         for y in area.top()..area.bottom() {
             let number: String = (area.left()..(area.left() + gutter).min(area.right()))
@@ -185,6 +223,16 @@ impl Editor {
                     current = None;
                     continue;
                 };
+                // The number of a line with an error or a warning in the last compile stands out.
+                if let Some(severity) = marks.get(&(n - 1)) {
+                    let style = mark_style(*severity, self.colors);
+                    for x in area.left()..(area.left() + gutter).min(area.right()) {
+                        if buffer[(x, y)].symbol().trim().is_empty() {
+                            continue;
+                        }
+                        buffer[(x, y)].set_style(style);
+                    }
+                }
                 current = Some((n - 1, text.chars().collect(), 0));
             } else if !number.is_empty() {
                 current = None;
