@@ -99,11 +99,12 @@ fn usage() -> String {
 }
 
 const USAGE_HEAD: &str = "\
-Usage: lazytypst [FOLDER | FILE.typ]
+Usage: lazytypst [FOLDER | FILE.typ[:LINE[:COLUMN]]]
 
 lazytypst lists the .typ files in FOLDER and opens them in an editor with a live preview.
 Without FOLDER, lazytypst uses the current folder. FOLDER is also the Typst project root.
 With a .typ file, lazytypst opens the file at once. The folder of the file is the project root.
+With :LINE or :LINE:COLUMN after the file name, the cursor starts there, for example main.typ:42:7.
 
 Options:
   -h, --help     Show this help.
@@ -292,6 +293,37 @@ fn resolve_target(arg: &Path) -> Result<Target, (String, i32)> {
     })
 }
 
+/// Splits `main.typ:42` and `main.typ:42:7` into the path and the place (line, column). Other tools print
+/// this form. A path that exists as it is stays whole, so a file name with a colon still works. A suffix
+/// that is not `:line` or `:line:column` with digits stays in the path.
+fn split_place(arg: &Path) -> (PathBuf, Option<(usize, usize)>) {
+    let whole = || (arg.to_path_buf(), None);
+    let Some(text) = arg.to_str() else {
+        return whole();
+    };
+    if arg.exists() {
+        return whole();
+    }
+    let number = |part: &str| {
+        part.parse::<usize>()
+            .ok()
+            .filter(|_| !part.starts_with('+'))
+    };
+    let Some((rest, last)) = text.rsplit_once(':') else {
+        return whole();
+    };
+    let Some(last) = number(last) else {
+        return whole();
+    };
+    // `a.typ:42:7` is a line and a column. `a.typ:42` is a line.
+    if let Some((path, line)) = rest.rsplit_once(':')
+        && let Some(line) = number(line)
+    {
+        return (PathBuf::from(path), Some((line, last)));
+    }
+    (PathBuf::from(rest), Some((last, 1)))
+}
+
 /// Reads the arguments. `args_os` keeps a folder name that is not UTF-8. `args` would panic on it.
 fn parse_args(mut args: impl Iterator<Item = OsString>) -> Result<Args, String> {
     args.next(); // the program name
@@ -440,6 +472,14 @@ impl App {
             Some(relative) => self.open_target(relative),
             None if self.all_files.len() == 1 => self.open_selected(),
             None => {}
+        }
+    }
+
+    /// Moves the cursor of the open file to `place` (line, column). A folder argument has no file, so
+    /// nothing moves.
+    fn go_to_place(&mut self, place: Option<(usize, usize)>) {
+        if let (Some(editor), Some((line, column))) = (&mut self.editor, place) {
+            editor.go_to(line, column);
         }
     }
 
@@ -911,6 +951,7 @@ fn main() -> std::io::Result<()> {
             std::process::exit(2);
         }
     };
+    let (arg, place) = split_place(&arg);
     let Target { root, open } = match resolve_target(&arg) {
         Ok(target) => target,
         Err((message, code)) => {
@@ -950,6 +991,7 @@ fn main() -> std::io::Result<()> {
     let mut app = App::new(root, files, picker);
     app.load_state(state::default_state_file());
     app.start(open);
+    app.go_to_place(place);
     if app.status.is_empty()
         && tmux_hint_needed(
             app.picker.protocol_type(),
@@ -1160,6 +1202,51 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn a_place_after_the_file_name_splits_off_when_the_name_does_not_exist() {
+        let split = |text: &str| split_place(Path::new(text));
+        assert_eq!(
+            split("nope.typ:42"),
+            (PathBuf::from("nope.typ"), Some((42, 1)))
+        );
+        assert_eq!(
+            split("dir/nope.typ:42:7"),
+            (PathBuf::from("dir/nope.typ"), Some((42, 7)))
+        );
+        assert_eq!(split("nope.typ"), (PathBuf::from("nope.typ"), None));
+        assert_eq!(split("nope.typ:x"), (PathBuf::from("nope.typ:x"), None));
+        assert_eq!(split("nope.typ:42:"), (PathBuf::from("nope.typ:42:"), None));
+        assert_eq!(split("nope.typ:+4"), (PathBuf::from("nope.typ:+4"), None));
+        assert_eq!(split("nope.typ:-4"), (PathBuf::from("nope.typ:-4"), None));
+    }
+
+    #[test]
+    fn a_file_name_with_a_colon_stays_whole_when_it_exists() {
+        let root = std::env::temp_dir().join(format!("lazytypst-colon-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let name = root.join("v:2.typ");
+        fs::write(&name, "x").unwrap();
+        assert_eq!(split_place(&name), (name.clone(), None));
+        let with_place = PathBuf::from(format!("{}:3", name.display()));
+        assert_eq!(split_place(&with_place), (name, Some((3, 1))));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_place_moves_the_cursor_of_the_open_file() {
+        let mut app = app("place");
+        fs::write(app.root.join("a.typ"), "one\ntwo\nthree\n").unwrap();
+        app.go_to_place(Some((2, 2)));
+        assert!(app.editor.is_none(), "a folder argument has no file");
+        app.start(Some(PathBuf::from("a.typ")));
+        app.go_to_place(Some((2, 2)));
+        assert_eq!(app.editor.as_ref().unwrap().cursor_position(), (1, 1));
+        app.go_to_place(Some((99, 1)));
+        assert_eq!(app.editor.as_ref().unwrap().cursor_position(), (2, 0));
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[test]
