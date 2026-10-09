@@ -1507,6 +1507,7 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
             "F6",
             "F7",
             "Alt-;",
+            "F9",
             "F10",
             "Alt-S",
             "Alt-G"
@@ -3579,6 +3580,116 @@ fn f3_switches_the_follow_off_and_on() {
         editor.preview.wanted_page(),
         3,
         "on again: the section of the cursor counts"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+fn mouse(
+    kind: ratatui::crossterm::event::MouseEventKind,
+    column: u16,
+    row: u16,
+) -> ratatui::crossterm::event::MouseEvent {
+    ratatui::crossterm::event::MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+/// An editor with the mouse on, drawn once at 100 by 30, so that it knows where the text is.
+fn mouse_editor(name: &str, text: &str) -> (PathBuf, Editor) {
+    let path = temp_file(name, text);
+    let mut editor = open(&path);
+    editor.set_mouse(true);
+    rows_sized(&mut editor, 100, 30);
+    (path, editor)
+}
+
+#[test]
+fn a_click_puts_the_cursor_under_the_mouse_and_a_drag_selects() {
+    use ratatui::crossterm::event::{MouseButton::Left, MouseEventKind::*};
+    let (path, mut editor) = mouse_editor("mouseclick", "hello world\nsecond line\n");
+    // The text starts at column 4 (border 1, line number and spaces 3) and row 1.
+    assert!(editor.handle_mouse(mouse(Down(Left), 4 + 6, 1)));
+    editor.handle_mouse(mouse(Up(Left), 4 + 6, 1));
+    assert_eq!(editor.cursor_position(), (0, 6));
+    assert!(
+        editor.textarea.selection_range().is_none(),
+        "a click is no selection"
+    );
+    editor.handle_mouse(mouse(Down(Left), 4 + 2, 1));
+    editor.handle_mouse(mouse(Drag(Left), 4 + 8, 2));
+    editor.handle_mouse(mouse(Up(Left), 4 + 8, 2));
+    assert_eq!(editor.textarea.selection_range(), Some(((0, 2), (1, 8))));
+    // A click right of the text goes to the end of the row, and a click in the gutter to its start.
+    editor.handle_mouse(mouse(Down(Left), 40, 2));
+    editor.handle_mouse(mouse(Up(Left), 40, 2));
+    assert_eq!(editor.cursor_position(), (1, 11));
+    editor.handle_mouse(mouse(Down(Left), 2, 1));
+    editor.handle_mouse(mouse(Up(Left), 2, 1));
+    assert_eq!(editor.cursor_position(), (0, 0));
+    assert!(!editor.dirty, "the mouse never changes the text");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_click_on_a_wrapped_row_finds_the_character_of_that_row() {
+    use ratatui::crossterm::event::{MouseButton::Left, MouseEventKind::*};
+    let long = format!("{} tail", "word ".repeat(12));
+    let (path, mut editor) = mouse_editor("mousewrap", &format!("{long}\nnext\n"));
+    // The first row of the file shows 44 columns of text. The second row holds the end of the line.
+    editor.handle_mouse(mouse(Down(Left), 4, 2));
+    editor.handle_mouse(mouse(Up(Left), 4, 2));
+    let (line, column) = editor.cursor_position();
+    assert_eq!(line, 0);
+    assert!(column > 30 && column < 60, "{column}");
+    assert!(
+        long.chars()
+            .nth(column - 1)
+            .is_some_and(|letter| letter == ' ')
+            || column > 40
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_wheel_scrolls_the_text_and_turns_the_page_over_the_preview_and_the_mouse_off_does_nothing() {
+    use ratatui::crossterm::event::MouseEventKind::*;
+    let text: String = (1..=80).map(|n| format!("line {n}\n")).collect();
+    let (path, mut editor) = mouse_editor("mousewheel", &text);
+    editor.set_cursor_position((0, 0));
+    assert!(editor.handle_mouse(mouse(ScrollDown, 10, 5)));
+    let rows = rows_sized(&mut editor, 100, 30);
+    assert!(
+        rows.iter().any(|row| row.contains("line 4 ")),
+        "the text moved by 3 rows"
+    );
+    assert!(!editor.dirty);
+    // Over the preview the wheel turns the page. With no page loaded it does nothing.
+    assert!(!editor.handle_mouse(mouse(ScrollDown, 80, 5)));
+    editor.set_mouse(false);
+    assert!(
+        !editor.handle_mouse(mouse(ScrollDown, 10, 5)),
+        "the mouse is off"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn f9_switches_the_mouse_and_a_popup_takes_no_mouse() {
+    use ratatui::crossterm::event::{MouseButton::Left, MouseEventKind::*};
+    let (path, mut editor) = mouse_editor("mouseswitch", "= Heading\ntext\n");
+    editor.handle_key(key(KeyCode::F(9)));
+    assert!(!editor.mouse_on());
+    assert_eq!(editor.message, "Mouse off");
+    editor.handle_key(key(KeyCode::F(9)));
+    assert!(editor.mouse_on());
+    editor.handle_key(key(KeyCode::F(4)));
+    assert!(matches!(editor.mode, Mode::Outline(_)));
+    assert!(
+        !editor.handle_mouse(mouse(Down(Left), 6, 2)),
+        "the popup is open"
     );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

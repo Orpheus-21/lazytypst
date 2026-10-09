@@ -60,6 +60,12 @@ pub const KEYS: &[Key] = &[
     key(Scope::List, "? or F1", "Show this help window.", None),
     key(
         Scope::List,
+        "F9",
+        "The mouse on or off. On: a click selects a file, a second click opens it, and the wheel moves the selection. The terminal cannot select by itself then: hold Shift and drag.",
+        Some((KeyCode::F(9), NONE)),
+    ),
+    key(
+        Scope::List,
         "j or Down",
         "Select the next file.",
         Some((KeyCode::Char('j'), NONE)),
@@ -215,6 +221,12 @@ pub const KEYS: &[Key] = &[
         "Alt-;",
         "Go to the next misspelled word and show what to do: a suggestion, add the word to your dictionary, or ignore it.",
         Some((KeyCode::Char(';'), ALT)),
+    ),
+    key(
+        Scope::Editor,
+        "F9",
+        "The mouse on or off. On: a click puts the cursor there, a drag selects, the wheel scrolls the text, and the wheel over the preview turns pages. The terminal cannot select by itself then: hold Shift and drag.",
+        Some((KeyCode::F(9), NONE)),
     ),
     key(
         Scope::Editor,

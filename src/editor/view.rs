@@ -245,7 +245,7 @@ impl Editor {
     #[cfg(test)]
     pub(super) fn paint(&self, buffer: &mut ratatui::buffer::Buffer, area: Rect) {
         let parts = highlight::tokenize(self.textarea.lines());
-        self.paint_with(buffer, area, &parts);
+        let _ = self.paint_with(buffer, area, &parts);
     }
 
     /// `paint` with the parts of the text found already. `draw` finds them once for the colors and the section.
@@ -254,7 +254,8 @@ impl Editor {
         buffer: &mut ratatui::buffer::Buffer,
         area: Rect,
         parts: &[Vec<highlight::Part>],
-    ) {
+    ) -> Vec<HitRow> {
+        let mut hits: Vec<HitRow> = Vec::new();
         let lines = self.textarea.lines();
         let gutter = u16::try_from(lines.len().to_string().len() + 2).unwrap_or(u16::MAX);
         let marks = self.line_marks();
@@ -297,6 +298,12 @@ impl Editor {
             {
                 *offset += 1;
             }
+            hits.push(HitRow {
+                y,
+                line: *line,
+                start: *offset,
+                cells: Vec::new(),
+            });
             while x < area.right() && *offset < chars.len() {
                 let ch = chars[*offset];
                 // The text area gives a tab the cells up to the next tab stop, counted from the start of the
@@ -335,10 +342,14 @@ impl Editor {
                         buffer[(cell_x, y)].set_style(mark);
                     }
                 }
+                if let Some(hit) = hits.last_mut() {
+                    hit.cells.push((x, width, *offset));
+                }
                 x += width;
                 *offset += 1;
             }
         }
+        hits
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
@@ -394,10 +405,16 @@ impl Editor {
         frame.render_widget(block, body);
         frame.render_widget(&self.textarea, inner);
         let parts = highlight::tokenize(self.textarea.lines());
-        self.paint_with(frame.buffer_mut(), inner, &parts);
+        self.hits = self.paint_with(frame.buffer_mut(), inner, &parts);
+        self.text_area = inner;
         frame.render_widget(self.compile_pane(pane), pane);
         self.preview
             .set_stale(self.report.as_ref().is_some_and(|report| !report.ok));
+        self.preview_area = if arrangement == Arrangement::EditorOnly {
+            Rect::default()
+        } else {
+            right
+        };
         if arrangement != Arrangement::EditorOnly {
             self.preview.draw(frame, right);
         }

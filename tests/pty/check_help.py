@@ -12,7 +12,7 @@ try:
     assert "Keys in the editor:" in shots[4]
     assert read(folder, "a.typ").startswith("one Xtwo"), repr(read(folder, "a.typ"))
     # Enter on a line runs it: E exports the PDF of the selected file
-    shots, _ = session(folder, [(b"?", "Help"), (b"jjjjj", 0.2), (b"\r", "Exported a.pdf")])
+    shots, _ = session(folder, [(b"?", "Help"), (b"jjjjjj", 0.2), (b"\r", "Exported a.pdf")])
     assert os.path.exists(os.path.join(folder, "a.pdf"))
 finally:
     remove(folder)

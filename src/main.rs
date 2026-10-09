@@ -98,6 +98,12 @@ struct App {
     help: Option<Help>,
     /// The file switcher over the editor. While it is open, it takes every key.
     switcher: Option<Switcher<PathBuf>>,
+    /// True when the program takes the mouse (F9). It is off unless the user switched it on: with the mouse
+    /// taken, the terminal cannot select text by itself.
+    mouse: bool,
+    /// The area of the list at the last draw, and the time and the row of the last click in it.
+    list_area: ratatui::layout::Rect,
+    last_click: Option<(Instant, usize)>,
     /// True when the preview follows the cursor (F3). It is on unless the user switched it off.
     follow: bool,
     /// True when the user switched the spell check on with F7. It stays on for the next files and runs.
@@ -147,6 +153,9 @@ const RESTORE_TITLE: &str = "\x1b[23;0t";
 /// Bracketed paste: the terminal sends a paste as one event and not as one key for each character.
 const ENABLE_PASTE: &str = "\x1b[?2004h";
 const DISABLE_PASTE: &str = "\x1b[?2004l";
+/// Mouse reports: clicks, the move while a button is down, and the extended format for wide terminals.
+const ENABLE_MOUSE: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const DISABLE_MOUSE: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
 fn write_to_terminal(text: &str) {
     use std::io::Write;
@@ -193,6 +202,7 @@ fn editor_command(visual: Option<OsString>, editor: Option<OsString>) -> Option<
 /// The terminal is normal while the command runs.
 fn run_external(command: &[String], file: &Path) -> std::io::Result<std::process::ExitStatus> {
     write_to_terminal(DISABLE_PASTE);
+    write_to_terminal(DISABLE_MOUSE);
     ratatui::restore();
     let result = std::process::Command::new(&command[0])
         .args(&command[1..])
@@ -389,6 +399,9 @@ impl App {
             layout: None,
             spell: false,
             follow: true,
+            mouse: false,
+            list_area: ratatui::layout::Rect::default(),
+            last_click: None,
         };
         app.read_times();
         app.outside_links = browser::links_outside(&app.root);
@@ -439,7 +452,69 @@ impl App {
             .as_deref()
             .and_then(|file| state::load_switch(&state::follow_file(file)))
             .unwrap_or(true);
+        self.mouse = state_file
+            .as_deref()
+            .and_then(|file| state::load_switch(&state::mouse_file(file)))
+            .unwrap_or(false);
         self.state_file = state_file;
+    }
+
+    /// Takes the mouse, or leaves it to the terminal, and keeps the choice in the state folder.
+    fn set_mouse(&mut self, on: bool) {
+        self.mouse = on;
+        write_to_terminal(if on { ENABLE_MOUSE } else { DISABLE_MOUSE });
+        if let Some(state) = &self.state_file
+            && let Err(err) = state::save_switch(&state::mouse_file(state), on)
+        {
+            self.status = format!("Cannot save the mouse switch: {err}");
+        }
+    }
+
+    /// Handles a mouse event. The help window and the file switcher take no mouse. In the editor, the editor
+    /// takes it. In the list, a click selects a file, a second click on it soon after opens it, and the
+    /// wheel moves the selection.
+    fn handle_mouse(&mut self, event: ratatui::crossterm::event::MouseEvent) {
+        use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+        if !self.mouse || self.help.is_some() || self.switcher.is_some() {
+            return;
+        }
+        if let Some(editor) = &mut self.editor {
+            editor.handle_mouse(event);
+            return;
+        }
+        if self.prompt.is_some() || self.files.is_empty() {
+            return;
+        }
+        match event.kind {
+            MouseEventKind::ScrollDown => self.list.select_next(),
+            MouseEventKind::ScrollUp => self.list.select_previous(),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let area = self.list_area;
+                // One row for the border at the top and one at the bottom.
+                let inside = event.column > area.left()
+                    && event.column + 1 < area.right()
+                    && event.row > area.top()
+                    && event.row + 1 < area.bottom();
+                if !inside {
+                    return;
+                }
+                let index = self.list.offset() + usize::from(event.row - area.top() - 1);
+                if index >= self.files.len() {
+                    return;
+                }
+                let again = self.last_click.is_some_and(|(time, row)| {
+                    row == index && time.elapsed() < Duration::from_millis(500)
+                });
+                self.list.select(Some(index));
+                if again {
+                    self.last_click = None;
+                    self.open_selected();
+                } else {
+                    self.last_click = Some((Instant::now(), index));
+                }
+            }
+            _ => {}
+        }
     }
 
     /// The main file that a project has by its own rules: the `entrypoint` of `typst.toml`, or else
@@ -538,6 +613,7 @@ impl App {
             Ok(mut editor) => {
                 editor.set_arrangement(self.layout);
                 editor.set_follow(self.follow);
+                editor.set_mouse(self.mouse);
                 editor.set_spell(
                     self.spell,
                     self.state_file.as_deref().map(state::spell_words_file),
@@ -944,9 +1020,13 @@ impl App {
             let chosen = editor.chosen_arrangement();
             let spell_now = editor.spell_on();
             let follow_now = editor.follow_on();
+            let mouse_now = editor.mouse_on();
             if chosen != self.layout {
                 self.layout = chosen;
                 self.save_layout();
+            }
+            if mouse_now != self.mouse {
+                self.set_mouse(mouse_now);
             }
             if follow_now != self.follow {
                 self.follow = follow_now;
@@ -990,6 +1070,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return true,
             KeyCode::Char('?') | KeyCode::F(1) => self.help = Some(Help::new(Scope::List)),
+            KeyCode::F(9) => self.set_mouse(!self.mouse),
             KeyCode::Char('y') => self.copy_selected_path(),
             KeyCode::Char('E') => self.export_selected(),
             KeyCode::Char('s') => self.toggle_sort(),
@@ -1122,6 +1203,7 @@ fn main() -> std::io::Result<()> {
         compile::cleanup();
         write_to_terminal(RESTORE_TITLE);
         write_to_terminal(DISABLE_PASTE);
+        write_to_terminal(DISABLE_MOUSE);
         restore_hook(info);
     }));
     // The query needs the raw terminal, and it must run before the first key is read.
@@ -1139,9 +1221,13 @@ fn main() -> std::io::Result<()> {
     {
         app.status = doctor::TMUX_HINT.into();
     }
+    if app.mouse {
+        write_to_terminal(ENABLE_MOUSE);
+    }
     let result = run(&mut terminal, &mut app);
     write_to_terminal(RESTORE_TITLE);
     write_to_terminal(DISABLE_PASTE);
+    write_to_terminal(DISABLE_MOUSE);
     ratatui::restore();
     compile::cleanup();
     result
@@ -1167,6 +1253,9 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
         }
         if let Some((command, file)) = app.external.take() {
             let result = run_external(&command, &app.root.join(&file));
+            if app.mouse {
+                write_to_terminal(ENABLE_MOUSE);
+            }
             terminal.clear()?;
             title.clear(); // the other program may have changed the title
             app.after_external(file, result);
@@ -1192,6 +1281,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
                 }
             }
             Event::Paste(text) => app.handle_paste(&text),
+            Event::Mouse(event) => app.handle_mouse(event),
             _ => {}
         }
     }
@@ -1238,6 +1328,7 @@ fn draw_screen(frame: &mut Frame, app: &mut App) {
         title.push_str(" (newest first)");
     }
     let block = Block::bordered().title(title);
+    app.list_area = body;
     if app.all_files.is_empty() {
         frame.render_widget(Paragraph::new("No .typ files").block(block), body);
     } else if app.files.is_empty() {
@@ -1961,6 +2052,71 @@ mod tests {
         let mut next = app_with_three_files("layout2");
         next.load_state(Some(state));
         assert_eq!(next.layout, Some(editor::Arrangement::Stacked));
+        fs::remove_dir_all(&app.root).unwrap();
+        fs::remove_dir_all(&next.root).unwrap();
+    }
+
+    fn click(column: u16, row: u16) -> ratatui::crossterm::event::MouseEvent {
+        ratatui::crossterm::event::MouseEvent {
+            kind: ratatui::crossterm::event::MouseEventKind::Down(
+                ratatui::crossterm::event::MouseButton::Left,
+            ),
+            column,
+            row,
+            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn in_the_list_a_click_selects_a_second_click_opens_and_the_wheel_moves() {
+        let mut app = app_with_three_files("mouselist");
+        screen(&mut app); // the draw tells the list where it is
+        app.handle_mouse(click(5, 3));
+        assert_eq!(
+            app.selected_file(),
+            Some(&PathBuf::from("a.typ")),
+            "the mouse is off"
+        );
+        app.mouse = true;
+        app.handle_mouse(click(5, 2)); // row 0 is the border, so row 2 is the second file
+        assert_eq!(app.selected_file(), Some(&PathBuf::from("b.typ")));
+        assert!(app.editor.is_none());
+        app.handle_mouse(click(5, 2));
+        assert_eq!(open_name(&app), "b.typ", "a second click opens");
+        fs::remove_dir_all(&app.root).unwrap();
+
+        let mut app = app_with_three_files("mousewheel");
+        app.mouse = true;
+        screen(&mut app);
+        let scroll = |kind| ratatui::crossterm::event::MouseEvent {
+            kind,
+            column: 5,
+            row: 3,
+            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        };
+        app.handle_mouse(scroll(
+            ratatui::crossterm::event::MouseEventKind::ScrollDown,
+        ));
+        assert_eq!(app.selected_file(), Some(&PathBuf::from("b.typ")));
+        app.handle_mouse(scroll(ratatui::crossterm::event::MouseEventKind::ScrollUp));
+        assert_eq!(app.selected_file(), Some(&PathBuf::from("a.typ")));
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_mouse_is_off_at_first_and_the_choice_is_kept() {
+        let mut app = app_with_three_files("mousestate");
+        let state = app.root.join("state").join("main-files");
+        app.load_state(Some(state.clone()));
+        assert!(!app.mouse, "off by default");
+        press(&mut app, KeyCode::F(9));
+        assert!(app.mouse);
+        assert_eq!(fs::read_to_string(state::mouse_file(&state)).unwrap(), "on");
+        let mut next = app_with_three_files("mousestate2");
+        next.load_state(Some(state));
+        assert!(next.mouse, "the next run has it on");
+        press(&mut next, KeyCode::F(9));
+        assert!(!next.mouse);
         fs::remove_dir_all(&app.root).unwrap();
         fs::remove_dir_all(&next.root).unwrap();
     }

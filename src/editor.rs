@@ -27,6 +27,7 @@ use crate::{
 
 mod build;
 mod follow;
+mod mouse;
 mod spelling;
 #[cfg(test)]
 mod tests;
@@ -170,6 +171,16 @@ impl Arrangement {
             Self::EditorOnly => "Layout: editor only",
         }
     }
+}
+
+/// One screen row of the text, from the last draw: where its characters are. A click finds its place here.
+pub(super) struct HitRow {
+    pub y: u16,
+    pub line: usize,
+    /// The first character of the row.
+    pub start: usize,
+    /// For each character: its first column, its width, and its offset in the line.
+    pub cells: Vec<(u16, u16, usize)>,
 }
 
 /// How many indented lines the detection reads.
@@ -382,6 +393,14 @@ pub struct Editor {
     last_search: String,
     /// A compile that waits after a save: when it starts, and how long the wait is. See `compile_wait`.
     compile_at: Option<(Instant, Duration)>,
+    /// The screen rows of the text at the last draw, the area of the text, and the area of the preview.
+    hits: Vec<HitRow>,
+    text_area: Rect,
+    preview_area: Rect,
+    /// True while the left button is down after a click in the text: the move of the mouse selects.
+    dragging: bool,
+    /// True when the program captures the mouse. `F9` switches it. See `mouse`.
+    mouse: bool,
     /// The preview that follows the cursor. See `follow.rs`.
     follow: follow::Follow,
     /// The spell check. See `spelling.rs`.
@@ -463,6 +482,11 @@ impl Editor {
             replaced: None,
             arrangement: None,
             history: None,
+            hits: Vec::new(),
+            text_area: Rect::default(),
+            preview_area: Rect::default(),
+            dragging: false,
+            mouse: false,
             follow: follow::Follow::new(),
             spelling: spelling::Spelling::new(),
             text_version: 0,
@@ -1416,6 +1440,8 @@ impl Editor {
             self.toggle_spell();
         } else if key.code == KeyCode::F(3) {
             self.toggle_follow();
+        } else if key.code == KeyCode::F(9) {
+            self.toggle_mouse();
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char(';') {
             self.open_spell();
         } else if key.code == KeyCode::F(5) {

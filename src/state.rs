@@ -105,6 +105,11 @@ pub fn follow_file(state_file: &Path) -> PathBuf {
     state_file.with_file_name("follow")
 }
 
+/// The file that holds the switch of the mouse: `on` or `off`. The mouse is off unless the file says `on`.
+pub fn mouse_file(state_file: &Path) -> PathBuf {
+    state_file.with_file_name("mouse")
+}
+
 /// The personal dictionary of the spell check: one word on each line.
 pub fn spell_words_file(state_file: &Path) -> PathBuf {
     state_file.with_file_name("spell-words.txt")
