@@ -10,6 +10,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 - The search takes plain text by default (`f(x)` and `1+1` work), with smart case. `Alt-R` switches to a regular expression.
 - A folder with a `typst.toml` entrypoint or a `main.typ` gets that file as its main file by itself. `m` removes the mark, and the choice stays.
+- `lazytypst main.typ:42` and `main.typ:42:7` open the file with the cursor at that place.
 - A window under 60 columns or 16 rows shows "Make the window bigger (60x16)". The state stays.
 - In tmux with half blocks, the status line and `--doctor` hint `set -g allow-passthrough on`.
 - `Alt-G` goes to a line, or to a line and a column.

@@ -3,7 +3,7 @@
 lazytypst \- browse, edit, and compile Typst documents in the terminal
 .SH SYNOPSIS
 .B lazytypst
-[\fIFOLDER\fR | \fIFILE\fR.typ]
+[\fIFOLDER\fR | \fIFILE\fR.typ[:\fILINE\fR[:\fICOLUMN\fR]]]
 .br
 .B lazytypst
 [\-h | \-\-help | \-V | \-\-version | \-\-doctor]
@@ -14,6 +14,7 @@ It runs the
 .BR typst (1)
 command to compile. Without \fIFOLDER\fR, it uses the current folder. The folder is also the Typst project root.
 With a .typ file, it opens the file at once. The folder of the file is the project root.
+With \fI:LINE\fR or \fI:LINE:COLUMN\fR after the file name, the cursor starts there, for example main.typ:42:7.
 .PP
 The editor saves the file 300 ms after the last key and compiles it. The preview shows one page as an image.
 The terminal needs an image protocol (kitty, sixel, or iTerm2) for a sharp page. Without one, the program draws half blocks.
