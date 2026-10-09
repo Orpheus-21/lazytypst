@@ -10,6 +10,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 - The search takes plain text by default (`f(x)` and `1+1` work), with smart case. `Alt-R` switches to a regular expression.
 - A folder with a `typst.toml` entrypoint or a `main.typ` gets that file as its main file by itself. `m` removes the mark, and the choice stays.
+- `Alt-S` replaces the text of the last search: `Enter` replaces one match and goes to the next, `Alt-A` replaces all. One `Ctrl-Z` takes back one replace or all.
 - The preview follows the files that the document reads. If another program changes an included file, an image, or a bibliography, a compile starts and the status line names the file.
 - At start, the program deletes its own leftover temp files (`.name.<pid>-...lazytypst-tmp` and `.lazytypst-<pid>-<n>.pdf.tmp`) beside the `.typ` files, if they are older than 1 hour and their process is gone.
 - `Tab`, `Shift-Tab`, and the indent after `Enter` follow the indent of the file: a tab character, or 2, 3, 4, or 8 spaces.
