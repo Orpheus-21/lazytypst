@@ -208,6 +208,8 @@ Save rules:
 
 ## Safety with projects from other people
 
+To report a security problem, use the private report form described in `SECURITY.md`.
+
 A project from the internet can hold files that harm you when a program opens them. lazytypst limits these risks.
 
 - The file list shows only regular files. A `.typ` link counts only if it points at a regular file inside the project. A pipe, a device, a dangling link, and a link to a file outside the project are not listed. The program opens a regular file of at most 16 MiB.
