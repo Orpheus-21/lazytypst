@@ -66,7 +66,7 @@ fn new_textarea(text: &str) -> TextArea<'static> {
 fn full_passthrough(key: KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     (ctrl && matches!(key.code, KeyCode::Char('s' | 'b' | 'e' | 'o' | 'g' | 'q')))
-        || key.code == KeyCode::F(5)
+        || matches!(key.code, KeyCode::F(5 | 8))
 }
 
 /// The regular expression for the text of a search. In regex mode it is the text. Else the text is plain: the
@@ -122,6 +122,14 @@ enum Mode {
     Search(Box<TextArea<'static>>),
     /// The preview fills the screen and the text area is hidden. Typing does nothing. See `full_key`.
     Full,
+}
+
+/// Which error `go_to_error` picks.
+#[derive(Clone, Copy)]
+enum ErrorPick {
+    First,
+    Next,
+    Previous,
 }
 
 pub enum Action {
@@ -585,7 +593,9 @@ impl Editor {
             }
             Mode::Full if !full_passthrough(key) => return self.full_key(key),
             // The error is in the text, so the text must show.
-            Mode::Full if key.code == KeyCode::Char('g') => self.mode = Mode::Edit,
+            Mode::Full if matches!(key.code, KeyCode::Char('g') | KeyCode::F(8)) => {
+                self.mode = Mode::Edit;
+            }
             Mode::Full => {}
             Mode::Edit if key.code == KeyCode::F(11) => {
                 self.mode = Mode::Full;
@@ -618,8 +628,15 @@ impl Editor {
             }
         } else if ctrl && key.code == KeyCode::Char('b') {
             self.save_and_compile();
+        } else if key.code == KeyCode::F(8) {
+            let pick = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                ErrorPick::Previous
+            } else {
+                ErrorPick::Next
+            };
+            return self.go_to_error(pick);
         } else if ctrl && key.code == KeyCode::Char('g') {
-            return self.go_to_first_error();
+            return self.go_to_error(ErrorPick::First);
         } else if ctrl && key.code == KeyCode::Char('o') {
             self.open_pdf("xdg-open");
         } else if ctrl && key.code == KeyCode::Char('e') {
@@ -698,21 +715,65 @@ impl Editor {
             .move_cursor(CursorMove::Jump(to_u16(row), to_u16(column)));
     }
 
-    /// Moves the cursor to the first error of the last report, if that error is in the open file.
-    /// An error in another file only gets named: the cursor stays. The line and the column of the report
-    /// are those of the text at the time of the compile. After more edits, a new compile makes them exact.
-    fn go_to_first_error(&mut self) -> Action {
-        let Some(error) = self.report.as_ref().and_then(Report::first_error) else {
+    /// Moves the cursor to the first error of the last report (`Ctrl-G`), or to the next or the previous one
+    /// (`F8` and `Shift-F8`, with a wrap at the ends). An error in a file of the project opens that file, after
+    /// a save. An error in another place, such as a package, only gets named: the cursor stays. The line and
+    /// the column of the report are those of the text at the time of the compile. After more edits, a new
+    /// compile makes them exact.
+    fn go_to_error(&mut self, pick: ErrorPick) -> Action {
+        let errors: Vec<compile::Diagnostic> = self
+            .report
+            .iter()
+            .flat_map(|report| report.diagnostics.iter())
+            .filter(|diagnostic| {
+                diagnostic.severity == Severity::Error && diagnostic.file.is_some()
+            })
+            .cloned()
+            .collect();
+        if errors.is_empty() {
             self.message = "No error to go to.".into();
             return Action::Stay;
+        }
+        let open_file = self
+            .path
+            .strip_prefix(&self.root)
+            .unwrap_or(&self.path)
+            .to_path_buf();
+        // Typst counts from 1. The text area counts from 0, in characters.
+        let (row, column) = self.cursor_position();
+        let here = (row + 1, column + 1);
+        let in_open_file =
+            |error: &compile::Diagnostic| error.file.as_deref() == Some(open_file.as_path());
+        let at = |error: &compile::Diagnostic| (error.line, error.column);
+        let current = errors
+            .iter()
+            .position(|error| in_open_file(error) && at(error) == here);
+        let count = errors.len();
+        let index = match pick {
+            ErrorPick::First => 0,
+            ErrorPick::Next => match current {
+                Some(index) => (index + 1) % count,
+                None => errors
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, error)| in_open_file(error) && at(error) > here)
+                    .min_by_key(|(_, error)| at(error))
+                    .map_or(0, |(index, _)| index),
+            },
+            ErrorPick::Previous => match current {
+                Some(index) => (index + count - 1) % count,
+                None => errors
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, error)| in_open_file(error) && at(error) < here)
+                    .max_by_key(|(_, error)| at(error))
+                    .map_or(count - 1, |(index, _)| index),
+            },
         };
-        let open_file = self.path.strip_prefix(&self.root).unwrap_or(&self.path);
-        if error.file.as_deref() != Some(open_file) {
-            let file = error
-                .file
-                .clone()
-                .unwrap_or_else(|| open_file.to_path_buf());
-            let (line, column) = (error.line, error.column);
+        let error = &errors[index];
+        let (line, column) = (error.line, error.column);
+        if !in_open_file(error) {
+            let file = error.file.clone().unwrap_or(open_file);
             // A file of the project opens in the editor. A file outside the project, such as a package,
             // only gets named.
             let plain = file
@@ -725,15 +786,20 @@ impl Editor {
                 }
                 return Action::Goto { file, line, column };
             }
-            self.message = format!("The first error is in {}.", file.display());
+            self.message = format!("The error is in {}.", file.display());
             return Action::Stay;
         }
-        // Typst counts from 1. The text area counts from 0, in characters, and it stops at the end of the text.
         let to_index = |number: usize| u16::try_from(number.saturating_sub(1)).unwrap_or(u16::MAX);
-        let (line, column) = (error.line, error.column);
         self.textarea
             .move_cursor(CursorMove::Jump(to_index(line), to_index(column)));
-        self.message = format!("Error at {line}:{column}: {}", error.message);
+        self.message = match pick {
+            ErrorPick::First => format!("Error at {line}:{column}: {}", error.message),
+            _ => format!(
+                "Error {} of {count} at {line}:{column}: {}",
+                index + 1,
+                error.message
+            ),
+        };
         Action::Stay
     }
 

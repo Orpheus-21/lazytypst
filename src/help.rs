@@ -182,6 +182,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "F8, Shift-F8",
+        "Go to the next error, or the previous error. The search wraps at the ends.",
+        Some((KeyCode::F(8), NONE)),
+    ),
+    key(
+        Scope::Editor,
         "Ctrl-O",
         "Open the last exported PDF in the system viewer (xdg-open).",
         Some((KeyCode::Char('o'), CTRL)),

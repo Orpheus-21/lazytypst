@@ -1786,6 +1786,88 @@ fn without_colors_the_gutter_marks_use_reverse_and_underline() {
 }
 
 #[test]
+fn f8_and_shift_f8_go_through_the_errors_in_order_and_wrap() {
+    let path = temp_file(
+        "nexterror",
+        "one\ntwo is long\nthree\nfour\nfive\nsix\nseven\n",
+    );
+    let mut editor = open(&path);
+    editor.report = report_with(
+        false,
+        &[
+            "doc.typ:2:5: error: first",
+            "doc.typ:2:9: warning: not an error",
+            "doc.typ:4:1: error: second",
+            "doc.typ:6:3: error: third",
+        ],
+    );
+    let f8 = key(KeyCode::F(8));
+    let shift_f8 = KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT);
+    // From the start of the file: the first error after the cursor.
+    editor.handle_key(f8);
+    assert_eq!(editor.cursor_position(), (1, 4));
+    assert!(
+        editor.message.starts_with("Error 1 of 3 at 2:5: first"),
+        "{}",
+        editor.message
+    );
+    editor.handle_key(f8);
+    assert_eq!(editor.cursor_position(), (3, 0));
+    editor.handle_key(f8);
+    assert_eq!(editor.cursor_position(), (5, 2));
+    editor.handle_key(f8);
+    assert_eq!(editor.cursor_position(), (1, 4), "wraps to the first");
+    assert!(
+        editor.message.starts_with("Error 1 of 3"),
+        "{}",
+        editor.message
+    );
+    editor.handle_key(shift_f8);
+    assert_eq!(editor.cursor_position(), (5, 2), "back wraps to the last");
+    editor.handle_key(shift_f8);
+    assert_eq!(editor.cursor_position(), (3, 0));
+    // From a place between two errors.
+    editor.textarea.move_cursor(CursorMove::Jump(4, 0));
+    editor.handle_key(f8);
+    assert_eq!(
+        editor.cursor_position(),
+        (5, 2),
+        "the next error after line 5"
+    );
+    editor.textarea.move_cursor(CursorMove::Jump(4, 0));
+    editor.handle_key(shift_f8);
+    assert_eq!(
+        editor.cursor_position(),
+        (3, 0),
+        "the previous error before line 5"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn f8_without_an_error_says_so_and_an_error_in_another_file_opens_it_after_a_save() {
+    let path = temp_file("nexterror2", "one\ntwo\n");
+    let mut editor = open(&path);
+    editor.handle_key(key(KeyCode::F(8)));
+    assert!(editor.message.contains("No error"), "{}", editor.message);
+    let dir = path.parent().unwrap();
+    fs::write(dir.join("other.typ"), "x\ny\n").unwrap();
+    editor.report = report_with(false, &["other.typ:2:1: error: elsewhere"]);
+    editor.handle_key(key(KeyCode::Char('X')));
+    let action = editor.handle_key(key(KeyCode::F(8)));
+    assert!(
+        matches!(&action, Action::Goto { file, line: 2, column: 1 } if file == Path::new("other.typ")),
+        "the error is in other.typ"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "Xone\ntwo\n",
+        "saved before the switch"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn esc_in_a_conflict_warns_then_closes_and_keeps_the_disk_version() {
     let path = temp_file("escconflict", "text\n");
     let mut editor = open(&path);
