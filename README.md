@@ -289,6 +289,10 @@ tmux sits between the program and the terminal, and it can block the image data.
 
 The window is under 60 columns or 16 rows. The line says `Make the window bigger (60x16)`. Make the window bigger. Nothing is lost. The program shows the same screen again.
 
+### A hidden temp file stays in the project
+
+A kill in the instant between the temp file and the rename can leave a hidden file in the project, for example `.main.typ.1234-5678-0.lazytypst-tmp` or `.lazytypst-1234-1.pdf.tmp`. At the next start, the program deletes such a file beside your `.typ` files if it is older than one hour and the process in its name is gone. It never deletes a file with another name, a link, or a folder.
+
 ### Alt keys do nothing
 
 The page keys use `Alt`. Some terminals use `Alt` for their own keys, or they do not send it to the program. The `Alt` keys are tested with a test terminal. The settings of other terminals are not tested. Look for a setting that sends `Alt` as `Escape` or as the Meta key. This fix is not tried.
