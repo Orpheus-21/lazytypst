@@ -8,9 +8,9 @@ try:
     steps = [
         (ENTER, 0.5),
         (DOWN + DOWN + RIGHT * 4, 0.3),       # line 3, column 5
-        (b"\t", 0.2),                         # Tab in the middle of the line: to the next stop of 2
-        (b"\x01", 0.2),                       # Ctrl-A: to the start of the line
-        (b"\t", 0.2),                         # Tab at the start: 2 spaces
+        (b"\t", "3:7"),                       # Tab in the middle of the line: to the next stop of 2
+        (b"\x01", "3:1"),                       # Ctrl-A: to the start of the line
+        (b"\t", "3:3"),                       # Tab at the start: 2 spaces (wait for the screen, not the clock)
         (ESC, 0.5),
     ]
     shots, _ = session(folder, steps)
