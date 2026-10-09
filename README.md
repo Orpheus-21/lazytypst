@@ -355,6 +355,8 @@ Two more workflows exist. `.github/workflows/audit.yml` checks the crates in `Ca
 
 `scripts/bench-pages.sh` compiles documents of 1, 50, 200, and 500 pages with the options of the program, once for all pages and once for one page. It prints the time and the disk use. Give other page counts as arguments. The script needs `typst` in `PATH`.
 
+`scripts/bench-watch.sh` compares a new `typst compile --pages 1` process (what the program starts for each compile) with a running `typst watch --pages 1` that recompiles after a change of the first page. It prints the median time of each and their ratio. Give page counts as arguments (the default is 10, 100, and 500). The script needs `typst` in `PATH`.
+
 ## License
 
 lazytypst is free software. The license is the GNU General Public License, version 3 or any later version. The text is in the `LICENSE` file.
