@@ -9,6 +9,7 @@ mod highlight;
 mod newfile;
 mod preview;
 mod state;
+mod switcher;
 mod words;
 
 use std::{
@@ -33,6 +34,7 @@ use ratatui_textarea::{CursorMove, TextArea};
 use compile::Job;
 use editor::{Action, Editor};
 use help::{Help, Scope};
+use switcher::{Outcome, Switcher};
 
 /// What the prompt asks for.
 #[derive(Clone, Copy, PartialEq)]
@@ -91,6 +93,10 @@ struct App {
     editor: Option<Editor>,
     /// The help window. While it is open, it takes every key.
     help: Option<Help>,
+    /// The file switcher over the editor. While it is open, it takes every key.
+    switcher: Option<Switcher>,
+    /// The files that were open in this run, the latest first. The switcher lists them first.
+    recent: Vec<PathBuf>,
 }
 
 /// The text of `--help`. The key lists come from `help::KEYS`, the same as the help window.
@@ -369,6 +375,8 @@ impl App {
             newest_first: false,
             editor: None,
             help: None,
+            switcher: None,
+            recent: Vec::new(),
         };
         app.read_times();
         app.outside_links = browser::links_outside(&app.root);
@@ -527,6 +535,8 @@ impl App {
                         None => editor.compile_now(),
                     }
                 }
+                self.recent.retain(|file| *file != path);
+                self.recent.insert(0, path);
                 self.editor = Some(editor);
                 String::new()
             }
@@ -828,15 +838,55 @@ impl App {
         false
     }
 
+    /// Opens the file switcher: the files of this run first, the latest first, then the other files in the
+    /// order of the list. The open file is not in it, so the first entry is the file before this one.
+    fn open_switcher(&mut self) {
+        let open = self
+            .editor
+            .as_ref()
+            .and_then(|editor| editor.path().strip_prefix(&self.root).ok())
+            .map(Path::to_path_buf);
+        let mut files: Vec<PathBuf> = self
+            .recent
+            .iter()
+            .filter(|file| self.all_files.contains(file))
+            .cloned()
+            .collect();
+        let others: Vec<PathBuf> = self
+            .all_files
+            .iter()
+            .filter(|file| !files.contains(file))
+            .cloned()
+            .collect();
+        files.extend(others);
+        files.retain(|file| Some(file) != open.as_ref());
+        self.switcher = Some(Switcher::new(files));
+    }
+
     /// Handles one key. Returns true when the program must quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         if self.help.is_some() {
             return self.handle_help_key(key);
         }
+        if let Some(switcher) = &mut self.switcher {
+            match switcher.key(key) {
+                Outcome::Stay => {}
+                Outcome::Close => self.switcher = None,
+                Outcome::Open(file) => {
+                    // The editor saved its text when it asked for the switcher.
+                    self.switcher = None;
+                    self.close_editor();
+                    self.open_file(file);
+                }
+            }
+            return false;
+        }
         if let Some(editor) = &mut self.editor {
             let action = editor.handle_key(key);
             if matches!(action, Action::Help) {
                 self.help = Some(Help::new(Scope::Editor));
+            } else if matches!(action, Action::Switch) {
+                self.open_switcher();
             } else if let Action::Goto { file, line, column } = action {
                 // The other file opens at the error. The compile target stays the same, so the preview
                 // shows the same document after the compile that starts here.
@@ -1078,6 +1128,9 @@ fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     draw_screen(frame, app);
+    if let Some(switcher) = &mut app.switcher {
+        switcher.draw(frame);
+    }
     if let Some(help) = &mut app.help {
         help.draw(frame);
     }
@@ -1717,6 +1770,87 @@ mod tests {
         }
         let files = browser::find_typ_files(&root, browser::MAX_DEPTH).unwrap();
         App::new(root, files, Picker::halfblocks())
+    }
+
+    fn open_name(app: &App) -> String {
+        let editor = app.editor.as_ref().expect("an editor is open");
+        editor
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn f2_saves_and_shows_the_switcher_with_the_recent_files_first_and_not_the_open_file() {
+        let mut app = app_with_three_files("switch");
+        press(&mut app, KeyCode::Enter); // a.typ
+        press(&mut app, KeyCode::Char('Z'));
+        press(&mut app, KeyCode::F(2));
+        assert_eq!(
+            fs::read_to_string(app.root.join("a.typ")).unwrap(),
+            "Ztext of a\n",
+            "F2 saved"
+        );
+        let names: Vec<_> = app
+            .switcher
+            .as_ref()
+            .unwrap()
+            .visible()
+            .into_iter()
+            .cloned()
+            .collect();
+        assert_eq!(names, [PathBuf::from("b.typ"), PathBuf::from("c.typ")]);
+        assert!(screen(&mut app).contains("Switch file"));
+        press(&mut app, KeyCode::Esc);
+        assert!(
+            app.switcher.is_none() && open_name(&app) == "a.typ",
+            "Esc keeps the file"
+        );
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_switcher_opens_a_filtered_file_and_a_second_f2_goes_back_and_forth() {
+        let mut app = app_with_three_files("switchtoggle");
+        press(&mut app, KeyCode::Enter); // a.typ
+        press(&mut app, KeyCode::F(2));
+        type_text(&mut app, "c.");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(open_name(&app), "c.typ");
+        press(&mut app, KeyCode::F(2));
+        press(&mut app, KeyCode::F(2));
+        assert_eq!(
+            open_name(&app),
+            "a.typ",
+            "the first entry is the file before"
+        );
+        press(&mut app, KeyCode::F(2));
+        press(&mut app, KeyCode::F(2));
+        assert_eq!(open_name(&app), "c.typ");
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
+    #[test]
+    fn the_switcher_takes_every_key_while_it_is_open() {
+        let mut app = app_with_three_files("switchmodal");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::F(2));
+        assert!(
+            !press(&mut app, KeyCode::Char('q')),
+            "q filters and does not quit"
+        );
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(
+            fs::read_to_string(app.root.join("a.typ")).unwrap(),
+            "text of a\n"
+        );
+        assert!(
+            screen(&mut app).contains("text of a"),
+            "the editor shows the same text"
+        );
+        fs::remove_dir_all(&app.root).unwrap();
     }
 
     #[test]

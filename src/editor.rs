@@ -201,6 +201,8 @@ pub enum Action {
     Quit,
     /// Show the help window.
     Help,
+    /// Show the file switcher. The editor has saved its text.
+    Switch,
     /// Open another file of the project at `line` and `column`, counted from 1. The editor has saved its text.
     Goto {
         file: PathBuf,
@@ -588,6 +590,7 @@ impl Editor {
                 return Action::Stay;
             }
             KeyCode::F(1) => return Action::Help,
+            KeyCode::F(2) => return self.switch_action(),
             KeyCode::Char('+' | '=') => self.preview.zoom_step(true),
             KeyCode::Char('-') => self.preview.zoom_step(false),
             KeyCode::Char('0') => self.preview.zoom_fit(),
@@ -715,6 +718,15 @@ impl Editor {
                 }
             }
             Ok(()) => {}
+        }
+    }
+
+    /// F2: saves the text, then asks for the file switcher. A refused save keeps the editor here.
+    fn switch_action(&mut self) -> Action {
+        if self.save(false) {
+            Action::Switch
+        } else {
+            Action::Stay
         }
     }
 
@@ -949,6 +961,8 @@ impl Editor {
             self.save(true);
         } else if key.code == KeyCode::F(1) {
             return Action::Help;
+        } else if key.code == KeyCode::F(2) {
+            return self.switch_action();
         } else if key.code == KeyCode::F(5) {
             self.paused = !self.paused;
             self.message = if self.paused {

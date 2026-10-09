@@ -140,6 +140,12 @@ pub const KEYS: &[Key] = &[
     key(Scope::Editor, "F1", "Show this help window.", None),
     key(
         Scope::Editor,
+        "F2",
+        "Switch to another file. Type to filter, Enter opens. F2 again opens the file before this one.",
+        Some((KeyCode::F(2), NONE)),
+    ),
+    key(
+        Scope::Editor,
         "Ctrl-S",
         "Save the file.",
         Some((KeyCode::Char('s'), CTRL)),
