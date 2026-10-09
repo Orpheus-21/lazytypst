@@ -2619,6 +2619,86 @@ fn tab_shift_tab_and_enter_follow_the_indent_of_the_file() {
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
+/// Opens `doc.typ`, which includes `part.typ`, and waits for the first compile to end.
+fn editor_with_part(name: &str) -> (PathBuf, Editor) {
+    let path = temp_file(name, "#include \"part.typ\"\n");
+    fs::write(path.with_file_name("part.typ"), "= Part\n").unwrap();
+    let mut editor = open(&path);
+    editor.compile_now();
+    wait_for_idle(&mut editor);
+    (path, editor)
+}
+
+/// Gives `file` a modification time `seconds` in the future, so a change shows at once.
+fn touch_later(file: &Path, seconds: u64) {
+    let time = SystemTime::now() + Duration::from_secs(seconds);
+    fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+}
+
+#[test]
+fn a_change_of_an_included_file_starts_a_compile_and_names_the_file() {
+    let (path, mut editor) = editor_with_part("depschange");
+    let part = path.with_file_name("part.typ");
+    assert!(
+        editor.deps.iter().any(|(file, _)| *file == part),
+        "{:?}",
+        editor.deps
+    );
+    let later = Instant::now() + Duration::from_secs(5);
+    assert!(!editor.tick(later), "nothing changed, so nothing happens");
+    assert!(!editor.compiling());
+    fs::write(&part, "= Changed\n").unwrap();
+    touch_later(&part, 30);
+    assert!(editor.tick(later + Duration::from_secs(2)));
+    assert!(editor.compiling());
+    assert_eq!(editor.message, "part.typ changed");
+    wait_for_idle(&mut editor);
+    let again = Instant::now() + Duration::from_secs(20);
+    assert!(
+        !editor.tick(again) && !editor.compiling(),
+        "the new time is the new normal"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_file_that_appears_after_a_failed_compile_starts_a_compile() {
+    let path = temp_file("depsmissing", "#include \"later.typ\"\n");
+    let mut editor = open(&path);
+    editor.compile_now();
+    wait_for_idle(&mut editor);
+    assert!(editor.report.as_ref().is_some_and(|report| !report.ok));
+    fs::write(path.with_file_name("later.typ"), "= Here\n").unwrap();
+    assert!(editor.tick(Instant::now() + Duration::from_secs(2)));
+    assert!(editor.compiling());
+    assert_eq!(editor.message, "later.typ changed");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_dependency_watch_waits_while_the_user_types_or_the_live_compile_is_off() {
+    let (path, mut editor) = editor_with_part("depswait");
+    let part = path.with_file_name("part.typ");
+    fs::write(&part, "= Changed\n").unwrap();
+    touch_later(&part, 30);
+    editor.paused = true;
+    assert!(!editor.tick(Instant::now() + Duration::from_secs(2)));
+    assert!(!editor.compiling(), "F5 turned the live compile off");
+    editor.paused = false;
+    editor.dirty = true;
+    assert!(!editor.tick(Instant::now() + Duration::from_secs(4)));
+    assert!(!editor.compiling(), "the buffer has edits");
+    editor.dirty = false;
+    assert!(editor.tick(Instant::now() + Duration::from_secs(6)));
+    assert!(editor.compiling());
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
 fn pane_rows(editor: &mut Editor) -> Vec<String> {
     // The pane stands under the text area: the last 6 rows above the status line.
@@ -3411,6 +3491,7 @@ fn each_compile_folder_holds_exactly_one_png() {
     let files: Vec<_> = fs::read_dir(&folders[0])
         .unwrap()
         .map(|e| e.unwrap().file_name())
+        .filter(|name| name != "deps")
         .collect();
     assert_eq!(files, ["page-2-of-3.png"]);
     fs::remove_dir_all(path.parent().unwrap()).unwrap();

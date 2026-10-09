@@ -53,6 +53,15 @@ impl Editor {
         };
         let dir = job.output().to_path_buf();
         self.job = None;
+        if let Some(paths) = compile::read_deps(&dir, &self.root) {
+            self.deps = paths
+                .into_iter()
+                .map(|path| {
+                    let time = disk_time(&path);
+                    (path, time)
+                })
+                .collect();
+        }
         if !report.ok {
             self.recover = None;
             let _ = fs::remove_dir_all(dir);

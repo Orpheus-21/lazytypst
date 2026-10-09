@@ -387,6 +387,28 @@ pub fn typst_version() -> io::Result<String> {
 
 static NEXT_EXPORT: AtomicUsize = AtomicUsize::new(0);
 
+/// The name of the file in the page folder where Typst writes the files that the document reads.
+const DEPS_FILE: &str = "deps";
+
+/// The files that the compile in `dir` read, as absolute paths inside `root`: the main file, the files
+/// it includes, images, and bibliographies. A path outside `root` (a package in the cache) is left out,
+/// because it does not change while the user works. `None` if Typst wrote no list.
+pub fn read_deps(dir: &Path, root: &Path) -> Option<Vec<PathBuf>> {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = fs::read(dir.join(DEPS_FILE)).ok()?;
+    let paths = bytes
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| root.join(std::ffi::OsStr::from_bytes(part)))
+        .filter(|path| path.starts_with(root))
+        .take(MAX_DEPS)
+        .collect();
+    Some(paths)
+}
+
+/// The most files that the editor watches for one document.
+const MAX_DEPS: usize = 500;
+
 /// A running command. Dropping the job kills the process, so a new job can replace an old one.
 pub struct Job {
     state: State,
@@ -453,7 +475,11 @@ impl Job {
             ])
             .arg(root)
             .arg("--pages")
-            .arg(page.to_string());
+            .arg(page.to_string())
+            // The list of files that the document reads. See `read_deps`.
+            .arg("--deps")
+            .arg(dir.join(DEPS_FILE))
+            .args(["--deps-format", "zero"]);
         if let Some(ppi) = ppi {
             command.arg("--ppi").arg(ppi.to_string());
         }
@@ -944,6 +970,7 @@ mod tests {
         let names: Vec<_> = fs::read_dir(&pages)
             .unwrap()
             .map(|e| e.unwrap().file_name())
+            .filter(|name| name != DEPS_FILE)
             .collect();
         assert_eq!(names, ["page-2-of-3.png"]);
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -960,7 +987,10 @@ mod tests {
         ));
         assert!(report.ok, "{:?}", report.lines);
         assert_eq!(
-            fs::read_dir(&pages).unwrap().count(),
+            fs::read_dir(&pages)
+                .unwrap()
+                .filter(|e| e.as_ref().unwrap().file_name() != DEPS_FILE)
+                .count(),
             0,
             "typst wrote a file"
         );
@@ -1641,5 +1671,25 @@ mod tests {
             !proc_dir.exists(),
             "the process is still in the process table"
         );
+    }
+
+    #[test]
+    fn the_dependency_list_gives_paths_inside_the_root_only() {
+        let dir = std::env::temp_dir().join(format!("lazytypst-deps-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let root = Path::new("/project");
+        fs::write(
+            dir.join(DEPS_FILE),
+            b"a.typ\0img/logo.png\0/cache/pkg/lib.typ\0\0",
+        )
+        .unwrap();
+        assert_eq!(
+            read_deps(&dir, root),
+            Some(vec![root.join("a.typ"), root.join("img/logo.png")])
+        );
+        fs::remove_file(dir.join(DEPS_FILE)).unwrap();
+        assert_eq!(read_deps(&dir, root), None, "no list: the old one stays");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

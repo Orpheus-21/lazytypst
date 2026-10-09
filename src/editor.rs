@@ -239,6 +239,10 @@ pub struct Editor {
     words: usize,
     /// The time of the last look at the file on disk. See `watch_file`.
     last_watch: Option<Instant>,
+    /// The files that the last compile read, with their modification times. See `watch_deps`.
+    deps: Vec<(PathBuf, Option<SystemTime>)>,
+    /// The time of the last look at `deps`.
+    last_deps_watch: Option<Instant>,
     /// True after an Esc that could not save the text. A second Esc closes without a save.
     close_armed: bool,
     message: String,
@@ -278,6 +282,8 @@ impl Editor {
             dirty: false,
             last_edit: None,
             last_watch: None,
+            deps: Vec::new(),
+            last_deps_watch: None,
             clipboard: None,
             words: 0,
             colors: colors_wanted(),
@@ -971,9 +977,46 @@ impl Editor {
             changed = true;
         }
         changed |= self.watch_file(now);
+        changed |= self.watch_deps(now);
         changed |= self.poll_compile();
         changed |= self.poll_export();
         changed
+    }
+
+    /// About once a second, looks at the files that the last compile read: included files, images, and
+    /// bibliographies. If another program changed one, starts a compile and names the file. The open file
+    /// is left to `watch_file`. Nothing happens while the user types, while a compile runs, or while the
+    /// live compile is off.
+    // ponytail: the times are read when the compile ends, so a change during a compile waits for the next one.
+    fn watch_deps(&mut self, now: Instant) -> bool {
+        if self.dirty
+            || self.paused
+            || self.job.is_some()
+            || self.deps.is_empty()
+            || self
+                .last_deps_watch
+                .is_some_and(|last| now.saturating_duration_since(last) < WATCH_EVERY)
+        {
+            return false;
+        }
+        self.last_deps_watch = Some(now);
+        let Some((path, _)) = self
+            .deps
+            .iter()
+            .find(|(path, time)| *path != self.path && disk_time(path) != *time)
+        else {
+            return false;
+        };
+        let name = path
+            .strip_prefix(&self.root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        self.message = format!("{name} changed");
+        // The compile ends with a new list and new times.
+        self.deps.clear();
+        self.start_compile();
+        true
     }
 
     /// While the buffer has no edits, looks about once a second at the file on disk. If another program
