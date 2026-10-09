@@ -14,7 +14,7 @@ pub fn find_typ_files(root: &Path, max_depth: usize) -> io::Result<Vec<PathBuf>>
     let mut found = Vec::new();
     let canonical_root = fs::canonicalize(root)?;
     walk(root, &canonical_root, Path::new(""), max_depth, &mut found)?;
-    found.sort();
+    found.sort_by(|a, b| natural_order(a, b));
     Ok(found)
 }
 
@@ -47,6 +47,51 @@ fn walk(
         }
     }
     Ok(())
+}
+
+/// The order of the list: case does not count, and a number counts by its value, so `chapter-2.typ` comes
+/// before `chapter-10.typ`, and `a.typ` before `README.typ`. Paths that are the same in this order sort by
+/// their bytes, so the order is always the same.
+pub fn natural_order(a: &Path, b: &Path) -> std::cmp::Ordering {
+    let (x, y) = (
+        a.to_string_lossy().to_lowercase(),
+        b.to_string_lossy().to_lowercase(),
+    );
+    compare_with_numbers(&x, &y).then_with(|| a.cmp(b))
+}
+
+fn compare_with_numbers(x: &str, y: &str) -> std::cmp::Ordering {
+    let (mut x, mut y) = (x.chars().peekable(), y.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(a), Some(b)) if a.is_ascii_digit() && b.is_ascii_digit() => {
+                let take = |chars: &mut std::iter::Peekable<std::str::Chars>| {
+                    let mut digits = String::new();
+                    while let Some(d) = chars.next_if(char::is_ascii_digit) {
+                        digits.push(d);
+                    }
+                    digits
+                };
+                let (dx, dy) = (take(&mut x), take(&mut y));
+                let (tx, ty) = (dx.trim_start_matches('0'), dy.trim_start_matches('0'));
+                // A longer number is bigger. With the same length, the digits decide.
+                let order = tx.len().cmp(&ty.len()).then_with(|| tx.cmp(ty));
+                if order != std::cmp::Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(a), Some(b)) => {
+                if a != b {
+                    return a.cmp(&b);
+                }
+                x.next();
+                y.next();
+            }
+        }
+    }
 }
 
 /// How many entries `links_outside` looks at, and how deep. A project of a normal size is far below.
@@ -207,5 +252,50 @@ mod tests {
             .collect();
         assert_eq!(found, expected);
         assert!(links_outside(Path::new("/no/such/folder")).is_empty());
+    }
+    #[test]
+    fn the_order_ignores_case_and_counts_numbers_by_value() {
+        let sorted = |names: &[&str]| -> Vec<String> {
+            let mut paths: Vec<PathBuf> = names.iter().map(PathBuf::from).collect();
+            paths.sort_by(|a, b| natural_order(a, b));
+            paths.iter().map(|p| p.display().to_string()).collect()
+        };
+        assert_eq!(
+            sorted(&[
+                "chapter-10.typ",
+                "chapter-2.typ",
+                "Chapter-1.typ",
+                "README.typ",
+                "a.typ",
+                "sub/b.typ",
+                "chapter-02.typ"
+            ]),
+            [
+                "a.typ",
+                "Chapter-1.typ",
+                "chapter-02.typ",
+                "chapter-2.typ",
+                "chapter-10.typ",
+                "README.typ",
+                "sub/b.typ"
+            ]
+        );
+        // Very long numbers do not overflow, and a name that is a prefix comes first.
+        assert_eq!(
+            sorted(&[
+                "a99999999999999999999999.typ",
+                "a100000000000000000000000.typ",
+                "a.typ",
+                "a1.typ"
+            ]),
+            [
+                "a.typ",
+                "a1.typ",
+                "a99999999999999999999999.typ",
+                "a100000000000000000000000.typ"
+            ]
+        );
+        // The same name in two cases has a fixed order.
+        assert_eq!(sorted(&["b.typ", "B.typ"]), sorted(&["B.typ", "b.typ"]));
     }
 }
