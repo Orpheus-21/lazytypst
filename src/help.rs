@@ -188,6 +188,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "Alt-Enter, Ctrl-]",
+        "Open the file that the string under the cursor names, for example in #include \"chapters/two.typ\". The text is saved first. F2 F2 goes back.",
+        Some((KeyCode::Enter, ALT)),
+    ),
+    key(
+        Scope::Editor,
         "F4",
         "Show the outline: the headings of the file. Type to filter, Enter jumps to the heading, F4 or Esc closes.",
         Some((KeyCode::F(4), NONE)),

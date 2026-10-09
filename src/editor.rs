@@ -44,6 +44,82 @@ const WATCH_EVERY: Duration = Duration::from_secs(1);
 const CONFLICT: &str = "The file changed on disk. Ctrl-S overwrites it with this text.";
 
 /// The modification time of the file, or `None` if the file cannot be read.
+/// The text of the string that holds the char column `column` of `line`, or else the first string of the
+/// line. A string starts and ends with `"`. A backslash escapes the next char. `None` if there is no string.
+fn string_near(line: &str, column: usize) -> Option<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut strings: Vec<(usize, usize)> = Vec::new();
+    let mut start = None;
+    let mut index = 0;
+    while index < chars.len() {
+        match (chars[index], start) {
+            ('\\', Some(_)) => index += 1,
+            ('"', None) => start = Some(index),
+            ('"', Some(begin)) => {
+                strings.push((begin, index));
+                start = None;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    let (begin, end) = strings
+        .iter()
+        .copied()
+        .find(|(begin, end)| *begin <= column && column <= *end)
+        .or_else(|| strings.first().copied())?;
+    Some(chars[begin + 1..end].iter().collect())
+}
+
+/// The file that `name` means in a document at `open`, as a path relative to `root`. Typst reads a path that
+/// starts with `/` from the root, and any other path from the folder of the file. The file must exist, be
+/// a `.typ` file, and stay inside the project. The error is the text for the status line.
+fn resolve_file(root: &Path, open: &Path, name: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+    if name.starts_with('@') {
+        return Err(format!("{name} is a package, not a file of the project."));
+    }
+    let folder = open
+        .strip_prefix(root)
+        .ok()
+        .and_then(Path::parent)
+        .unwrap_or(Path::new(""));
+    let mut parts: Vec<std::ffi::OsString> = if name.starts_with('/') {
+        Vec::new()
+    } else {
+        folder.iter().map(Into::into).collect()
+    };
+    for part in Path::new(name).components() {
+        match part {
+            Component::Normal(part) => parts.push(part.to_os_string()),
+            Component::ParentDir if parts.pop().is_none() => {
+                return Err(format!("{name} is outside the project."));
+            }
+            _ => {}
+        }
+    }
+    let relative: PathBuf = parts.into_iter().collect();
+    let full = root.join(&relative);
+    if !full.is_file() {
+        return Err(format!("{} is not a file.", relative.display()));
+    }
+    // A link can lead out of the project. Typst does not read it, so the editor does not open it.
+    let inside = fs::canonicalize(&full)
+        .ok()
+        .zip(fs::canonicalize(root).ok())
+        .is_some_and(|(full, root)| full.starts_with(root));
+    if !inside {
+        return Err(format!("{} is outside the project.", relative.display()));
+    }
+    if relative.extension().is_none_or(|ending| ending != "typ") {
+        return Err(format!(
+            "{} is not a .typ file. The editor opens .typ files only.",
+            relative.display()
+        ));
+    }
+    Ok(relative)
+}
+
 /// How many indented lines the detection reads.
 const INDENT_LINES: usize = 200;
 
@@ -197,6 +273,7 @@ enum ErrorPick {
     Previous,
 }
 
+#[derive(Debug)]
 pub enum Action {
     Stay,
     /// Close the editor and go back to the file list.
@@ -805,6 +882,33 @@ impl Editor {
         }
     }
 
+    /// Alt-Enter and Ctrl-]: opens the file that the string under the cursor names, for example
+    /// `#include "chapters/two.typ"`. The text goes to disk first. A name that is no file of the project is
+    /// only named in the status line.
+    fn open_named_file(&mut self) -> Action {
+        let (row, column) = self.cursor_position();
+        let Some(name) = string_near(&self.textarea.lines()[row], column) else {
+            self.message = "No string with a file name on this line.".into();
+            return Action::Stay;
+        };
+        match resolve_file(&self.root, &self.path, &name) {
+            Ok(file) => {
+                if !self.save(false) {
+                    return Action::Stay;
+                }
+                Action::Goto {
+                    file,
+                    line: 1,
+                    column: 1,
+                }
+            }
+            Err(message) => {
+                self.message = message;
+                Action::Stay
+            }
+        }
+    }
+
     /// F2: saves the text, then asks for the file switcher. A refused save keeps the editor here.
     fn switch_action(&mut self) -> Action {
         if self.save(false) {
@@ -1051,6 +1155,10 @@ impl Editor {
             return Action::Help;
         } else if key.code == KeyCode::F(2) {
             return self.switch_action();
+        } else if (key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::ALT))
+            || (ctrl && key.code == KeyCode::Char(']'))
+        {
+            return self.open_named_file();
         } else if key.code == KeyCode::F(4) {
             self.open_outline();
         } else if key.code == KeyCode::F(5) {

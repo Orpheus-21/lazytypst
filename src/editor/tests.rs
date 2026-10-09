@@ -1496,7 +1496,10 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
         }
     }
     // Only the search key does nothing in the full preview. A new entry in this list is a decision.
-    assert_eq!(ignored_in_full, ["Ctrl-F", "Alt-S", "Alt-G"]);
+    assert_eq!(
+        ignored_in_full,
+        ["Ctrl-F", "Alt-Enter, Ctrl-]", "Alt-S", "Alt-G"]
+    );
 }
 
 #[test]
@@ -2923,6 +2926,154 @@ fn the_outline_closes_with_esc_and_f4_and_a_file_without_headings_says_so() {
         editor.message
     );
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_string_near_the_cursor_is_the_one_that_holds_it_or_else_the_first() {
+    use super::string_near;
+    let line = r#"#include "a.typ" and #image("b.png", alt: "x \" y")"#;
+    assert_eq!(string_near(line, 12).as_deref(), Some("a.typ"));
+    assert_eq!(
+        string_near(line, 8).as_deref(),
+        Some("a.typ"),
+        "on the opening quote"
+    );
+    assert_eq!(string_near(line, 31).as_deref(), Some("b.png"));
+    assert_eq!(
+        string_near(line, 0).as_deref(),
+        Some("a.typ"),
+        "else the first string"
+    );
+    assert_eq!(
+        string_near(line, 46).as_deref(),
+        Some("x \\\" y"),
+        "an escaped quote stays inside"
+    );
+    assert_eq!(string_near("no strings", 3), None);
+    assert_eq!(
+        string_near("\"open", 2),
+        None,
+        "a string that never ends is none"
+    );
+}
+
+/// Makes `root/main.typ` with `body`, `root/chapters/two.typ`, `root/img.png`, and `outside.typ` beside root.
+fn include_project(name: &str, body: &str) -> (PathBuf, PathBuf) {
+    let base = std::env::temp_dir().join(format!("lazytypst-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let root = base.join("root");
+    fs::create_dir_all(root.join("chapters")).unwrap();
+    fs::write(root.join("main.typ"), body).unwrap();
+    fs::write(
+        root.join("chapters/two.typ"),
+        "= Two\n#include \"three.typ\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("chapters/three.typ"), "= Three\n").unwrap();
+    fs::write(root.join("img.png"), "x").unwrap();
+    fs::write(base.join("outside.typ"), "x").unwrap();
+    (base, root)
+}
+
+fn open_in(root: &Path, file: &str) -> Editor {
+    let path = root.join(file);
+    Editor::open(path, root.to_path_buf(), None, Picker::halfblocks()).unwrap()
+}
+
+#[test]
+fn alt_enter_and_ctrl_bracket_go_to_the_included_file_and_save_first() {
+    let body = "#include \"chapters/two.typ\"\n#import \"chapters/three.typ\": x\n";
+    let (base, root) = include_project("gofile", body);
+    let mut editor = open_in(&root, "main.typ");
+    editor.handle_key(key(KeyCode::Char('Z')));
+    let action = editor.handle_key(alt(KeyCode::Enter));
+    assert!(
+        matches!(&action, Action::Goto { file, line: 1, column: 1 } if file == Path::new("chapters/two.typ")),
+        "{action:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("main.typ")).unwrap(),
+        format!("Z{body}"),
+        "saved first"
+    );
+    // The import on line 2: the cursor is on the first string of the line.
+    editor.handle_key(key(KeyCode::Down));
+    let action = editor.handle_key(ctrl(']'));
+    assert!(
+        matches!(&action, Action::Goto { file, .. } if file == Path::new("chapters/three.typ")),
+        "{action:?}"
+    );
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn a_name_is_read_from_the_folder_of_the_file_and_a_slash_from_the_root() {
+    let (base, root) = include_project("gorelative", "x\n");
+    let mut editor = open_in(&root, "chapters/two.typ");
+    editor.handle_key(key(KeyCode::Down));
+    assert!(
+        matches!(editor.handle_key(alt(KeyCode::Enter)), Action::Goto { file, .. } if file == Path::new("chapters/three.typ"))
+    );
+    let name = |text: &str| resolve_file(&root, &root.join("chapters/two.typ"), text);
+    assert_eq!(name("/main.typ"), Ok(PathBuf::from("main.typ")));
+    assert_eq!(name("../main.typ"), Ok(PathBuf::from("main.typ")));
+    assert_eq!(name("./three.typ"), Ok(PathBuf::from("chapters/three.typ")));
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn a_missing_file_a_non_typ_file_a_package_and_a_path_outside_the_project_are_only_named() {
+    let (base, root) = include_project("gobad", "x\n");
+    let open = root.join("main.typ");
+    assert_eq!(
+        resolve_file(&root, &open, "nope.typ"),
+        Err("nope.typ is not a file.".into())
+    );
+    assert!(
+        resolve_file(&root, &open, "img.png")
+            .unwrap_err()
+            .contains("not a .typ file")
+    );
+    assert!(
+        resolve_file(&root, &open, "@preview/cetz:0.3.0")
+            .unwrap_err()
+            .contains("package")
+    );
+    assert!(
+        resolve_file(&root, &open, "../outside.typ")
+            .unwrap_err()
+            .contains("outside the project")
+    );
+    assert!(
+        resolve_file(&root, &open, "../../etc/passwd")
+            .unwrap_err()
+            .contains("outside the project")
+    );
+    std::os::unix::fs::symlink(base.join("outside.typ"), root.join("link.typ")).unwrap();
+    assert!(
+        resolve_file(&root, &open, "link.typ")
+            .unwrap_err()
+            .contains("outside the project"),
+        "a link that leaves"
+    );
+    // In the editor the message shows and the text stays.
+    fs::write(&open, "#include \"nope.typ\"\n").unwrap();
+    let mut editor = open_in(&root, "main.typ");
+    assert!(matches!(
+        editor.handle_key(alt(KeyCode::Enter)),
+        Action::Stay
+    ));
+    assert_eq!(editor.message, "nope.typ is not a file.");
+    fs::write(&open, "no string\n").unwrap();
+    let mut editor = open_in(&root, "main.typ");
+    editor.handle_key(ctrl(']'));
+    assert!(
+        editor.message.starts_with("No string"),
+        "{}",
+        editor.message
+    );
+    assert!(!editor.dirty);
+    fs::remove_dir_all(base).unwrap();
 }
 
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
