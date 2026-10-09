@@ -73,6 +73,28 @@ pub fn has_main_choice(file: &Path, root: &Path) -> bool {
         .any(|(saved_root, _)| saved_root == root.as_os_str().as_bytes())
 }
 
+/// The file that holds the layout of the editor, one word. The layout is a choice of the user for all
+/// projects, so it has no project folder in it.
+pub fn layout_file(state_file: &Path) -> PathBuf {
+    state_file.with_file_name("layout")
+}
+
+/// The saved layout name, or `None` if there is none or the file is not a short word.
+pub fn load_layout(file: &Path) -> Option<String> {
+    let text = fs::read_to_string(file).ok()?;
+    let name = text.trim();
+    (!name.is_empty() && name.len() <= 16 && name.chars().all(|letter| letter.is_ascii_lowercase()))
+        .then(|| name.to_string())
+}
+
+/// Saves the layout name.
+pub fn save_layout(file: &Path, name: &str) -> io::Result<()> {
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    crate::fsutil::write_file(file, name.as_bytes())
+}
+
 /// The file that holds the last open file of each project, next to the main file list.
 /// Each line is `<project folder>`, a tab, `<file>`, a tab, and the page number.
 pub fn last_file(state_file: &Path) -> PathBuf {
@@ -398,6 +420,20 @@ mod tests {
             "a removed line is no choice"
         );
         assert!(!has_main_choice(&file, &dir.join("other")));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_layout_name_is_saved_and_a_bad_file_gives_none() {
+        let dir = temp_dir("layout");
+        let file = layout_file(&dir.join("main-files"));
+        assert_eq!(load_layout(&file), None);
+        save_layout(&file, "stacked").unwrap();
+        assert_eq!(load_layout(&file).as_deref(), Some("stacked"));
+        fs::write(&file, "Not A Word\n").unwrap();
+        assert_eq!(load_layout(&file), None);
+        fs::write(&file, "x".repeat(100)).unwrap();
+        assert_eq!(load_layout(&file), None);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -95,6 +95,8 @@ struct App {
     help: Option<Help>,
     /// The file switcher over the editor. While it is open, it takes every key.
     switcher: Option<Switcher<PathBuf>>,
+    /// The layout that the user chose with F10, for each editor that opens. `None`: by window width.
+    layout: Option<editor::Arrangement>,
     /// The files that were open in this run, the latest first. The switcher lists them first.
     recent: Vec<PathBuf>,
 }
@@ -377,6 +379,7 @@ impl App {
             help: None,
             switcher: None,
             recent: Vec::new(),
+            layout: None,
         };
         app.read_times();
         app.outside_links = browser::links_outside(&app.root);
@@ -415,6 +418,10 @@ impl App {
             }
             self.pages.insert(self.root.join(path), page);
         }
+        self.layout = state_file
+            .as_deref()
+            .and_then(|file| state::load_layout(&state::layout_file(file)))
+            .and_then(|name| editor::Arrangement::from_name(&name));
         self.state_file = state_file;
     }
 
@@ -512,6 +519,7 @@ impl App {
         );
         self.status = match opened {
             Ok(mut editor) => {
+                editor.set_arrangement(self.layout);
                 if let Some(place) = self.cursors.get(editor.path()) {
                     editor.set_cursor_position(*place);
                 }
@@ -838,6 +846,16 @@ impl App {
         false
     }
 
+    /// Keeps the layout in the state folder. A failure only shows a message.
+    fn save_layout(&mut self) {
+        let (Some(state), Some(layout)) = (&self.state_file, self.layout) else {
+            return;
+        };
+        if let Err(err) = state::save_layout(&state::layout_file(state), layout.name()) {
+            self.status = format!("Cannot save the layout: {err}");
+        }
+    }
+
     /// Opens the file switcher: the files of this run first, the latest first, then the other files in the
     /// order of the list. The open file is not in it, so the first entry is the file before this one.
     fn open_switcher(&mut self) {
@@ -895,6 +913,11 @@ impl App {
         }
         if let Some(editor) = &mut self.editor {
             let action = editor.handle_key(key);
+            let chosen = editor.chosen_arrangement();
+            if chosen != self.layout {
+                self.layout = chosen;
+                self.save_layout();
+            }
             if matches!(action, Action::Help) {
                 self.help = Some(Help::new(Scope::Editor));
             } else if matches!(action, Action::Switch) {
@@ -1782,6 +1805,33 @@ mod tests {
         }
         let files = browser::find_typ_files(&root, browser::MAX_DEPTH).unwrap();
         App::new(root, files, Picker::halfblocks())
+    }
+
+    #[test]
+    fn the_layout_that_the_user_chose_comes_back_in_the_next_run_and_in_the_next_file() {
+        let mut app = app_with_three_files("layout");
+        let state = app.root.join("state").join("main-files");
+        app.load_state(Some(state.clone()));
+        press(&mut app, KeyCode::Enter); // a.typ
+        screen(&mut app); // the draw gives the editor the width
+        press(&mut app, KeyCode::F(10));
+        assert_eq!(app.layout, Some(editor::Arrangement::Stacked));
+        assert_eq!(
+            fs::read_to_string(state::layout_file(&state)).unwrap(),
+            "stacked"
+        );
+        press(&mut app, KeyCode::F(2));
+        press(&mut app, KeyCode::Enter); // b.typ
+        assert_eq!(
+            app.editor.as_ref().unwrap().chosen_arrangement(),
+            Some(editor::Arrangement::Stacked),
+            "the next file has the layout"
+        );
+        let mut next = app_with_three_files("layout2");
+        next.load_state(Some(state));
+        assert_eq!(next.layout, Some(editor::Arrangement::Stacked));
+        fs::remove_dir_all(&app.root).unwrap();
+        fs::remove_dir_all(&next.root).unwrap();
     }
 
     fn open_name(app: &App) -> String {

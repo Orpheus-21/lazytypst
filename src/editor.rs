@@ -120,6 +120,52 @@ fn resolve_file(root: &Path, open: &Path, name: &str) -> Result<PathBuf, String>
     Ok(relative)
 }
 
+/// How the editor and the preview share the screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Arrangement {
+    /// The editor at the left, the preview at the right.
+    Side,
+    /// The editor above, the preview below. It suits a narrow window.
+    Stacked,
+    /// The editor fills the window. The preview is hidden, and the compile pane stays.
+    EditorOnly,
+}
+
+/// A window under this many columns starts stacked, because side by side leaves each part too little room.
+const STACK_BELOW: u16 = 100;
+
+impl Arrangement {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Side => "side",
+            Self::Stacked => "stacked",
+            Self::EditorOnly => "editor",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Side, Self::Stacked, Self::EditorOnly]
+            .into_iter()
+            .find(|arrangement| arrangement.name() == name)
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Side => Self::Stacked,
+            Self::Stacked => Self::EditorOnly,
+            Self::EditorOnly => Self::Side,
+        }
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Side => "Layout: side by side",
+            Self::Stacked => "Layout: stacked",
+            Self::EditorOnly => "Layout: editor only",
+        }
+    }
+}
+
 /// How many indented lines the detection reads.
 const INDENT_LINES: usize = 200;
 
@@ -315,6 +361,10 @@ pub struct Editor {
     mode: Mode,
     /// The text of the last search, for the next prompt.
     last_search: String,
+    /// The layout that the user chose with F10. `None`: the width of the window decides.
+    arrangement: Option<Arrangement>,
+    /// The width of the window at the last draw, for F10.
+    width: u16,
     /// The text before and after the last replace. See `undo`.
     replaced: Option<(Vec<String>, Vec<String>)>,
     /// The text of the last replacement, for the next prompt.
@@ -382,6 +432,8 @@ impl Editor {
             last_search: String::new(),
             last_replace: String::new(),
             replaced: None,
+            arrangement: None,
+            width: 0,
             search_regex: false,
             close_armed: false,
             message: String::new(),
@@ -909,6 +961,31 @@ impl Editor {
         }
     }
 
+    /// The layout that the user chose, for the program to keep.
+    pub fn chosen_arrangement(&self) -> Option<Arrangement> {
+        self.arrangement
+    }
+
+    pub fn set_arrangement(&mut self, arrangement: Option<Arrangement>) {
+        self.arrangement = arrangement;
+    }
+
+    /// The layout in a window `width` columns wide: the choice of the user, or else by the width.
+    fn arrangement_for(&self, width: u16) -> Arrangement {
+        self.arrangement.unwrap_or(if width < STACK_BELOW {
+            Arrangement::Stacked
+        } else {
+            Arrangement::Side
+        })
+    }
+
+    /// F10: the next layout. The window width decides the first one.
+    fn cycle_arrangement(&mut self, width: u16) {
+        let next = self.arrangement_for(width).next();
+        self.arrangement = Some(next);
+        self.message = next.describe().into();
+    }
+
     /// F2: saves the text, then asks for the file switcher. A refused save keeps the editor here.
     fn switch_action(&mut self) -> Action {
         if self.save(false) {
@@ -1161,6 +1238,8 @@ impl Editor {
             return self.open_named_file();
         } else if key.code == KeyCode::F(4) {
             self.open_outline();
+        } else if key.code == KeyCode::F(10) {
+            self.cycle_arrangement(self.width);
         } else if key.code == KeyCode::F(5) {
             self.paused = !self.paused;
             self.message = if self.paused {

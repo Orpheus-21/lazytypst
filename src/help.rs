@@ -194,6 +194,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "F10",
+        "Change the layout: editor and preview side by side, editor above the preview, or editor only. A window under 100 columns starts stacked. The choice is kept.",
+        Some((KeyCode::F(10), NONE)),
+    ),
+    key(
+        Scope::Editor,
         "F4",
         "Show the outline: the headings of the file. Type to filter, Enter jumps to the heading, F4 or Esc closes.",
         Some((KeyCode::F(4), NONE)),

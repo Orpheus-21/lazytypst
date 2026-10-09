@@ -1498,7 +1498,7 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
     // Only the search key does nothing in the full preview. A new entry in this list is a decision.
     assert_eq!(
         ignored_in_full,
-        ["Ctrl-F", "Alt-Enter, Ctrl-]", "Alt-S", "Alt-G"]
+        ["Ctrl-F", "Alt-Enter, Ctrl-]", "F10", "Alt-S", "Alt-G"]
     );
 }
 
@@ -3074,6 +3074,92 @@ fn a_missing_file_a_non_typ_file_a_package_and_a_path_outside_the_project_are_on
     );
     assert!(!editor.dirty);
     fs::remove_dir_all(base).unwrap();
+}
+
+/// The screen of the editor as rows of text, in a window of `width` by `height`.
+fn rows_sized(editor: &mut Editor, width: u16, height: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| editor.draw(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+fn row_with(rows: &[String], text: &str) -> Option<usize> {
+    rows.iter().position(|row| row.contains(text))
+}
+
+#[test]
+fn a_wide_window_starts_side_by_side_and_a_narrow_one_starts_stacked() {
+    let path = temp_file("layoutauto", "text\n");
+    let mut editor = open(&path);
+    let wide = rows_sized(&mut editor, 120, 30);
+    let (editor_row, preview_row) = (
+        row_with(&wide, "doc.typ").unwrap(),
+        row_with(&wide, "Preview").unwrap(),
+    );
+    assert_eq!(
+        editor_row, preview_row,
+        "side by side: the two titles share a row"
+    );
+    let narrow = rows_sized(&mut editor, 80, 30);
+    let (editor_row, preview_row) = (
+        row_with(&narrow, "doc.typ").unwrap(),
+        row_with(&narrow, "Preview").unwrap(),
+    );
+    assert!(
+        preview_row > editor_row,
+        "stacked: the preview is below the editor"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn f10_cycles_the_layouts_and_the_editor_only_layout_hides_the_preview() {
+    let path = temp_file("layoutcycle", "text\n");
+    let mut editor = open(&path);
+    rows_sized(&mut editor, 120, 30); // the draw tells the editor the width
+    editor.handle_key(key(KeyCode::F(10)));
+    assert_eq!(
+        editor.chosen_arrangement(),
+        Some(Arrangement::Stacked),
+        "from side by side"
+    );
+    assert_eq!(editor.message, "Layout: stacked");
+    let rows = rows_sized(&mut editor, 120, 30);
+    assert!(row_with(&rows, "Preview").unwrap() > row_with(&rows, "doc.typ").unwrap());
+    editor.handle_key(key(KeyCode::F(10)));
+    assert_eq!(editor.chosen_arrangement(), Some(Arrangement::EditorOnly));
+    let rows = rows_sized(&mut editor, 120, 30);
+    assert!(row_with(&rows, "Preview").is_none(), "no preview");
+    assert!(
+        row_with(&rows, "Compile").is_some(),
+        "the compile pane stays"
+    );
+    editor.handle_key(key(KeyCode::F(10)));
+    assert_eq!(editor.chosen_arrangement(), Some(Arrangement::Side));
+    // A chosen layout does not follow the width any more.
+    let rows = rows_sized(&mut editor, 80, 30);
+    assert_eq!(row_with(&rows, "doc.typ"), row_with(&rows, "Preview"));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn every_layout_draws_in_small_and_tall_windows_without_a_panic() {
+    let path = temp_file("layoutsizes", "text\n");
+    let mut editor = open(&path);
+    for arrangement in [
+        Arrangement::Side,
+        Arrangement::Stacked,
+        Arrangement::EditorOnly,
+    ] {
+        editor.set_arrangement(Some(arrangement));
+        for (width, height) in [(40, 10), (41, 11), (200, 8), (30, 60), (1, 1), (0, 0)] {
+            rows_sized(&mut editor, width, height);
+        }
+    }
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.

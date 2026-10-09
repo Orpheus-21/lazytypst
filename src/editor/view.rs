@@ -339,11 +339,27 @@ impl Editor {
             frame.render_widget(Paragraph::new(zoom).alignment(Alignment::Right), zoom_area);
             return;
         }
-        let [left, right] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(main);
+        self.width = frame.area().width;
+        let arrangement = self.arrangement_for(self.width);
+        let [left, right] = match arrangement {
+            Arrangement::Side => {
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .areas(main)
+            }
+            Arrangement::Stacked => {
+                Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(main)
+            }
+            Arrangement::EditorOnly => [main, Rect::default()],
+        };
+        // A stacked layout has little height, so the compile pane is smaller there: the editor needs the rows.
+        let pane_height = if arrangement == Arrangement::Stacked {
+            4
+        } else {
+            PANE_HEIGHT
+        };
         let [body, pane] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(PANE_HEIGHT)]).areas(left);
+            Layout::vertical([Constraint::Min(0), Constraint::Length(pane_height)]).areas(left);
         let marker = if self.dirty { " [+]" } else { "" };
         let name = self.path.strip_prefix(&self.root).unwrap_or(&self.path);
         let mut title = format!("{}{marker}", name.display());
@@ -360,7 +376,9 @@ impl Editor {
         frame.render_widget(self.compile_pane(pane), pane);
         self.preview
             .set_stale(self.report.as_ref().is_some_and(|report| !report.ok));
-        self.preview.draw(frame, right);
+        if arrangement != Arrangement::EditorOnly {
+            self.preview.draw(frame, right);
+        }
         let hint = if self.message.is_empty() {
             "F1 help  Ctrl-S save  Ctrl-B compile  Ctrl-E PDF  Alt-Up/Down page  Esc back"
         } else {
