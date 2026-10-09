@@ -10,6 +10,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 - The search takes plain text by default (`f(x)` and `1+1` work), with smart case. `Alt-R` switches to a regular expression.
 - A folder with a `typst.toml` entrypoint or a `main.typ` gets that file as its main file by itself. `m` removes the mark, and the choice stays.
+- `Ctrl-Z` undoes, `Alt-A` selects all the text, and `Ctrl-Home` and `Ctrl-End` go to the start and the end of the file (with `Shift`, they select).
 - The status line shows the heading of the section of the cursor, when the window is wide enough.
 - The list sorts by path without case, and counts a number by its value: `chapter-2.typ` comes before `chapter-10.typ`.
 - The gutter marks the lines with an error (red) and with a warning (yellow).

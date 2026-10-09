@@ -178,7 +178,8 @@ The editor colors the Typst source: headings (lines that start with `=` and a sp
 
 | Key | Action |
 |---|---|
-| `Ctrl-U` | Undo. |
+| `Ctrl-U`, `Ctrl-Z` | Undo. |
+| `Alt-A` | Select all the text. |
 | `Ctrl-R` | Redo. |
 | `Shift` with the arrow keys | Select text. |
 | `Ctrl-C` | Copy the selection. |
@@ -191,6 +192,7 @@ The editor colors the Typst source: headings (lines that start with `=` and a sp
 | `Ctrl-J` | Delete to the start of the line. |
 | `Alt-F`, `Alt-B` | Move one word forward or back. |
 | `Ctrl-A`, `End` | Move to the start or the end of the line. |
+| `Ctrl-Home`, `Ctrl-End` | Move to the start or the end of the file. With `Shift`, select to there. |
 | `Ctrl-V`, `Alt-V` | Scroll one page down or up. |
 | `Alt-<`, `Alt->` | Move to the first or the last line. The column stays. |
 
