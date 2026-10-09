@@ -200,6 +200,18 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "F7",
+        "Spell check on or off. It needs hunspell and a dictionary. The language comes from #set text(lang: \"de\"). Unknown words are underlined.",
+        Some((KeyCode::F(7), NONE)),
+    ),
+    key(
+        Scope::Editor,
+        "Alt-;",
+        "Go to the next misspelled word and show what to do: a suggestion, add the word to your dictionary, or ignore it.",
+        Some((KeyCode::Char(';'), ALT)),
+    ),
+    key(
+        Scope::Editor,
         "F10",
         "Change the layout: editor and preview side by side, editor above the preview, or editor only. A window under 100 columns starts stacked. The choice is kept.",
         Some((KeyCode::F(10), NONE)),
@@ -630,7 +642,7 @@ mod tests {
     #[test]
     fn every_word_of_every_text_shows_in_the_window_at_100_and_at_60_columns() {
         for width in [100, 60] {
-            let screen = drawn(width, 170);
+            let screen = drawn(width, 300);
             // Take the text of the window without the border and the keys, line by line.
             let words: std::collections::HashSet<&str> = screen.split_whitespace().collect();
             for entry in KEYS {
@@ -649,7 +661,7 @@ mod tests {
     #[test]
     fn no_text_touches_the_right_border_of_the_window() {
         for width in [100u16, 60] {
-            let screen = drawn(width, 170);
+            let screen = drawn(width, 300);
             let window = usize::from(width) * 90 / 100;
             let left = (usize::from(width) - window) / 2;
             let last_inner = left + window - 2;

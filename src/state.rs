@@ -95,6 +95,33 @@ pub fn save_layout(file: &Path, name: &str) -> io::Result<()> {
     crate::fsutil::write_file(file, name.as_bytes())
 }
 
+/// The file that holds the spell check switch: `on` or `off`.
+pub fn spell_file(state_file: &Path) -> PathBuf {
+    state_file.with_file_name("spell")
+}
+
+/// The personal dictionary of the spell check: one word on each line.
+pub fn spell_words_file(state_file: &Path) -> PathBuf {
+    state_file.with_file_name("spell-words.txt")
+}
+
+/// The saved switch: `Some(true)` for `on`, `Some(false)` for `off`, and `None` for no file or other text.
+pub fn load_switch(file: &Path) -> Option<bool> {
+    match fs::read_to_string(file).ok()?.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Saves the switch.
+pub fn save_switch(file: &Path, on: bool) -> io::Result<()> {
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    crate::fsutil::write_file(file, if on { b"on" } else { b"off" })
+}
+
 /// The file that holds the last open file of each project, next to the main file list.
 /// Each line is `<project folder>`, a tab, `<file>`, a tab, and the page number.
 pub fn last_file(state_file: &Path) -> PathBuf {
@@ -434,6 +461,20 @@ mod tests {
         assert_eq!(load_layout(&file), None);
         fs::write(&file, "x".repeat(100)).unwrap();
         assert_eq!(load_layout(&file), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_switch_is_saved_and_other_text_gives_none() {
+        let dir = temp_dir("switch");
+        let file = spell_file(&dir.join("main-files"));
+        assert_eq!(load_switch(&file), None);
+        save_switch(&file, true).unwrap();
+        assert_eq!(load_switch(&file), Some(true));
+        save_switch(&file, false).unwrap();
+        assert_eq!(load_switch(&file), Some(false));
+        fs::write(&file, "maybe").unwrap();
+        assert_eq!(load_switch(&file), None);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

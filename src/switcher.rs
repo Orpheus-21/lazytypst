@@ -19,7 +19,7 @@ pub enum Outcome<T> {
 }
 
 pub struct Switcher<T> {
-    title: &'static str,
+    title: String,
     hint: &'static str,
     /// The entries in the order of the list, each with the text that the list shows and the filter reads.
     entries: Vec<(T, String)>,
@@ -31,7 +31,7 @@ pub struct Switcher<T> {
 
 impl<T: Clone> Switcher<T> {
     pub fn new(
-        title: &'static str,
+        title: impl Into<String>,
         hint: &'static str,
         entries: Vec<(T, String)>,
         toggle: bool,
@@ -39,7 +39,7 @@ impl<T: Clone> Switcher<T> {
         let mut state = ListState::default();
         state.select((!entries.is_empty()).then_some(0));
         Self {
-            title,
+            title: title.into(),
             hint,
             entries,
             filter: String::new(),

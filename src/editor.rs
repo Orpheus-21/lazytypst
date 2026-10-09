@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod build;
+mod spelling;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -317,6 +318,8 @@ enum Mode {
     Line(Box<TextArea<'static>>),
     /// The prompt `Replace with:` in the status line. It takes every key and every paste. See `replace_key`.
     Replace(Box<TextArea<'static>>),
+    /// The list of a misspelled word. See `open_spell`.
+    Spell(Box<Switcher<spelling::Choice>>),
     /// The history popup: the saved versions of the file, the newest first. See `open_history`.
     History(Box<Switcher<history::Version>>),
     /// The outline popup. It takes every key and every paste. See `outline_key`. Each entry is the line of a
@@ -378,6 +381,10 @@ pub struct Editor {
     last_search: String,
     /// A compile that waits after a save: when it starts, and how long the wait is. See `compile_wait`.
     compile_at: Option<(Instant, Duration)>,
+    /// The spell check. See `spelling.rs`.
+    spelling: spelling::Spelling,
+    /// Grows with each change of the text, so that a check can tell if its words are still current.
+    text_version: u64,
     /// The folder of the local history, in the state folder. `None`: no history.
     history: Option<PathBuf>,
     /// The layout that the user chose with F10. `None`: the width of the window decides.
@@ -453,6 +460,8 @@ impl Editor {
             replaced: None,
             arrangement: None,
             history: None,
+            spelling: spelling::Spelling::new(),
+            text_version: 0,
             compile_at: None,
             width: 0,
             search_regex: false,
@@ -701,6 +710,12 @@ impl Editor {
                 }
                 return;
             }
+            Mode::Spell(_) => {
+                for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
+                    self.spell_key(KeyEvent::from(KeyCode::Char(letter)));
+                }
+                return;
+            }
             Mode::Search(_) => {
                 // The prompt takes the text of a paste, as one line.
                 for letter in text.chars().filter(|letter| !matches!(letter, '\r' | '\n')) {
@@ -723,6 +738,7 @@ impl Editor {
     fn mark_edit(&mut self) {
         // A compile that waits would show the text before this key. The next save plans a new one.
         self.compile_at = None;
+        self.text_version += 1;
         self.dirty = true;
         self.last_edit = Some(Instant::now());
         self.count_words();
@@ -1351,6 +1367,10 @@ impl Editor {
                 self.history_key(key);
                 return Action::Stay;
             }
+            Mode::Spell(_) => {
+                self.spell_key(key);
+                return Action::Stay;
+            }
             Mode::Full if !full_passthrough(key) => return self.full_key(key),
             // The error is in the text, so the text must show.
             Mode::Full if matches!(key.code, KeyCode::Char('g') | KeyCode::F(8)) => {
@@ -1388,6 +1408,10 @@ impl Editor {
             self.cycle_arrangement(self.width);
         } else if key.code == KeyCode::F(6) {
             self.open_history();
+        } else if key.code == KeyCode::F(7) {
+            self.toggle_spell();
+        } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char(';') {
+            self.open_spell();
         } else if key.code == KeyCode::F(5) {
             self.paused = !self.paused;
             self.message = if self.paused {
@@ -1641,6 +1665,7 @@ impl Editor {
         }
         changed |= self.watch_file(now);
         changed |= self.watch_deps(now);
+        changed |= self.poll_spell();
         changed |= self.poll_compile();
         changed |= self.poll_export();
         changed
@@ -1709,6 +1734,7 @@ impl Editor {
                 let place = self.cursor_position();
                 self.crlf = text.contains("\r\n");
                 self.textarea = new_textarea(&text);
+                self.text_version += 1;
                 if matches!(self.mode, Mode::Search(_)) {
                     let _ = self
                         .textarea

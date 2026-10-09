@@ -317,6 +317,24 @@ impl Editor {
                         buffer[(cell_x, y)].set_style(style);
                     }
                 }
+                // A word that the spell check does not know is underlined, whatever its color is.
+                if self
+                    .spelling
+                    .marks_of(*line, self.text_version)
+                    .iter()
+                    .any(|(start, end)| *start <= *offset && *offset < *end)
+                {
+                    let mark = if self.colors {
+                        Style::new()
+                            .add_modifier(Modifier::UNDERLINED)
+                            .underline_color(Color::Red)
+                    } else {
+                        Style::new().add_modifier(Modifier::UNDERLINED)
+                    };
+                    for cell_x in x..(x + width).min(area.right()) {
+                        buffer[(cell_x, y)].set_style(mark);
+                    }
+                }
                 x += width;
                 *offset += 1;
             }
@@ -460,6 +478,9 @@ impl Editor {
             popup.draw(frame);
         }
         if let Mode::History(popup) = &mut self.mode {
+            popup.draw(frame);
+        }
+        if let Mode::Spell(popup) = &mut self.mode {
             popup.draw(frame);
         }
     }

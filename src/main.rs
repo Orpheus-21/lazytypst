@@ -9,6 +9,7 @@ mod highlight;
 mod history;
 mod newfile;
 mod preview;
+mod spell;
 mod state;
 mod switcher;
 mod words;
@@ -96,6 +97,8 @@ struct App {
     help: Option<Help>,
     /// The file switcher over the editor. While it is open, it takes every key.
     switcher: Option<Switcher<PathBuf>>,
+    /// True when the user switched the spell check on with F7. It stays on for the next files and runs.
+    spell: bool,
     /// The layout that the user chose with F10, for each editor that opens. `None`: by window width.
     layout: Option<editor::Arrangement>,
     /// The files that were open in this run, the latest first. The switcher lists them first.
@@ -381,6 +384,7 @@ impl App {
             switcher: None,
             recent: Vec::new(),
             layout: None,
+            spell: false,
         };
         app.read_times();
         app.outside_links = browser::links_outside(&app.root);
@@ -423,6 +427,10 @@ impl App {
             .as_deref()
             .and_then(|file| state::load_layout(&state::layout_file(file)))
             .and_then(|name| editor::Arrangement::from_name(&name));
+        self.spell = state_file
+            .as_deref()
+            .and_then(|file| state::load_switch(&state::spell_file(file)))
+            .unwrap_or(false);
         self.state_file = state_file;
     }
 
@@ -521,6 +529,10 @@ impl App {
         self.status = match opened {
             Ok(mut editor) => {
                 editor.set_arrangement(self.layout);
+                editor.set_spell(
+                    self.spell,
+                    self.state_file.as_deref().map(state::spell_words_file),
+                );
                 editor.set_history(
                     self.state_file
                         .as_deref()
@@ -921,9 +933,18 @@ impl App {
         if let Some(editor) = &mut self.editor {
             let action = editor.handle_key(key);
             let chosen = editor.chosen_arrangement();
+            let spell_now = editor.spell_on();
             if chosen != self.layout {
                 self.layout = chosen;
                 self.save_layout();
+            }
+            if spell_now != self.spell {
+                self.spell = spell_now;
+                if let Some(state) = &self.state_file
+                    && let Err(err) = state::save_switch(&state::spell_file(state), self.spell)
+                {
+                    self.status = format!("Cannot save the spell check switch: {err}");
+                }
             }
             if matches!(action, Action::Help) {
                 self.help = Some(Help::new(Scope::Editor));

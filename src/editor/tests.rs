@@ -1411,6 +1411,7 @@ fn snapshot(editor: &Editor, left: bool) -> Snapshot {
             Mode::Replace(_) => "replace",
             Mode::Outline(_) => "outline",
             Mode::History(_) => "history",
+            Mode::Spell(_) => "spell",
             Mode::Full => "full",
         },
         cursor: editor.cursor_position(),
@@ -1499,7 +1500,16 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
     // Only the search key does nothing in the full preview. A new entry in this list is a decision.
     assert_eq!(
         ignored_in_full,
-        ["Ctrl-F", "Alt-Enter, Ctrl-]", "F6", "F10", "Alt-S", "Alt-G"]
+        [
+            "Ctrl-F",
+            "Alt-Enter, Ctrl-]",
+            "F6",
+            "F7",
+            "Alt-;",
+            "F10",
+            "Alt-S",
+            "Alt-G"
+        ]
     );
 }
 
@@ -3307,6 +3317,174 @@ fn f6_without_versions_or_without_a_state_folder_says_so() {
         "{}",
         editor.message
     );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+/// A fake `hunspell`: every word is known, except the words that start with `zz`. Those get two suggestions.
+fn fake_spell_program(dir: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join("hunspell");
+    fs::write(
+        &script,
+        "#!/bin/sh\necho '@(#) fake'\nwhile read -r line; do\n  w=${line#^}\n  case \"$w\" in\n    zzq) echo \"# $w 0\";;\n    zz*) echo \"& $w 2 0: fixa, fixb\";;\n    *) echo '*';;\n  esac\n  echo\ndone\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    script.display().to_string()
+}
+
+/// An editor with the text, the fake program, and the spell check on and finished.
+fn spell_editor(name: &str, text: &str) -> (PathBuf, Editor) {
+    let path = temp_file(name, text);
+    let mut editor = open(&path);
+    editor.spelling.program = fake_spell_program(path.parent().unwrap());
+    editor.set_spell(true, Some(path.parent().unwrap().join("words.txt")));
+    wait_for_spell(&mut editor);
+    (path, editor)
+}
+
+fn wait_for_spell(editor: &mut Editor) {
+    let start = Instant::now();
+    loop {
+        editor.tick(Instant::now());
+        if editor.spelling.checked_version == Some(editor.text_version)
+            && editor.spelling.job.is_none()
+        {
+            return;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the check did not end"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn the_spell_check_underlines_unknown_words_of_the_prose_only() {
+    let text = "hello zzworld okay\nsecond zzq line // zzcomment\n";
+    let (path, mut editor) = spell_editor("spellmarks", text);
+    assert_eq!(editor.spelling.marks[0], [(6, 13)]);
+    assert_eq!(
+        editor.spelling.marks[1],
+        [(7, 10)],
+        "the comment is not prose"
+    );
+    // The words are underlined on the screen.
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| editor.draw(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let underlined = |x: u16, y: u16| buffer[(x, y)].modifier.contains(Modifier::UNDERLINED);
+    // The gutter is 3 columns and the border 1: the text starts at column 4.
+    assert!(underlined(4 + 6, 1) && underlined(4 + 12, 1));
+    assert!(!underlined(4, 1) && !underlined(4 + 13, 1));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn an_edit_hides_the_marks_until_the_next_check() {
+    let (path, mut editor) = spell_editor("spellstale", "hello zzworld\n");
+    assert!(!editor.spelling.marks_of(0, editor.text_version).is_empty());
+    editor.handle_key(key(KeyCode::Char('X')));
+    assert!(
+        editor.spelling.marks_of(0, editor.text_version).is_empty(),
+        "stale marks are hidden"
+    );
+    editor.tick(Instant::now() + Duration::from_secs(2)); // the save, and then the new check
+    wait_for_spell(&mut editor);
+    assert_eq!(
+        editor.spelling.marks[0],
+        [(7, 14)],
+        "the new place of the word"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn alt_semicolon_goes_to_the_next_word_and_enter_replaces_it_as_one_edit() {
+    let (path, mut editor) = spell_editor("spellfix", "hello zzworld and zzother\n");
+    editor.handle_key(alt(KeyCode::Char(';')));
+    assert!(matches!(editor.mode, Mode::Spell(_)));
+    assert_eq!(editor.cursor_position(), (0, 6));
+    editor.handle_key(key(KeyCode::Down)); // fixb
+    editor.handle_key(key(KeyCode::Enter));
+    assert!(matches!(editor.mode, Mode::Edit));
+    assert_eq!(editor.textarea.lines(), ["hello fixb and zzother"]);
+    editor.handle_key(ctrl('z'));
+    assert_eq!(
+        editor.textarea.lines(),
+        ["hello zzworld and zzother"],
+        "one Ctrl-Z takes it back"
+    );
+    editor.tick(Instant::now() + Duration::from_secs(2));
+    wait_for_spell(&mut editor);
+    editor.handle_key(alt(KeyCode::Char(';')));
+    assert_eq!(
+        editor.cursor_position(),
+        (0, 18),
+        "the next word, after the cursor"
+    );
+    editor.handle_key(key(KeyCode::Esc));
+    editor.handle_key(alt(KeyCode::Char(';')));
+    assert_eq!(editor.cursor_position(), (0, 6), "a wrap at the end");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn add_keeps_the_word_in_the_personal_dictionary_and_ignore_only_in_this_run() {
+    let (path, mut editor) = spell_editor("spelladd", "zzone and zztwo\n");
+    editor.handle_key(alt(KeyCode::Char(';')));
+    for _ in 0..2 {
+        editor.handle_key(key(KeyCode::Down)); // past the two suggestions: "Add"
+    }
+    editor.handle_key(key(KeyCode::Enter));
+    assert!(editor.message.starts_with("Added"), "{}", editor.message);
+    let words = path.parent().unwrap().join("words.txt");
+    assert_eq!(fs::read_to_string(&words).unwrap(), "zzone\n");
+    assert_eq!(
+        editor.spelling.marks[0],
+        [(10, 15)],
+        "zzone is not marked any more"
+    );
+    editor.handle_key(alt(KeyCode::Char(';')));
+    for _ in 0..3 {
+        editor.handle_key(key(KeyCode::Down)); // "Ignore"
+    }
+    editor.handle_key(key(KeyCode::Enter));
+    assert!(editor.spelling.marks[0].is_empty());
+    assert_eq!(
+        fs::read_to_string(&words).unwrap(),
+        "zzone\n",
+        "ignore does not save"
+    );
+    assert!(editor.spelling.known.contains("zztwo"));
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn without_the_program_the_check_says_so_and_does_not_repeat() {
+    let path = temp_file("spellmissing", "hello\n");
+    let mut editor = open(&path);
+    editor.spelling.program = "/nonexistent/hunspell".into();
+    editor.handle_key(key(KeyCode::F(7)));
+    assert!(editor.spell_on());
+    wait_for_spell(&mut editor);
+    assert!(
+        editor.message.contains("not installed"),
+        "{}",
+        editor.message
+    );
+    assert!(editor.spelling.job.is_none());
+    editor.handle_key(alt(KeyCode::Char(';')));
+    assert!(
+        editor.message.contains("not ready") || editor.message.contains("No misspelled"),
+        "{}",
+        editor.message
+    );
+    editor.handle_key(key(KeyCode::F(7)));
+    assert!(!editor.spell_on());
+    editor.handle_key(alt(KeyCode::Char(';')));
+    assert!(editor.message.contains("F7"), "{}", editor.message);
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
