@@ -42,14 +42,70 @@ const WATCH_EVERY: Duration = Duration::from_secs(1);
 const CONFLICT: &str = "The file changed on disk. Ctrl-S overwrites it with this text.";
 
 /// The modification time of the file, or `None` if the file cannot be read.
+/// How many indented lines the detection reads.
+const INDENT_LINES: usize = 200;
+
+/// The indent that Tab makes: a tab character, or this many spaces.
+#[derive(Debug, PartialEq)]
+enum Indent {
+    Tab,
+    Spaces(u8),
+}
+
+/// Finds the indent of a file: a tab if most of the first indented lines start with a tab. Else the most
+/// common step between the indents of two lines in a row (2, 3, 4, or 8 spaces). A file without a step,
+/// for example one without indent, gets 2 spaces, the usual Typst style.
+fn detect_indent(text: &str) -> Indent {
+    let mut tabs = 0;
+    let mut widths = Vec::new();
+    for line in text
+        .lines()
+        .filter(|line| line.starts_with([' ', '\t']))
+        .take(INDENT_LINES)
+    {
+        if line.starts_with('\t') {
+            tabs += 1;
+        } else {
+            widths.push(line.chars().take_while(|letter| *letter == ' ').count());
+        }
+    }
+    if tabs > widths.len() {
+        return Indent::Tab;
+    }
+    let mut count = [0usize; 9];
+    let mut before = 0;
+    for width in widths {
+        let step = width.abs_diff(before);
+        if matches!(step, 2 | 3 | 4 | 8) {
+            count[step] += 1;
+        }
+        before = width;
+    }
+    // On a tie the smaller step wins, because the scan goes up and `>` keeps the first.
+    let mut best = (2, 0);
+    for step in [2, 3, 4, 8] {
+        if count[step] > best.1 {
+            best = (step, count[step]);
+        }
+    }
+    Indent::Spaces(best.0 as u8)
+}
+
 /// A text area with the text and the settings of the editor.
 fn new_textarea(text: &str) -> TextArea<'static> {
     let mut textarea = TextArea::new(text.lines().map(String::from).collect());
     textarea.set_cursor_line_style(Style::default());
     // A long line wraps on screen, at a word if possible. The file keeps the line as one line.
     textarea.set_wrap_mode(WrapMode::WordOrGlyph);
-    // Typst code uses 2 spaces for each level. Tab inserts spaces: it never makes a tab character.
-    textarea.set_tab_length(2);
+    // Typst code uses 2 spaces for each level, if the file shows no other indent. Tab follows the file.
+    match detect_indent(text) {
+        // A tab character shows 2 cells wide, as before.
+        Indent::Tab => {
+            textarea.set_tab_length(2);
+            textarea.set_hard_tab_indent(true);
+        }
+        Indent::Spaces(width) => textarea.set_tab_length(width),
+    }
     // Line numbers help with the error lines of Typst. A dim style keeps them from competing with the text.
     textarea.set_line_number_style(Style::new().add_modifier(Modifier::DIM));
     // The matches of a search stand out. Without colors, they are underlined.
@@ -394,7 +450,7 @@ impl Editor {
         let mut indent: String = line.chars().take(indent_len).collect();
         if before.trim_end().ends_with(['{', '(', '[']) {
             // A level is a tab in a line that uses tabs, and a tab stop of spaces if not.
-            if indent.starts_with('\t') {
+            if indent.starts_with('\t') || (indent.is_empty() && self.textarea.hard_tab_indent()) {
                 indent.push('\t');
             } else {
                 indent.push_str(&" ".repeat(usize::from(self.textarea.tab_length())));

@@ -2562,6 +2562,63 @@ fn tab_characters_that_are_already_in_the_file_stay_on_save() {
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
+#[test]
+fn the_indent_is_found_from_the_file() {
+    use super::{Indent, detect_indent};
+    assert_eq!(detect_indent(""), Indent::Spaces(2));
+    assert_eq!(detect_indent("a\nb\n"), Indent::Spaces(2));
+    assert_eq!(detect_indent("a {\n  b\n    c\n  d\n"), Indent::Spaces(2));
+    assert_eq!(
+        detect_indent("a {\n    b\n        c\n    d\n"),
+        Indent::Spaces(4)
+    );
+    assert_eq!(detect_indent("a {\n\tb\n\t\tc\n"), Indent::Tab);
+    assert_eq!(
+        detect_indent("a {\n\tb\n  c\n    d\n"),
+        Indent::Spaces(2),
+        "spaces win when more lines use them"
+    );
+    assert_eq!(detect_indent("a\n   b\n"), Indent::Spaces(3));
+    assert_eq!(
+        detect_indent("a\n     b\n"),
+        Indent::Spaces(2),
+        "an odd step is not a style"
+    );
+}
+
+#[test]
+fn tab_shift_tab_and_enter_follow_the_indent_of_the_file() {
+    let path = temp_file("indent4", "fn {\n    a\n        b\n}\n");
+    let mut editor = open(&path);
+    editor.handle_key(key(KeyCode::Tab));
+    assert_eq!(editor.textarea.lines()[0], "    fn {");
+    editor.handle_key(key(KeyCode::BackTab));
+    assert_eq!(editor.textarea.lines()[0], "fn {");
+    editor.handle_key(key(KeyCode::End));
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        editor.textarea.lines()[1],
+        "    ",
+        "one level of 4 after an opening bracket"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+
+    let path = temp_file("indenttab", "fn {\n\ta\n\t\tb\n}\n");
+    let mut editor = open(&path);
+    editor.handle_key(key(KeyCode::Tab));
+    assert_eq!(editor.textarea.lines()[0], "\tfn {");
+    editor.handle_key(key(KeyCode::BackTab));
+    assert_eq!(editor.textarea.lines()[0], "fn {");
+    editor.handle_key(key(KeyCode::End));
+    editor.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        editor.textarea.lines()[1],
+        "\t",
+        "a tab after an opening bracket"
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
 fn pane_rows(editor: &mut Editor) -> Vec<String> {
     // The pane stands under the text area: the last 6 rows above the status line.
