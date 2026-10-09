@@ -10,6 +10,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 - The search takes plain text by default (`f(x)` and `1+1` work), with smart case. `Alt-R` switches to a regular expression.
 - A folder with a `typst.toml` entrypoint or a `main.typ` gets that file as its main file by itself. `m` removes the mark, and the choice stays.
+- After a compile of 1 s or more, the next compile waits twice that time after the last key, up to 3 s. The save does not wait, and the pane title says `(next in 2.4 s)`.
 - `F10` changes the layout: side by side, stacked, or editor only. A window under 100 columns starts stacked. The choice is kept.
 - `Alt-Enter` or `Ctrl-]` opens the file that the string under the cursor names, for example an `#include`. `F2` `F2` goes back.
 - `F4` opens an outline of the headings with a filter. `Enter` jumps to the heading.
