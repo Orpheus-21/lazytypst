@@ -21,9 +21,10 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 python3 tests/pty/run.py
+python3 tests/pty/run.py --watch
 ```
 
-The last command runs the terminal checks in `tests/pty/`. It needs `python3` and the library `pyte` (`pip install -r tests/pty/requirements.txt`, best in a virtual environment). A new key or a new screen gets a check there too: copy a small `check_*.py` and change it.
+The last two commands run the terminal checks in `tests/pty/`, the second with the option `LAZYTYPST_WATCH=1` (one long running `typst watch`). It needs `python3` and the library `pyte` (`pip install -r tests/pty/requirements.txt`, best in a virtual environment). A new key or a new screen gets a check there too: copy a small `check_*.py` and change it.
 
 ## Code rules
 

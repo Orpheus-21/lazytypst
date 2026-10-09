@@ -10,6 +10,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 - The search takes plain text by default (`f(x)` and `1+1` work), with smart case. `Alt-R` switches to a regular expression.
 - A folder with a `typst.toml` entrypoint or a `main.typ` gets that file as its main file by itself. `m` removes the mark, and the choice stays.
+- The option `LAZYTYPST_WATCH=1` keeps one `typst watch` for the compile, for faster compiles. It is off at first.
 - `Alt-I` saves the image from the system clipboard in the project (`images/pasted-...png`) and inserts an `#image` line. It needs `wl-paste` or `xclip`.
 - `F9` turns the mouse on (it is off at first): click, drag to select, wheel to scroll or to turn pages, and clicks in the file list. Hold `Shift` to select with the terminal.
 - The preview follows the cursor: when the cursor enters another section, the preview goes to the page of its heading. `F3` switches it. The program reads the pages with `typst eval`.
