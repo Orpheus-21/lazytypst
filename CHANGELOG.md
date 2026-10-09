@@ -15,7 +15,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 - At start, the program deletes its own leftover temp files (`.name.<pid>-...lazytypst-tmp` and `.lazytypst-<pid>-<n>.pdf.tmp`) beside the `.typ` files, if they are older than 1 hour and their process is gone.
 - `Tab`, `Shift-Tab`, and the indent after `Enter` follow the indent of the file: a tab character, or 2, 3, 4, or 8 spaces.
 - `lazytypst main.typ:42` and `main.typ:42:7` open the file with the cursor at that place.
-- A window under 60 columns or 16 rows shows "Make the window bigger (60x16)". The state stays.
+- A window under 40 columns or 10 rows shows "Make the window bigger (40x10)". The state stays.
 - In tmux with half blocks, the status line and `--doctor` hint `set -g allow-passthrough on`.
 - `Alt-G` goes to a line, or to a line and a column.
 - `Ctrl-Z` undoes, `Alt-A` selects all the text, and `Ctrl-Home` and `Ctrl-End` go to the start and the end of the file (with `Shift`, they select).

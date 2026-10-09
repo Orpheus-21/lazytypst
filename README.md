@@ -288,7 +288,7 @@ tmux sits between the program and the terminal, and it can block the image data.
 
 ### The window shows only one line
 
-The window is under 60 columns or 16 rows. The line says `Make the window bigger (60x16)`. Make the window bigger. Nothing is lost. The program shows the same screen again.
+The window is under 40 columns or 10 rows. The line says `Make the window bigger (40x10)`. Make the window bigger. Nothing is lost. The program shows the same screen again.
 
 ### A hidden temp file stays in the project
 
