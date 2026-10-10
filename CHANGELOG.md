@@ -10,6 +10,7 @@ Each change that a user can see adds one line under `Unreleased`, in the section
 
 - The search takes plain text by default (`f(x)` and `1+1` work), with smart case. `Alt-R` switches to a regular expression.
 - A folder with a `typst.toml` entrypoint or a `main.typ` gets that file as its main file by itself. `m` removes the mark, and the choice stays.
+- A file that is not UTF-8 text gets a clear message with an `iconv` hint, and the program leaves it alone.
 - After a panic, the edits that the file lacks go to the local history, and the program prints where.
 - Closing the terminal, `SIGHUP`, or `SIGTERM` writes the edits that the autosave has not written. If the file changed on disk, the text goes to the local history.
 - `Alt-L` loads the file from disk and drops the edits of the buffer, after it keeps them in the history. The conflict message names the key.
