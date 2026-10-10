@@ -1230,7 +1230,23 @@ fn main() -> std::io::Result<()> {
         write_to_terminal(ENABLE_MOUSE);
     }
     catch_stop_signals();
-    let result = run(&mut terminal, &mut app);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(&mut terminal, &mut app)
+    }));
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => {
+            // The panic hook has put the terminal back and has written the message. Now the edits that the
+            // file lacks go to the local history, and the panic goes on.
+            let note = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                app.editor.as_mut().and_then(Editor::rescue_after_panic)
+            }));
+            if let Ok(Some(note)) = note {
+                eprintln!("lazytypst crashed. {note}\nThe next run lists it with F6.");
+            }
+            std::panic::resume_unwind(payload);
+        }
+    };
     // Every way out of the loop writes the edits first: a quit, an error of the terminal (it closed), and
     // a signal. Nothing of the text of the last 300 ms is lost.
     let unsaved = app.save_for_exit();

@@ -3990,6 +3990,38 @@ fn the_exit_save_writes_the_edits_and_puts_a_refused_text_in_the_history() {
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
+#[test]
+fn after_a_panic_the_edits_go_to_the_history_and_the_file_is_not_written() {
+    let path = temp_file("rescue", "disk\n");
+    let state = path.parent().unwrap().join("state").join("history");
+    let mut editor = open(&path);
+    editor.set_history(Some(state.clone()));
+    assert_eq!(editor.rescue_after_panic(), None, "no edits");
+    editor.handle_key(key(KeyCode::Char('X')));
+    let note = editor.rescue_after_panic().expect("a note");
+    assert!(
+        note.contains("are in") && note.contains("history"),
+        "{note}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "disk\n",
+        "the file keeps the last good save"
+    );
+    let kept: Vec<String> = history::list(&state, &path)
+        .iter()
+        .map(|version| version.read().unwrap())
+        .collect();
+    assert!(kept.contains(&"Xdisk\n".to_string()), "{kept:?}");
+    editor.history = None;
+    assert!(
+        editor
+            .rescue_after_panic()
+            .is_some_and(|note| note.contains("lost"))
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
 fn pane_rows(editor: &mut Editor) -> Vec<String> {
     // The pane stands under the text area: the last 6 rows above the status line.

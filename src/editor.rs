@@ -701,6 +701,26 @@ impl Editor {
         })
     }
 
+    /// After a panic: puts the buffer in the local history and says where. It does not write the file, because
+    /// a panic can leave the buffer in a bad state, and the file keeps the last good save. `None` if the
+    /// buffer has no edits that the file lacks.
+    pub fn rescue_after_panic(&mut self) -> Option<String> {
+        if !self.dirty {
+            return None;
+        }
+        let text = self.file_text();
+        let kept = self.history.as_ref().and_then(|folder| {
+            history::record(folder, &self.path, &text, SystemTime::now(), true).ok()?;
+            history::list(folder, &self.path)
+                .first()
+                .map(|version| version.path().to_path_buf())
+        });
+        Some(match kept {
+            Some(path) => format!("Your edits that the file lacks are in {}", path.display()),
+            None => "Your edits that the file lacks are lost: there is no state folder.".into(),
+        })
+    }
+
     /// Opens the last exported PDF with `program`. The program runs in the background with no input and
     /// no output, so it cannot draw on the screen of the editor.
     fn open_pdf(&mut self, program: &str) {
@@ -1505,6 +1525,13 @@ impl Editor {
             self.paste_image();
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('l') {
             self.load_from_disk();
+        } else if cfg!(debug_assertions)
+            && ctrl
+            && key.modifiers.contains(KeyModifiers::ALT)
+            && key.code == KeyCode::Char('p')
+        {
+            // Only in a debug build, for the test of the rescue after a panic. A release build has no such key.
+            panic!("forced panic for the test of the rescue");
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char(';') {
             self.open_spell();
         } else if key.code == KeyCode::F(5) {
