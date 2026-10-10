@@ -49,7 +49,7 @@ const MAX_COMPILE_WAIT: Duration = Duration::from_secs(3);
 
 /// How often the editor looks at the modification time of the file while the buffer has no edits.
 const WATCH_EVERY: Duration = Duration::from_secs(1);
-const CONFLICT: &str = "The file changed on disk. Ctrl-S overwrites it with this text.";
+const CONFLICT: &str = "The file changed on disk. Ctrl-S keeps my text. Alt-L loads the file.";
 
 /// The modification time of the file, or `None` if the file cannot be read.
 /// The text of the string that holds the char column `column` of `line`, or else the first string of the
@@ -1472,6 +1472,8 @@ impl Editor {
             self.toggle_mouse();
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('i') {
             self.paste_image();
+        } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('l') {
+            self.load_from_disk();
         } else if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char(';') {
             self.open_spell();
         } else if key.code == KeyCode::F(5) {
@@ -1775,6 +1777,52 @@ impl Editor {
         true
     }
 
+    /// Puts `text`, the text of the file, in the buffer. The cursor keeps its place if the text is long enough.
+    fn replace_buffer(&mut self, text: &str) {
+        let place = self.cursor_position();
+        self.crlf = text.contains("\r\n");
+        self.textarea = new_textarea(text);
+        self.text_version += 1;
+        if matches!(self.mode, Mode::Search(_)) {
+            let _ = self
+                .textarea
+                .set_search_pattern(search_regex_for(&self.last_search, self.search_regex));
+        }
+        self.count_words();
+        self.set_cursor_position(place);
+    }
+
+    /// `Alt-L`: takes the text of the file from disk and drops the edits of the buffer. The edits go to the
+    /// local history first (`F6` lists them), so a wrong key loses nothing. Without a history the edits
+    /// would be lost, so the key does nothing then.
+    fn load_from_disk(&mut self) {
+        let text = match fsutil::read_text(&self.path) {
+            Ok(text) => text,
+            Err(err) => {
+                self.message = format!("Cannot read the file: {err}");
+                return;
+            }
+        };
+        if self.dirty {
+            if self.history.is_none() {
+                self.message =
+                    "There is no history to keep your text. Ctrl-S saves it first.".into();
+                return;
+            }
+            let mine = self.file_text();
+            self.keep_version(&mine, true);
+        }
+        self.replace_buffer(&text);
+        self.dirty = false;
+        self.conflict = false;
+        self.last_edit = None;
+        self.disk_time = disk_time(&self.path);
+        self.message = "Loaded the file from disk. Your text is in the history (F6).".into();
+        if !self.paused {
+            self.start_compile();
+        }
+    }
+
     /// While the buffer has no edits, looks about once a second at the file on disk. If another program
     /// changed it, loads the new text and starts a compile. The cursor keeps its line, or goes to the
     /// last line if the file got shorter. With edits, the buffer stays: `save` shows the conflict.
@@ -1799,17 +1847,7 @@ impl Editor {
         }
         match fsutil::read_text(&self.path) {
             Ok(text) => {
-                let place = self.cursor_position();
-                self.crlf = text.contains("\r\n");
-                self.textarea = new_textarea(&text);
-                self.text_version += 1;
-                if matches!(self.mode, Mode::Search(_)) {
-                    let _ = self
-                        .textarea
-                        .set_search_pattern(search_regex_for(&self.last_search, self.search_regex));
-                }
-                self.count_words();
-                self.set_cursor_position(place);
+                self.replace_buffer(&text);
                 self.message = "Loaded the change from disk".into();
                 if !self.paused {
                     self.start_compile();

@@ -230,6 +230,12 @@ pub const KEYS: &[Key] = &[
     ),
     key(
         Scope::Editor,
+        "Alt-L",
+        "Load the file from disk and drop the edits of the buffer. Your text goes to the history first (F6). Use it when the file changed on disk.",
+        Some((KeyCode::Char('l'), ALT)),
+    ),
+    key(
+        Scope::Editor,
         "Alt-I",
         "Insert the image from the system clipboard: it is saved in the folder images of the project, and an #image line is put at the cursor. It needs wl-paste or xclip.",
         Some((KeyCode::Char('i'), ALT)),

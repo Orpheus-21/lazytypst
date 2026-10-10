@@ -1508,6 +1508,7 @@ fn every_key_of_the_help_list_does_what_the_mode_says() {
             "F7",
             "Alt-;",
             "F9",
+            "Alt-L",
             "Alt-I",
             "F10",
             "Alt-S",
@@ -3899,6 +3900,54 @@ fn in_the_watch_mode_a_document_with_fewer_pages_goes_to_the_last_page() {
         2,
         "the recovery works as without the watch"
     );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn alt_l_loads_the_file_after_a_conflict_and_keeps_the_edits_in_the_history() {
+    let path = temp_file("altl", "from disk\n");
+    let state = path.parent().unwrap().join("state").join("history");
+    let mut editor = open(&path);
+    editor.set_history(Some(state.clone()));
+    editor.handle_key(key(KeyCode::Char('X')));
+    // Another program changes the file while the buffer has an edit.
+    fs::write(&path, "from another program\n").unwrap();
+    touch_later(&path, 20);
+    editor.tick(Instant::now() + Duration::from_secs(2)); // the autosave finds the change
+    assert!(
+        editor.message.contains("Ctrl-S keeps my text") && editor.message.contains("Alt-L"),
+        "{}",
+        editor.message
+    );
+    assert!(editor.conflict);
+    editor.handle_key(alt(KeyCode::Char('l')));
+    assert_eq!(editor.textarea.lines(), ["from another program"]);
+    assert!(!editor.dirty && !editor.conflict);
+    assert!(editor.message.contains("history"), "{}", editor.message);
+    let kept: Vec<String> = history::list(&state, &path)
+        .iter()
+        .map(|version| version.read().unwrap())
+        .collect();
+    assert!(kept.contains(&"Xfrom disk\n".to_string()), "{kept:?}");
+    // The next Ctrl-S has no conflict: there is nothing to save.
+    editor.handle_key(ctrl('s'));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "from another program\n");
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn alt_l_without_a_history_does_not_drop_edits_and_without_edits_it_just_loads() {
+    let path = temp_file("altlnone", "disk\n");
+    let mut editor = open(&path);
+    editor.handle_key(key(KeyCode::Char('X')));
+    editor.handle_key(alt(KeyCode::Char('l')));
+    assert_eq!(editor.textarea.lines(), ["Xdisk"], "the edit stays");
+    assert!(editor.message.contains("no history"), "{}", editor.message);
+    assert!(editor.dirty);
+    let mut clean = open(&path);
+    fs::write(&path, "changed\n").unwrap();
+    clean.handle_key(alt(KeyCode::Char('l')));
+    assert_eq!(clean.textarea.lines(), ["changed"]);
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
