@@ -26,7 +26,13 @@ pub fn read_text(path: &Path) -> io::Result<String> {
             format!("the file is larger than {} MiB", MAX_TEXT_BYTES >> 20),
         ));
     }
-    fs::read_to_string(path)
+    // A file in another encoding, for example Latin-1, gets a clear message and a way out.
+    String::from_utf8(fs::read(path)?).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "it is not UTF-8 text. Try: iconv -f latin1 -t utf-8",
+        )
+    })
 }
 
 /// Writes `bytes` to the file at `path` so that a crash leaves the old file or the new file, never a cut file.
@@ -255,6 +261,22 @@ mod tests {
         let now = SystemTime::now() + LEFTOVER_AGE + Duration::from_secs(1);
         assert_eq!(remove_leftovers([dir.clone()], now, |_| false), 0);
         assert!(target.exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_is_not_utf8_gets_a_clear_error_with_a_way_out() {
+        let dir = temp_dir("latin1");
+        let file = dir.join("old.typ");
+        fs::write(&file, b"caf\xe9 au lait\n").unwrap(); // Latin-1
+        let err = read_text(&file).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("not UTF-8 text") && err.to_string().contains("iconv"),
+            "{err}"
+        );
+        fs::write(&file, "café au lait\n").unwrap();
+        assert_eq!(read_text(&file).unwrap(), "café au lait\n");
         fs::remove_dir_all(&dir).unwrap();
     }
 }

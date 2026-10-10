@@ -2250,6 +2250,20 @@ mod tests {
         fs::remove_dir_all(&next.root).unwrap();
     }
 
+    #[test]
+    fn a_file_that_is_not_utf8_stays_in_the_list_with_a_clear_message() {
+        let mut app = app("latin1");
+        fs::write(app.root.join("a.typ"), b"caf\xe9\n").unwrap();
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editor.is_none());
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("Cannot open a.typ") && shown.contains("not UTF-8 text"),
+            "{shown}"
+        );
+        fs::remove_dir_all(&app.root).unwrap();
+    }
+
     fn open_name(app: &App) -> String {
         let editor = app.editor.as_ref().expect("an editor is open");
         editor
