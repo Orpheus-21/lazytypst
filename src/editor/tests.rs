@@ -3951,6 +3951,45 @@ fn alt_l_without_a_history_does_not_drop_edits_and_without_edits_it_just_loads()
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
+#[test]
+fn the_exit_save_writes_the_edits_and_puts_a_refused_text_in_the_history() {
+    let path = temp_file("exitsave", "disk\n");
+    let state = path.parent().unwrap().join("state").join("history");
+    let mut editor = open(&path);
+    assert_eq!(editor.save_for_exit(), None, "nothing to write");
+    editor.handle_key(key(KeyCode::Char('X')));
+    assert_eq!(editor.save_for_exit(), None);
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "Xdisk\n",
+        "the edit is in the file"
+    );
+    // The file changed on disk: the text is not written over it. It goes to the history.
+    editor.set_history(Some(state.clone()));
+    editor.handle_key(key(KeyCode::Char('Y')));
+    change_outside(&path, "from another program\n", 20);
+    let note = editor.save_for_exit().expect("a note");
+    assert!(
+        note.contains("was not written") && note.contains("history"),
+        "{note}"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "from another program\n");
+    let kept: Vec<String> = history::list(&state, &path)
+        .iter()
+        .map(|version| version.read().unwrap())
+        .collect();
+    assert!(kept.contains(&"XYdisk\n".to_string()), "{kept:?}");
+    // Without a history the note says that the text is lost.
+    editor.history = None;
+    editor.handle_key(key(KeyCode::Char('Z')));
+    assert!(
+        editor
+            .save_for_exit()
+            .is_some_and(|note| note.contains("is lost"))
+    );
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 /// The compile pane as text: the screen rows of the pane in the left half, from its title to its bottom edge.
 fn pane_rows(editor: &mut Editor) -> Vec<String> {
     // The pane stands under the text area: the last 6 rows above the status line.

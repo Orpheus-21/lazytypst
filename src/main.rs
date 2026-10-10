@@ -950,6 +950,11 @@ impl App {
         false
     }
 
+    /// Writes the edits of the open file when the program ends. See `Editor::save_for_exit`.
+    fn save_for_exit(&mut self) -> Option<String> {
+        self.editor.as_mut().and_then(Editor::save_for_exit)
+    }
+
     /// Keeps the layout in the state folder. A failure only shows a message.
     fn save_layout(&mut self) {
         let (Some(state), Some(layout)) = (&self.state_file, self.layout) else {
@@ -1224,12 +1229,19 @@ fn main() -> std::io::Result<()> {
     if app.mouse {
         write_to_terminal(ENABLE_MOUSE);
     }
+    catch_stop_signals();
     let result = run(&mut terminal, &mut app);
+    // Every way out of the loop writes the edits first: a quit, an error of the terminal (it closed), and
+    // a signal. Nothing of the text of the last 300 ms is lost.
+    let unsaved = app.save_for_exit();
     write_to_terminal(RESTORE_TITLE);
     write_to_terminal(DISABLE_PASTE);
     write_to_terminal(DISABLE_MOUSE);
     ratatui::restore();
     compile::cleanup();
+    if let Some(note) = unsaved {
+        eprintln!("{note}");
+    }
     result
 }
 
@@ -1238,10 +1250,104 @@ fn tmux_hint_needed(protocol: ratatui_image::picker::ProtocolType, in_tmux: bool
     in_tmux && protocol == ratatui_image::picker::ProtocolType::Halfblocks
 }
 
+/// True after the system sent SIGHUP (the terminal closed) or SIGTERM. The handler only sets this flag, which
+/// is all that a handler may do safely. The main loop looks at it every 50 ms.
+static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_stop(_signal: i32) {
+    STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+unsafe extern "C" {
+    // `signal` of the C library, which the standard library links already. It is safe to call with a handler
+    // that only sets a flag.
+    safe fn signal(signal: i32, handler: extern "C" fn(i32)) -> usize;
+}
+
+/// Makes SIGHUP and SIGTERM end the main loop in an orderly way, so the last edits get written.
+fn catch_stop_signals() {
+    const SIGHUP: i32 = 1;
+    const SIGTERM: i32 = 15;
+    signal(SIGHUP, on_stop);
+    signal(SIGTERM, on_stop);
+}
+
+/// The thread that reads the input. When the terminal closes, the input is readable for ever, and the read of
+/// the `crossterm` library then loops without end and never returns. The main loop must not be in that
+/// call, or it could not write the last edits. So this thread reads, and the main loop waits for its events
+/// with a time limit.
+struct Input {
+    events: std::sync::mpsc::Receiver<Event>,
+    paused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    idle: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Input {
+    fn start() -> Self {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+        let (sender, events) = mpsc::channel();
+        let paused = Arc::new(AtomicBool::new(false));
+        let idle = Arc::new(AtomicBool::new(false));
+        let (thread_paused, thread_idle) = (Arc::clone(&paused), Arc::clone(&idle));
+        std::thread::spawn(move || {
+            loop {
+                if thread_paused.load(Ordering::SeqCst) {
+                    thread_idle.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                thread_idle.store(false, Ordering::SeqCst);
+                match event::poll(Duration::from_millis(20)) {
+                    Ok(true) => match event::read() {
+                        Ok(event) => {
+                            if sender.send(event).is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    },
+                    Ok(false) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            events,
+            paused,
+            idle,
+        }
+    }
+
+    /// Stops the reading, so that another program can read the terminal. It returns when the thread has
+    /// stopped (or after a second, if the thread does not answer).
+    fn pause(&self) {
+        use std::sync::atomic::Ordering;
+        self.paused.store(true, Ordering::SeqCst);
+        let start = Instant::now();
+        while !self.idle.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(1) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn resume(&self) {
+        use std::sync::atomic::Ordering;
+        self.idle.store(false, Ordering::SeqCst);
+        self.paused.store(false, Ordering::SeqCst);
+    }
+}
+
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
+    let input = Input::start();
     let mut redraw = true;
     let mut title = String::new();
     loop {
+        if STOP.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
         // The title changes when the editor opens or closes. It is sent only when it changes.
         let wanted = window_title(&app.root, app.editor.as_ref().map(Editor::path));
         if wanted != title {
@@ -1252,7 +1358,9 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
             title = wanted;
         }
         if let Some((command, file)) = app.external.take() {
+            input.pause();
             let result = run_external(&command, &app.root.join(&file));
+            input.resume();
             if app.mouse {
                 write_to_terminal(ENABLE_MOUSE);
             }
@@ -1264,13 +1372,18 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> std::io::Result<()> {
         if redraw {
             terminal.draw(|frame| draw(frame, app))?;
         }
-        // While no key arrives, every 50 ms the editor checks its autosave and its compile.
-        if !event::poll(Duration::from_millis(50))? {
-            redraw = app.tick(Instant::now());
-            continue;
-        }
+        // While no key arrives, every 50 ms the editor checks its autosave and its compile. If the input
+        // thread ended, the terminal is gone: the loop ends, and the edits get written.
+        let event = match input.events.recv_timeout(Duration::from_millis(50)) {
+            Ok(event) => event,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                redraw = app.tick(Instant::now());
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        };
         redraw = true;
-        match event::read()? {
+        match event {
             Event::Key(key) => {
                 let quit = app.handle_key(key);
                 if let Some(text) = app.take_clipboard() {

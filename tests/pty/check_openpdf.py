@@ -11,7 +11,7 @@ try:
         f.write(f"#!/bin/sh\necho \"$1\" > {log}\n")
     os.chmod(fake, 0o755)
     path = bin_dir + ":" + os.environ["PATH"]
-    shots, _ = session(folder, [(ENTER, 0.5), (ctrl("o"), 0.3), (ctrl("e"), "Exported"), (ctrl("o"), "Opening"), (ESC, 0.4)], env_extra={"PATH": path})
+    shots, _ = session(folder, [(ENTER, 0.5), (ctrl("o"), "No PDF yet"), (ctrl("e"), "Exported"), (ctrl("o"), "Opening"), (ESC, 0.4)], env_extra={"PATH": path})
     assert "No PDF yet" in shots[1], shots[1]
     assert "Opening" in shots[3], shots[3]
     import time; time.sleep(0.3)

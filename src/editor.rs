@@ -670,6 +670,37 @@ impl Editor {
         self.message = "Restored the version. Ctrl-Z undoes.".into();
     }
 
+    /// Writes the edits that the autosave has not written yet, when the program ends: the terminal closed
+    /// (SIGHUP), the system asked it to stop (SIGTERM), or a panic. If the file cannot be written (it changed
+    /// on disk, or the write failed), the text goes to the local history. The answer is a sentence for the
+    /// user about a text that is not in the file, or `None` if the file has all the text.
+    pub fn save_for_exit(&mut self) -> Option<String> {
+        if !self.dirty || self.save(false) {
+            return None;
+        }
+        let name = self
+            .path
+            .strip_prefix(&self.root)
+            .unwrap_or(&self.path)
+            .display()
+            .to_string();
+        let reason = self.message.clone();
+        let text = self.file_text();
+        let kept = self.history.as_ref().and_then(|folder| {
+            history::record(folder, &self.path, &text, SystemTime::now(), true).ok()?;
+            history::list(folder, &self.path)
+                .first()
+                .map(|version| version.path().to_path_buf())
+        });
+        Some(match kept {
+            Some(path) => format!(
+                "{name} was not written ({reason}). Your text is in {}",
+                path.display()
+            ),
+            None => format!("{name} was not written ({reason}). Your text is lost."),
+        })
+    }
+
     /// Opens the last exported PDF with `program`. The program runs in the background with no input and
     /// no output, so it cannot draw on the screen of the editor.
     fn open_pdf(&mut self, program: &str) {

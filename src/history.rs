@@ -27,6 +27,11 @@ pub struct Version {
 }
 
 impl Version {
+    /// The file of the version, for a message to the user.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn read(&self) -> io::Result<String> {
         crate::fsutil::read_text(&self.path)
     }

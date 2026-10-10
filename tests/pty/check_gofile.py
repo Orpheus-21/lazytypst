@@ -8,7 +8,7 @@ try:
         (ENTER, 1.0),
         (b"\x1b\r", "Second chapter"),  # Alt-Enter
         (b"\x1bOQ", "Switch file"),   # F2
-        (b"\x1bOQ", "main.typ"),      # F2 again: back to main.typ
+        (b"\x1bOQ", "#include"),      # F2 again: back to main.typ
         (ESC, 0.3),
         (ESC, 0.3),
     ]

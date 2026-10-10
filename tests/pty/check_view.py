@@ -7,7 +7,7 @@ folder = project({"zz.typ": "", "doc.typ": "line one\nline two\nline three\n"})
 try:
     steps = [
         (ENTER, 0.5),
-        (DOWN + DOWN + RIGHT * 4, 0.3),       # line 3, column 5
+        (DOWN + DOWN + RIGHT * 4, "3:5"),       # line 3, column 5
         (b"\t", "3:7"),                       # Tab in the middle of the line: to the next stop of 2
         (b"\x01", "3:1"),                       # Ctrl-A: to the start of the line
         (b"\t", "3:3"),                       # Tab at the start: 2 spaces (wait for the screen, not the clock)
